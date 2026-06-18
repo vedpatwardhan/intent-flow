@@ -24,4 +24,3 @@ Attempts to use flow-matching to steer the LeWM encoder and predictor to adjust 
 18. SimDist focuses on control-loop decoupling between behaviour planning and environment dynamics to fix the Sim-to-Real gap whereas VLA-JEPA focuses on the Human-to-Robot gap by decoupling semantics and physics.
 19. The predictor could be like inferix with block diffusion rather than completely autoregressive and the steering from the flow matching action denoiser could go to specific blocks.
 20. The information steered could be about future possibilities as well of how the scene could evolve, like World Pilot.
-21. 
