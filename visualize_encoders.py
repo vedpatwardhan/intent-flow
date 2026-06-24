@@ -83,78 +83,75 @@ class PointNeXtEncoder(nn.Module):
 def generate_synthetic_tabletop_points(num_points=1024, frame_idx=0):
     """
     Generates a synthetic 3D point cloud of a tabletop workspace with a moving robot gripper
-    and a static red cube, matching MuJoCo coordinates.
+    and a static red cube, along with semantic labels for color coding.
     """
     points = []
-    # 1. Pedestal and Table surface
-    # Table surface at z = -0.15
+    labels = []  # 0: table, 1: pedestal, 2: cube, 3: gripper
+
+    # 1. Table surface (plane at z = -0.15)
     table_pts = np.random.uniform(
-        [-0.3, -0.4, -0.15], [0.3, 0.4, -0.15], (int(num_points * 0.5), 3)
+        [-0.4, -0.4, -0.15], [0.4, 0.4, -0.15], (int(num_points * 0.5), 3)
     )
     points.append(table_pts)
+    labels.append(np.zeros(len(table_pts)))
 
-    # Pedestal (cube base at [0.0, 0.0, -0.15] to [0.0, 0.0, -0.06])
-    pedestal_pts = np.random.uniform(
-        [-0.06, -0.06, -0.15], [0.06, 0.06, -0.06], (int(num_points * 0.15), 3)
+    # 2. Pedestal (base under the cube)
+    ped_pts = np.random.uniform(
+        [-0.05, -0.05, -0.15], [0.05, 0.05, -0.05], (int(num_points * 0.15), 3)
     )
-    points.append(pedestal_pts)
+    points.append(ped_pts)
+    labels.append(np.ones(len(ped_pts)))
 
-    # 2. Static Red Cube (on top of pedestal at [0.0, 0.0, -0.04])
+    # 3. Static Red Cube (on top of pedestal)
     cube_pts = np.random.uniform(
-        [-0.02, -0.02, -0.06], [0.02, 0.02, -0.02], (int(num_points * 0.1), 3)
+        [-0.02, -0.02, -0.05], [0.02, 0.02, -0.01], (int(num_points * 0.1), 3)
     )
     points.append(cube_pts)
+    labels.append(np.ones(len(cube_pts)) * 2)
 
-    # 3. Moving gripper (approaching cube from top-left)
-    t = frame_idx / 31.0  # simulate 32-step progression (0 to 31)
-    # Gripper starts at top-left-high and moves directly to the cube
-    g_x = -0.08 * (1.0 - t)
-    g_y = -0.12 * (1.0 - t)
-    g_z = 0.22 * (1.0 - t) - 0.02
+    # 4. Moving gripper (approaching cube from top-left-high)
+    t = frame_idx / 31.0  # 32-step progression
+    g_x = -0.15 * (1.0 - t)
+    g_y = -0.15 * (1.0 - t)
+    g_z = 0.25 * (1.0 - t) - 0.01
 
     gripper_center = np.array([g_x, g_y, g_z])
     gripper_pts = np.random.uniform(
         gripper_center - 0.03, gripper_center + 0.03, (int(num_points * 0.25), 3)
     )
     points.append(gripper_pts)
+    labels.append(np.ones(len(gripper_pts)) * 3)
 
-    return np.vstack(points)
+    return np.vstack(points), np.concatenate(labels)
 
 
-def project_points_to_2d(points, width=320, height=320):
+def project_points_to_3d_isometric(points, labels, width=320, height=320):
     """
-    Projects 3D points to 2D image coordinates using camera extrinsics aligned
-    with the MuJoCo simulator's center camera.
+    Projects 3D points using a clean isometric perspective (top-down side view)
+    so the 3D structure is immediately recognizable.
     """
-    # Camera position in MuJoCo space
-    cam_pos = np.array([0.72, 0.0, 0.43])
-    pts_cam = points - cam_pos
+    # Define an isometric rotation matrix (pitch and yaw rotation)
+    pitch = np.radians(30)
+    yaw = np.radians(-45)
 
-    # Rotate around Y-axis (pitch of 25.5 degrees looking down)
-    pitch = np.radians(25.5)
     cos_p, sin_p = np.cos(pitch), np.sin(pitch)
-    R_pitch = np.array([[cos_p, 0, -sin_p], [0, 1, 0], [sin_p, 0, cos_p]])
-
-    # Rotate around Z-axis (yaw of 180 degrees looking back at origin)
-    yaw = np.radians(180)
     cos_y, sin_y = np.cos(yaw), np.sin(yaw)
+
+    # Rotation matrices
     R_yaw = np.array([[cos_y, -sin_y, 0], [sin_y, cos_y, 0], [0, 0, 1]])
+    R_pitch = np.array([[1, 0, 0], [0, cos_p, -sin_p], [0, sin_p, cos_p]])
 
-    # Apply rotation
-    pts_rotated = pts_cam @ R_yaw @ R_pitch
+    # Apply isometric rotation
+    pts_rot = points @ R_yaw @ R_pitch
 
-    x_c = pts_rotated[:, 1]
-    y_c = -pts_rotated[:, 2]
-    z_c = pts_rotated[:, 0]
+    # Scale and center on the screen
+    scale = 350
+    u = (pts_rot[:, 0] * scale + width / 2).astype(np.int32)
+    v = (-pts_rot[:, 2] * scale + height / 2 + 30).astype(np.int32)
 
-    focal_length = 370
-    cx, cy = width / 2, height / 2 + 10
-
-    u = (x_c * focal_length / z_c + cx).astype(np.int32)
-    v = (y_c * focal_length / z_c + cy).astype(np.int32)
-
-    valid = (z_c > 0.1) & (u >= 0) & (u < width) & (v >= 0) & (v < height)
-    return u[valid], v[valid], z_c[valid], valid
+    # Keep only points within bounds
+    valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    return u[valid], v[valid], labels[valid], valid
 
 
 def process_video(video_path, output_path="encoder_visuals.mp4"):
@@ -311,7 +308,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
 
         # --- C. POINTNEXT 3D GEOMETRIC ACTIVATIONS ---
         # Generate 3D point cloud for this step
-        pts_3d = generate_synthetic_tabletop_points(
+        pts_3d, labels = generate_synthetic_tabletop_points(
             num_points=1024, frame_idx=frame_idx
         )
         pts_tensor = torch.tensor(pts_3d, dtype=torch.float32).unsqueeze(0)
@@ -321,34 +318,32 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         with torch.no_grad():
             # Get features from PointNeXt
             pn_feat = pointnet(pts_tensor).cpu().numpy().squeeze(0)  # [N, 128]
-            # Calculate activation magnitude (L2 norm of features) for each point
-            activation_magnitude = np.linalg.norm(pn_feat, axis=-1)
 
-        # Project 3D points to 2D screen coordinate
-        u, v, z_depth, valid = project_points_to_2d(
-            pts_3d, width=panel_size, height=panel_size
+        # Project 3D points to isometric 2D coordinates
+        u, v, valid_labels, valid = project_points_to_3d_isometric(
+            pts_3d, labels, width=panel_size, height=panel_size
         )
 
-        # Create PointNeXt visualization canvas as a copy of the original frame (spatial alignment)
-        pn_visual = resized_frame.copy()
+        # Create PointNeXt visualization canvas (3D space representation on black background)
+        pn_visual = np.zeros((panel_size, panel_size, 3), dtype=np.uint8)
 
-        # Normalize depth (distance from camera) for coloring
-        if len(z_depth) > 0:
-            z_min, z_max = z_depth.min(), z_depth.max()
-            z_norm = (z_depth - z_min) / (z_max - z_min + 1e-8)
-            # Color points by depth using the Viridis colormap (near is yellow/green, far is purple/blue)
-            colors = plt.cm.viridis(z_norm)[:, :3] * 255
-            colors = colors.astype(np.uint8)
+        # Semantic Colors (BGR):
+        # 0 (Table): Dark Gray
+        # 1 (Pedestal): Cyan/Blue
+        # 2 (Cube): Bright Red
+        # 3 (Gripper): Bright Yellow
+        sem_colors = {
+            0: [80, 80, 80],
+            1: [180, 180, 0],
+            2: [0, 0, 255],
+            3: [0, 255, 255],
+        }
 
-            # Draw points directly on the frame
-            for i in range(len(u)):
-                cv2.circle(
-                    pn_visual,
-                    (u[i], v[i]),
-                    4,
-                    (int(colors[i][2]), int(colors[i][1]), int(colors[i][0])),
-                    -1,
-                )
+        # Draw points
+        for i in range(len(u)):
+            lbl = int(valid_labels[i])
+            color = sem_colors.get(lbl, [255, 255, 255])
+            cv2.circle(pn_visual, (u[i], v[i]), 3, color, -1)
 
         # --- ASSEMBLY ---
         # Add labels to the panels
@@ -372,7 +367,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         )
         cv2.putText(
             pn_visual,
-            "PointNeXt (Depth Overlay)",
+            "PointNeXt (3D Point Cloud)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
