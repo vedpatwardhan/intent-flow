@@ -83,26 +83,38 @@ class PointNeXtEncoder(nn.Module):
 def generate_synthetic_tabletop_points(num_points=1024, frame_idx=0):
     """
     Generates a synthetic 3D point cloud of a tabletop workspace with a moving robot gripper
-    and a static red cube.
+    and a static red cube, matching MuJoCo coordinates.
     """
     points = []
-    # 1. Table surface (plane at z = -0.2)
+    # 1. Pedestal and Table surface
+    # Table surface at z = -0.15
     table_pts = np.random.uniform(
-        [-0.5, -0.5, -0.2], [0.5, 0.5, -0.2], (int(num_points * 0.6), 3)
+        [-0.3, -0.4, -0.15], [0.3, 0.4, -0.15], (int(num_points * 0.5), 3)
     )
     points.append(table_pts)
 
-    # 2. Static Red Cube (at x=0.0, y=0.0, z=-0.15)
+    # Pedestal (cube base at [0.0, 0.0, -0.15] to [0.0, 0.0, -0.06])
+    pedestal_pts = np.random.uniform(
+        [-0.06, -0.06, -0.15], [0.06, 0.06, -0.06], (int(num_points * 0.15), 3)
+    )
+    points.append(pedestal_pts)
+
+    # 2. Static Red Cube (on top of pedestal at [0.0, 0.0, -0.04])
     cube_pts = np.random.uniform(
-        [-0.05, -0.05, -0.2], [0.05, 0.05, -0.1], (int(num_points * 0.15), 3)
+        [-0.02, -0.02, -0.06], [0.02, 0.02, -0.02], (int(num_points * 0.1), 3)
     )
     points.append(cube_pts)
 
     # 3. Moving gripper (approaching cube from top-left)
-    t = frame_idx / 30.0  # simulate progression
-    gripper_center = np.array([-0.2 + 0.2 * t, -0.2 + 0.2 * t, 0.2 - 0.3 * t])
+    t = frame_idx / 31.0  # simulate 32-step progression (0 to 31)
+    # Gripper starts at top-left-high and moves directly to the cube
+    g_x = -0.08 * (1.0 - t)
+    g_y = -0.12 * (1.0 - t)
+    g_z = 0.22 * (1.0 - t) - 0.02
+
+    gripper_center = np.array([g_x, g_y, g_z])
     gripper_pts = np.random.uniform(
-        gripper_center - 0.04, gripper_center + 0.04, (int(num_points * 0.25), 3)
+        gripper_center - 0.03, gripper_center + 0.03, (int(num_points * 0.25), 3)
     )
     points.append(gripper_pts)
 
@@ -111,23 +123,38 @@ def generate_synthetic_tabletop_points(num_points=1024, frame_idx=0):
 
 def project_points_to_2d(points, width=320, height=320):
     """
-    Projects 3D points to 2D image coordinates using a simple virtual camera.
+    Projects 3D points to 2D image coordinates using camera extrinsics aligned
+    with the MuJoCo simulator's center camera.
     """
-    # Virtual camera parameters
-    focal_length = 300
-    cx, cy = width / 2, height / 2
+    # Camera position in MuJoCo space
+    cam_pos = np.array([0.72, 0.0, 0.43])
+    pts_cam = points - cam_pos
 
-    # Simple perspective projection
-    x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    # Shift along z-axis to place scene in front of camera
-    z_cam = z + 1.0
+    # Rotate around Y-axis (pitch of 25.5 degrees looking down)
+    pitch = np.radians(25.5)
+    cos_p, sin_p = np.cos(pitch), np.sin(pitch)
+    R_pitch = np.array([[cos_p, 0, -sin_p], [0, 1, 0], [sin_p, 0, cos_p]])
 
-    u = (x * focal_length / z_cam + cx).astype(np.int32)
-    v = (y * focal_length / z_cam + cy).astype(np.int32)
+    # Rotate around Z-axis (yaw of 180 degrees looking back at origin)
+    yaw = np.radians(180)
+    cos_y, sin_y = np.cos(yaw), np.sin(yaw)
+    R_yaw = np.array([[cos_y, -sin_y, 0], [sin_y, cos_y, 0], [0, 0, 1]])
 
-    # Keep only points within image boundaries
-    valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
-    return u[valid], v[valid], z[valid], valid
+    # Apply rotation
+    pts_rotated = pts_cam @ R_yaw @ R_pitch
+
+    x_c = pts_rotated[:, 1]
+    y_c = -pts_rotated[:, 2]
+    z_c = pts_rotated[:, 0]
+
+    focal_length = 370
+    cx, cy = width / 2, height / 2 + 10
+
+    u = (x_c * focal_length / z_c + cx).astype(np.int32)
+    v = (y_c * focal_length / z_c + cy).astype(np.int32)
+
+    valid = (z_c > 0.1) & (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    return u[valid], v[valid], z_c[valid], valid
 
 
 def process_video(video_path, output_path="encoder_visuals.mp4"):
