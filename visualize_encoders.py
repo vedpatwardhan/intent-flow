@@ -215,12 +215,18 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         )
         pca_features = (pca_features * 255).astype(np.uint8)
 
+        # Pre-resize original frame for overlays
+        resized_frame = cv2.resize(frame, (panel_size, panel_size))
+
         # Reshape to grid (dino-small has 14x14 patches for 224x224 input)
         grid_size = int(np.sqrt(patch_tokens.shape[0]))
-        dino_visual = pca_features.reshape(grid_size, grid_size, 3)
-        dino_visual = cv2.resize(
-            dino_visual, (panel_size, panel_size), interpolation=cv2.INTER_NEAREST
+        dino_visual_raw = pca_features.reshape(grid_size, grid_size, 3)
+        dino_visual_upscaled = cv2.resize(
+            dino_visual_raw, (panel_size, panel_size), interpolation=cv2.INTER_CUBIC
         )
+        dino_visual_smoothed = cv2.GaussianBlur(dino_visual_upscaled, (9, 9), 0)
+        # Blend DINOv3 PCA overlay with original video frame for high-resolution visual alignment
+        dino_visual = cv2.addWeighted(resized_frame, 0.4, dino_visual_smoothed, 0.6, 0)
 
         # --- B. CLIP ATTENTION HEATMAP VISUALIZATION ---
         clip_inputs = clip_processor(images=pil_img, return_tensors="pt")
@@ -248,13 +254,12 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         attn_map_resized = cv2.resize(attn_map, (panel_size, panel_size))
 
         # Overlay heatmap on original resized frame
-        resized_frame = cv2.resize(frame, (panel_size, panel_size))
         heatmap = cv2.applyColorMap(
             (attn_map_resized * 255).astype(np.uint8), cv2.COLORMAP_JET
         )
         clip_visual = cv2.addWeighted(resized_frame, 0.6, heatmap, 0.4, 0)
 
-        # --- C. POINTNET++ 3D GEOMETRIC ACTIVATIONS ---
+        # --- C. POINTNEXT 3D GEOMETRIC ACTIVATIONS ---
         # Generate 3D point cloud for this step
         pts_3d = generate_synthetic_tabletop_points(
             num_points=1024, frame_idx=frame_idx
@@ -264,7 +269,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
             pts_tensor = pts_tensor.cuda()
 
         with torch.no_grad():
-            # Get features from PointNet++
+            # Get features from PointNeXt
             pn_feat = pointnet(pts_tensor).cpu().numpy().squeeze(0)  # [N, 128]
             # Calculate activation magnitude (L2 norm of features) for each point
             activation_magnitude = np.linalg.norm(pn_feat, axis=-1)
@@ -273,24 +278,24 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         u, v, z_depth, valid = project_points_to_2d(
             pts_3d, width=panel_size, height=panel_size
         )
-        act_valid = activation_magnitude[valid]
 
-        # Create PointNet++ visualization canvas
-        pn_visual = np.zeros((panel_size, panel_size, 3), dtype=np.uint8)
+        # Create PointNeXt visualization canvas as a copy of the original frame (spatial alignment)
+        pn_visual = resized_frame.copy()
 
-        # Normalize activations for color mapping
-        if len(act_valid) > 0:
-            act_min = act_valid.min()
-            act_norm = (act_valid - act_min) / (act_valid.max() - act_min + 1e-8)
-            colors = plt.cm.plasma(act_norm)[:, :3] * 255  # Plasma colormap
+        # Normalize depth (distance from camera) for coloring
+        if len(z_depth) > 0:
+            z_min, z_max = z_depth.min(), z_depth.max()
+            z_norm = (z_depth - z_min) / (z_max - z_min + 1e-8)
+            # Color points by depth using the Viridis colormap (near is yellow/green, far is purple/blue)
+            colors = plt.cm.viridis(z_norm)[:, :3] * 255
             colors = colors.astype(np.uint8)
 
-            # Draw points as small circles
+            # Draw points directly on the frame
             for i in range(len(u)):
                 cv2.circle(
                     pn_visual,
                     (u[i], v[i]),
-                    3,
+                    4,
                     (int(colors[i][2]), int(colors[i][1]), int(colors[i][0])),
                     -1,
                 )
@@ -299,7 +304,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         # Add labels to the panels
         cv2.putText(
             dino_visual,
-            "DINOv3 (PCA-3)",
+            "DINOv3 (PCA-3 Overlay)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -317,7 +322,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         )
         cv2.putText(
             pn_visual,
-            "PointNeXt (Activations)",
+            "PointNeXt (Depth Overlay)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
