@@ -153,7 +153,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     print("Loading models from Hugging Face...")
     # 1. Load DINOv3 via timm
     dino_model = timm.create_model(
-        "vit_small_patch16_dinov3", pretrained=True, num_classes=0
+        "vit_small_patch16_dinov3", pretrained=True, global_pool=""
     )
     if torch.cuda.is_available():
         dino_model = dino_model.cuda()
@@ -201,8 +201,9 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
 
         with torch.no_grad():
             dino_features = dino_model.forward_features(dino_inputs)
-            # Patch tokens shape: [B, num_patches + 1, hidden_dim], exclude CLS token at index 0
-            patch_tokens = dino_features[:, 1:, :].cpu().numpy().squeeze(0)
+            # Patch tokens shape: [B, num_prefix + num_patches, hidden_dim]
+            num_prefix = getattr(dino_model, "num_prefix_tokens", 5)
+            patch_tokens = dino_features[:, num_prefix:, :].cpu().numpy().squeeze(0)
 
         # Fit PCA to compress patch features down to 3 components (RGB channels)
         pca = PCA(n_components=3)
