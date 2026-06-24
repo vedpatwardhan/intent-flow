@@ -170,9 +170,13 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     # 2. Load CLIP
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     clip_model = (
-        CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").cuda()
+        CLIPVisionModel.from_pretrained(
+            "openai/clip-vit-base-patch32", attn_implementation="eager"
+        ).cuda()
         if torch.cuda.is_available()
-        else CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
+        else CLIPVisionModel.from_pretrained(
+            "openai/clip-vit-base-patch32", attn_implementation="eager"
+        )
     )
     clip_model.eval()
 
