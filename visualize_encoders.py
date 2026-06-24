@@ -7,84 +7,77 @@ from PIL import Image
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 
-# Hugging Face imports
+# timm and Hugging Face imports
 try:
+    import timm
+    from timm.data import resolve_data_config
+    from timm.data.transforms_factory import create_transform
     from transformers import (
-        AutoImageProcessor,
-        AutoModel,
         CLIPVisionModel,
         CLIPProcessor,
     )
 except ImportError:
-    print("Please install transformers: pip install transformers")
+    print("Please install transformers and timm: pip install transformers timm")
     raise
 
 
-# Define a standard PointNet++ Set Abstraction (SA) Layer for 3D geometric encoding
-class PointNetSetAbstraction(nn.Module):
-    def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all):
+# Define a PointNeXt Block (Residual MLP with Inverted Bottleneck, GroupNorm, and GELU)
+class PointNeXtBlock(nn.Module):
+    def __init__(self, in_channel, out_channel):
         super().__init__()
-        self.npoint = npoint
-        self.radius = radius
-        self.nsample = nsample
-        self.group_all = group_all
-        self.mlp_convs = nn.ModuleList()
-        self.mlp_bns = nn.ModuleList()
-        last_channel = in_channel
-        for out_channel in mlp:
-            self.mlp_convs.append(nn.Conv2d(last_channel, out_channel, 1))
-            self.mlp_bns.append(nn.BatchNorm2d(out_channel))
-            last_channel = out_channel
+        self.conv1 = nn.Conv1d(in_channel, out_channel, 1)
+        self.norm1 = nn.GroupNorm(8, out_channel)
+        self.act1 = nn.GELU()
 
-    def forward(self, xyz, points):
-        """
-        Input:
-            xyz: input points position data, [B, N, C]
-            points: input points data, [B, N, D]
-        Return:
-            new_xyz: sampled points position data, [B, S, C]
-            new_points: sample points feature data, [B, S, D']
-        """
-        # For visualization, we keep it simple and process per-point features
-        B, N, C = xyz.shape
-        # Simple PointNet style mlp per point
-        if points is not None:
-            x = torch.cat([xyz, points], dim=-1)
+        self.conv2 = nn.Conv1d(out_channel, out_channel, 1)
+        self.norm2 = nn.GroupNorm(8, out_channel)
+        self.act2 = nn.GELU()
+
+        self.shortcut = (
+            nn.Sequential(
+                nn.Conv1d(in_channel, out_channel, 1), nn.GroupNorm(8, out_channel)
+            )
+            if in_channel != out_channel
+            else nn.Identity()
+        )
+
+    def forward(self, x):
+        identity = self.shortcut(x)
+        out = self.act1(self.norm1(self.conv1(x)))
+        out = self.norm2(self.conv2(out))
+        out += identity
+        out = self.act2(out)
+        return out
+
+
+class PointNeXtStage(nn.Module):
+    def __init__(self, in_channel, out_channel, blocks=2):
+        super().__init__()
+        self.sa_block = nn.Sequential(
+            PointNeXtBlock(in_channel, out_channel),
+            *[PointNeXtBlock(out_channel, out_channel) for _ in range(blocks - 1)],
+        )
+
+    def forward(self, xyz, features=None):
+        if features is not None:
+            x = torch.cat([xyz.transpose(1, 2), features], dim=1)
         else:
-            x = xyz
-
-        x = x.permute(0, 2, 1).unsqueeze(-1)  # [B, C, N, 1]
-        for conv, bn in zip(self.mlp_convs, self.mlp_bns):
-            x = torch.relu(bn(conv(x)))
-        return xyz, x.squeeze(-1).permute(0, 2, 1)
+            x = xyz.transpose(1, 2)
+        out = self.sa_block(x)
+        return out.transpose(1, 2)
 
 
-class PointNet2Encoder(nn.Module):
+class PointNeXtEncoder(nn.Module):
     def __init__(self):
         super().__init__()
-        # Simple hierarchical structure mirroring PointNet++
-        self.sa1 = PointNetSetAbstraction(
-            npoint=256,
-            radius=0.1,
-            nsample=32,
-            in_channel=3,
-            mlp=[32, 64],
-            group_all=False,
-        )
-        self.sa2 = PointNetSetAbstraction(
-            npoint=64,
-            radius=0.2,
-            nsample=32,
-            in_channel=64 + 3,
-            mlp=[64, 128],
-            group_all=False,
-        )
+        self.stage1 = PointNeXtStage(in_channel=3, out_channel=64, blocks=2)
+        self.stage2 = PointNeXtStage(in_channel=64 + 3, out_channel=128, blocks=2)
 
     def forward(self, xyz):
-        # xyz: [B, N, 3]
-        xyz, feat1 = self.sa1(xyz, None)
-        _, feat2 = self.sa2(xyz, feat1)
-        return feat2  # Returns hierarchical local features
+        # xyz shape: [B, N, 3]
+        feat1 = self.stage1(xyz)
+        feat2 = self.stage2(xyz, feat1.transpose(1, 2))
+        return feat2  # returns shape [B, N, 128]
 
 
 def generate_synthetic_tabletop_points(num_points=1024, frame_idx=0):
@@ -158,14 +151,17 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
 
     print("Loading models from Hugging Face...")
-    # 1. Load DINOv2
-    dino_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-    dino_model = (
-        AutoModel.from_pretrained("facebook/dinov2-small").cuda()
-        if torch.cuda.is_available()
-        else AutoModel.from_pretrained("facebook/dinov2-small")
+    # 1. Load DINOv3 via timm
+    dino_model = timm.create_model(
+        "vit_small_patch16_dinov3", pretrained=True, num_classes=0
     )
+    if torch.cuda.is_available():
+        dino_model = dino_model.cuda()
     dino_model.eval()
+
+    # Get preprocessing transform for DINOv3
+    dino_config = resolve_data_config({}, model=dino_model)
+    dino_transform = create_transform(**dino_config, is_training=False)
 
     # 2. Load CLIP
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
@@ -180,8 +176,8 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     )
     clip_model.eval()
 
-    # 3. Instantiate PointNet++ Encoder
-    pointnet = PointNet2Encoder()
+    # 3. Instantiate PointNeXt Encoder
+    pointnet = PointNeXtEncoder()
     if torch.cuda.is_available():
         pointnet = pointnet.cuda()
     pointnet.eval()
@@ -198,17 +194,15 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb_frame)
 
-        # --- A. DINOv2 FEATURE VISUALIZATION (PCA-3) ---
-        dino_inputs = dino_processor(images=pil_img, return_tensors="pt")
+        # --- A. DINOv3 FEATURE VISUALIZATION (PCA-3) ---
+        dino_inputs = dino_transform(pil_img).unsqueeze(0)
         if torch.cuda.is_available():
-            dino_inputs = {k: v.cuda() for k, v in dino_inputs.items()}
+            dino_inputs = dino_inputs.cuda()
 
         with torch.no_grad():
-            dino_outputs = dino_model(**dino_inputs)
-            # Patch tokens shape: [1, num_patches, hidden_dim]
-            patch_tokens = (
-                dino_outputs.last_hidden_state[:, 1:, :].cpu().numpy().squeeze(0)
-            )
+            dino_features = dino_model.forward_features(dino_inputs)
+            # Patch tokens shape: [B, num_patches + 1, hidden_dim], exclude CLS token at index 0
+            patch_tokens = dino_features[:, 1:, :].cpu().numpy().squeeze(0)
 
         # Fit PCA to compress patch features down to 3 components (RGB channels)
         pca = PCA(n_components=3)
@@ -304,7 +298,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         # Add labels to the panels
         cv2.putText(
             dino_visual,
-            "DINOv2 (PCA-3)",
+            "DINOv3 (PCA-3)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -322,7 +316,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         )
         cv2.putText(
             pn_visual,
-            "PointNet++ (Activations)",
+            "PointNeXt (Activations)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
