@@ -150,7 +150,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
 
-    print("Loading models from Hugging Face...")
+    print("Loading models...")
     # 1. Load DINOv3 via timm
     dino_model = timm.create_model(
         "vit_small_patch16_dinov3", pretrained=True, global_pool=""
@@ -158,6 +158,24 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     if torch.cuda.is_available():
         dino_model = dino_model.cuda()
     dino_model.eval()
+
+    # Hook to capture self-attention matrix in the last attention layer
+    dino_attn_weights = []
+
+    def get_dino_attn_hook(module, input, output):
+        x = input[0]
+        B, N, C = x.shape
+        qkv = (
+            module.qkv(x)
+            .reshape(B, N, 3, module.num_heads, module.head_dim)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv.unbind(0)
+        attn = (q @ k.transpose(-2, -1)) * module.scale
+        attn = attn.softmax(dim=-1)
+        dino_attn_weights.append(attn.detach().cpu())
+
+    dino_hook = dino_model.blocks[-1].attn.register_forward_hook(get_dino_attn_hook)
 
     # Get preprocessing transform for DINOv3
     dino_config = resolve_data_config({}, model=dino_model)
@@ -194,39 +212,44 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb_frame)
 
-        # --- A. DINOv3 FEATURE VISUALIZATION (PCA-3) ---
+        # Pre-resize original frame for overlays
+        resized_frame = cv2.resize(frame, (panel_size, panel_size))
+
+        # --- A. DINOv3 FEATURE VISUALIZATION (Spatial Attention Heatmap) ---
         dino_inputs = dino_transform(pil_img).unsqueeze(0)
         if torch.cuda.is_available():
             dino_inputs = dino_inputs.cuda()
 
+        dino_attn_weights.clear()
         with torch.no_grad():
-            dino_features = dino_model.forward_features(dino_inputs)
-            # Patch tokens shape: [B, num_prefix + num_patches, hidden_dim]
-            num_prefix = getattr(dino_model, "num_prefix_tokens", 5)
-            patch_tokens = dino_features[:, num_prefix:, :].cpu().numpy().squeeze(0)
+            _ = dino_model(dino_inputs)
 
-        # Fit PCA to compress patch features down to 3 components (RGB channels)
-        pca = PCA(n_components=3)
-        pca_features = pca.fit_transform(patch_tokens)
+        # Retrieve attention weights: (B, num_heads, N, N)
+        attn = dino_attn_weights[0][0]
+        num_prefix = getattr(dino_model, "num_prefix_tokens", 5)
+        # CLS token self-attention to patch tokens (excluding CLS and registers)
+        cls_attn = attn[:, 0, num_prefix:]
+        # Average across all heads
+        mean_attn = cls_attn.mean(dim=0).numpy()
 
-        # Normalize PCA features to [0, 255]
-        pca_features = (pca_features - pca_features.min()) / (
-            pca_features.max() - pca_features.min() + 1e-8
+        # Reshape and upscale attention map to panel dimensions
+        grid_size = int(np.sqrt(mean_attn.shape[0]))
+        mean_attn_grid = mean_attn.reshape(grid_size, grid_size)
+        mean_attn_resized = cv2.resize(
+            mean_attn_grid, (panel_size, panel_size), interpolation=cv2.INTER_CUBIC
         )
-        pca_features = (pca_features * 255).astype(np.uint8)
+        mean_attn_smoothed = cv2.GaussianBlur(mean_attn_resized, (9, 9), 0)
 
-        # Pre-resize original frame for overlays
-        resized_frame = cv2.resize(frame, (panel_size, panel_size))
-
-        # Reshape to grid (dino-small has 14x14 patches for 224x224 input)
-        grid_size = int(np.sqrt(patch_tokens.shape[0]))
-        dino_visual_raw = pca_features.reshape(grid_size, grid_size, 3)
-        dino_visual_upscaled = cv2.resize(
-            dino_visual_raw, (panel_size, panel_size), interpolation=cv2.INTER_CUBIC
+        # Normalize attention maps
+        mean_attn_norm = (mean_attn_smoothed - mean_attn_smoothed.min()) / (
+            mean_attn_smoothed.max() - mean_attn_smoothed.min() + 1e-8
         )
-        dino_visual_smoothed = cv2.GaussianBlur(dino_visual_upscaled, (9, 9), 0)
-        # Blend DINOv3 PCA overlay with original video frame for high-resolution visual alignment
-        dino_visual = cv2.addWeighted(resized_frame, 0.4, dino_visual_smoothed, 0.6, 0)
+
+        # Apply Inferno colormap for the spatial-semantic attention prior
+        dino_heatmap = cv2.applyColorMap(
+            (mean_attn_norm * 255).astype(np.uint8), cv2.COLORMAP_INFERNO
+        )
+        dino_visual = cv2.addWeighted(resized_frame, 0.5, dino_heatmap, 0.5, 0)
 
         # --- B. CLIP ATTENTION HEATMAP VISUALIZATION ---
         clip_inputs = clip_processor(images=pil_img, return_tensors="pt")
@@ -304,7 +327,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         # Add labels to the panels
         cv2.putText(
             dino_visual,
-            "DINOv3 (PCA-3 Overlay)",
+            "DINOv3 (Attn Map Overlay)",
             (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -336,6 +359,7 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
 
         frame_idx += 1
 
+    dino_hook.remove()
     cap.release()
     out.release()
     print(f"Verification video successfully saved to {output_path}")
