@@ -254,10 +254,10 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     # 4. Load Depth Anything V2 for zero-shot depth estimation
     print("Loading Depth Anything V2...")
     depth_processor = AutoImageProcessor.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small"
+        "depth-anything/Depth-Anything-V2-Small-hf"
     )
     depth_model = AutoModelForDepthEstimation.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small"
+        "depth-anything/Depth-Anything-V2-Small-hf"
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     depth_model = depth_model.to(device)
