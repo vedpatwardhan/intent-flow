@@ -15,6 +15,8 @@ try:
     from transformers import (
         CLIPVisionModel,
         CLIPProcessor,
+        AutoImageProcessor,
+        AutoModelForDepthEstimation,
     )
 except ImportError:
     print("Please install transformers and timm: pip install transformers timm")
@@ -80,58 +82,82 @@ class PointNeXtEncoder(nn.Module):
         return feat2  # returns shape [B, N, 128]
 
 
-def generate_synthetic_tabletop_points(num_points=1024, frame_idx=0):
+def generate_point_cloud_from_depth(
+    rgb_img, depth_model, depth_processor, device, num_points=1024
+):
     """
-    Generates a synthetic 3D point cloud of a tabletop workspace with a moving robot gripper
-    and a static red cube, along with semantic labels for color coding.
+    Predicts a dense depth map from an RGB image using Depth Anything V2
+    and unprojects it to a 3D point cloud of (x, y, z) coordinates.
     """
+    inputs = depth_processor(images=rgb_img, return_tensors="pt")
+    if torch.cuda.is_available():
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        outputs = depth_model(**inputs)
+        predicted_depth = outputs.predicted_depth
+        prediction = torch.nn.functional.interpolate(
+            predicted_depth.unsqueeze(1),
+            size=rgb_img.size[::-1],  # PIL size is (W, H)
+            mode="bicubic",
+            align_corners=False,
+        ).squeeze()
+
+    depth = prediction.cpu().numpy()
+    h, w = depth.shape
+
+    # Grid sampling to extract points
+    stride = int(np.sqrt((h * w) / num_points))
+    if stride < 1:
+        stride = 1
+
+    # Standard virtual intrinsics
+    fx = fy = 400.0
+    cx, cy = w / 2.0, h / 2.0
+
     points = []
-    labels = []  # 0: table, 1: pedestal, 2: cube, 3: gripper
+    colors = []
 
-    # 1. Table surface (plane at z = -0.15)
-    table_pts = np.random.uniform(
-        [-0.4, -0.4, -0.15], [0.4, 0.4, -0.15], (int(num_points * 0.5), 3)
-    )
-    points.append(table_pts)
-    labels.append(np.zeros(len(table_pts)))
+    rgb_arr = np.array(rgb_img)
 
-    # 2. Pedestal (base under the cube)
-    ped_pts = np.random.uniform(
-        [-0.05, -0.05, -0.15], [0.05, 0.05, -0.05], (int(num_points * 0.15), 3)
-    )
-    points.append(ped_pts)
-    labels.append(np.ones(len(ped_pts)))
+    for v in range(0, h, stride):
+        for u in range(0, w, stride):
+            d = depth[v, u]
+            if d <= 0.05:
+                continue
+            # Depth Anything outputs relative/scaled depth; we scale it for a reasonable 3D aspect
+            z = d * 0.1
+            x = (u - cx) * z / fx
+            y = (v - cy) * z / fy
+            points.append([x, y, z])
 
-    # 3. Static Red Cube (on top of pedestal)
-    cube_pts = np.random.uniform(
-        [-0.02, -0.02, -0.05], [0.02, 0.02, -0.01], (int(num_points * 0.1), 3)
-    )
-    points.append(cube_pts)
-    labels.append(np.ones(len(cube_pts)) * 2)
+            # Extract RGB colors
+            r, g, b = rgb_arr[v, u]
+            colors.append([r, g, b])
 
-    # 4. Moving gripper (approaching cube from top-left-high)
-    t = frame_idx / 31.0  # 32-step progression
-    g_x = -0.15 * (1.0 - t)
-    g_y = -0.15 * (1.0 - t)
-    g_z = 0.25 * (1.0 - t) - 0.01
+    points = np.array(points)
+    colors = np.array(colors)
 
-    gripper_center = np.array([g_x, g_y, g_z])
-    gripper_pts = np.random.uniform(
-        gripper_center - 0.03, gripper_center + 0.03, (int(num_points * 0.25), 3)
-    )
-    points.append(gripper_pts)
-    labels.append(np.ones(len(gripper_pts)) * 3)
+    # Cap size to exactly num_points for PointNeXt input matching
+    if len(points) > num_points:
+        idx = np.random.choice(len(points), num_points, replace=False)
+        points = points[idx]
+        colors = colors[idx]
+    elif len(points) < num_points and len(points) > 0:
+        idx = np.random.choice(len(points), num_points, replace=True)
+        points = points[idx]
+        colors = colors[idx]
 
-    return np.vstack(points), np.concatenate(labels)
+    return points, colors
 
 
-def project_points_to_3d_isometric(points, labels, width=320, height=320):
+def project_points_to_3d_isometric(points, colors, width=320, height=320):
     """
     Projects 3D points using a clean isometric perspective (top-down side view)
     so the 3D structure is immediately recognizable.
     """
     # Define an isometric rotation matrix (pitch and yaw rotation)
-    pitch = np.radians(30)
+    pitch = np.radians(35)
     yaw = np.radians(-45)
 
     cos_p, sin_p = np.cos(pitch), np.sin(pitch)
@@ -145,13 +171,14 @@ def project_points_to_3d_isometric(points, labels, width=320, height=320):
     pts_rot = points @ R_yaw @ R_pitch
 
     # Scale and center on the screen
-    scale = 350
+    mean_depth = points[:, 2].mean() + 1e-8
+    scale = 320.0 / mean_depth
     u = (pts_rot[:, 0] * scale + width / 2).astype(np.int32)
-    v = (-pts_rot[:, 2] * scale + height / 2 + 30).astype(np.int32)
+    v = (-pts_rot[:, 2] * scale + height / 2 + 10).astype(np.int32)
 
     # Keep only points within bounds
     valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
-    return u[valid], v[valid], labels[valid], valid
+    return u[valid], v[valid], colors[valid], valid
 
 
 def process_video(video_path, output_path="encoder_visuals.mp4"):
@@ -223,6 +250,18 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
     if torch.cuda.is_available():
         pointnet = pointnet.cuda()
     pointnet.eval()
+
+    # 4. Load Depth Anything V2 for zero-shot depth estimation
+    print("Loading Depth Anything V2...")
+    depth_processor = AutoImageProcessor.from_pretrained(
+        "depth-anything/Depth-Anything-V2-Small"
+    )
+    depth_model = AutoModelForDepthEstimation.from_pretrained(
+        "depth-anything/Depth-Anything-V2-Small"
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    depth_model = depth_model.to(device)
+    depth_model.eval()
 
     frame_idx = 0
     while cap.isOpened():
@@ -307,9 +346,9 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
         clip_visual = cv2.addWeighted(resized_frame, 0.6, heatmap, 0.4, 0)
 
         # --- C. POINTNEXT 3D GEOMETRIC ACTIVATIONS ---
-        # Generate 3D point cloud for this step
-        pts_3d, labels = generate_synthetic_tabletop_points(
-            num_points=1024, frame_idx=frame_idx
+        # Generate 3D point cloud from current frame depth using Depth Anything
+        pts_3d, point_colors = generate_point_cloud_from_depth(
+            pil_img, depth_model, depth_processor, device, num_points=1024
         )
         pts_tensor = torch.tensor(pts_3d, dtype=torch.float32).unsqueeze(0)
         if torch.cuda.is_available():
@@ -319,31 +358,20 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
             # Get features from PointNeXt
             pn_feat = pointnet(pts_tensor).cpu().numpy().squeeze(0)  # [N, 128]
 
-        # Project 3D points to isometric 2D coordinates
-        u, v, valid_labels, valid = project_points_to_3d_isometric(
-            pts_3d, labels, width=panel_size, height=panel_size
+        # Project 3D points to isometric 2D coordinates with original RGB colors
+        u, v, valid_colors, valid = project_points_to_3d_isometric(
+            pts_3d, point_colors, width=panel_size, height=panel_size
         )
 
         # Create PointNeXt visualization canvas (3D space representation on black background)
         pn_visual = np.zeros((panel_size, panel_size, 3), dtype=np.uint8)
 
-        # Semantic Colors (BGR):
-        # 0 (Table): Dark Gray
-        # 1 (Pedestal): Cyan/Blue
-        # 2 (Cube): Bright Red
-        # 3 (Gripper): Bright Yellow
-        sem_colors = {
-            0: [80, 80, 80],
-            1: [180, 180, 0],
-            2: [0, 0, 255],
-            3: [0, 255, 255],
-        }
-
-        # Draw points
+        # Draw projected 3D points with their actual camera colors (spatially grounded)
         for i in range(len(u)):
-            lbl = int(valid_labels[i])
-            color = sem_colors.get(lbl, [255, 255, 255])
-            cv2.circle(pn_visual, (u[i], v[i]), 3, color, -1)
+            r, g, b = valid_colors[i]
+            # Convert RGB to BGR for CV2
+            color = (int(b), int(g), int(r))
+            cv2.circle(pn_visual, (u[i], v[i]), 2, color, -1)
 
         # --- ASSEMBLY ---
         # Add labels to the panels
