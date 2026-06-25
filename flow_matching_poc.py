@@ -98,19 +98,44 @@ class FlowMatchingModel(nn.Module):
 flow_model = FlowMatchingModel()
 flow_optimizer = optim.Adam(flow_model.parameters(), lr=0.005)
 
-print("Training Flow Matching Model (Geodesic Transport)...")
-flow_epochs = 1000
+
+# Function to define a mathematically consistent curved path avoiding the obstacle
+def get_curved_path(y0, y1, t):
+    yt = (1 - t) * y0 + t * y1
+    obstacle = torch.tensor([0.5, 0.5])
+    to_obstacle = yt - obstacle
+    dist = torch.norm(to_obstacle, dim=-1, keepdim=True)
+
+    # Boundary slightly larger than the obstacle radius (0.45 vs 0.4)
+    repulsion_radius = 0.45
+    repulsion_mask = (dist < repulsion_radius).float()
+    repulsive_dir = to_obstacle / (dist + 1e-6)
+
+    # Scale repulsion by t*(1-t) so it smoothly fades to 0 at the endpoints (t=0 and t=1)
+    fade = 4.0 * t * (1.0 - t)
+
+    # Deflect the path coordinates
+    yt_curved = (
+        yt + 0.35 * (repulsion_radius - dist) * repulsion_mask * repulsive_dir * fade
+    )
+    return yt_curved
+
+
+print("Training Flow Matching Model (Curved Geodesic Transport)...")
+flow_epochs = 1200
 for epoch in range(flow_epochs):
     flow_optimizer.zero_grad()
 
     # Sample random virtual time t in [0, 1]
     t = torch.rand(y_init.shape[0], 1)
 
-    # Linear interpolation (geodesic path) in output space
-    y_t = (1 - t) * y_init + t * y_target
+    # Compute the curved path coordinates yt
+    y_t = get_curved_path(y_init, y_target, t)
 
-    # Ideal target velocity vector pointing along the straight path
-    v_target = y_target - y_init
+    # Compute velocity target numerically to satisfy the continuity equation
+    dt = 1e-3
+    y_t_plus_dt = get_curved_path(y_init, y_target, t + dt)
+    v_target = (y_t_plus_dt - y_t) / dt
 
     # Predict velocity
     v_pred = flow_model(y_t, t, x_data)
