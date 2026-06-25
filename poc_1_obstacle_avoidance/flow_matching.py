@@ -290,3 +290,18 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig(PLOT_PATH)
 print(f"\nA/B test complete! Trajectory comparison saved to {PLOT_PATH}")
+
+# Generate and save a separate plot for all 200 ideal flow trajectories to visualize the vector field
+plt.figure(figsize=(8, 8))
+plt.scatter(obstacle[0], obstacle[1], color="red", s=200, marker="x", label="Obstacle")
+plt.scatter(1.0, 1.0, color="green", s=250, marker="*", zorder=5, label="Target")
+for sample_idx in range(len(x_data)):
+    traj_x = [t[sample_idx, 0].item() for t in guided_targets]
+    traj_y = [t[sample_idx, 1].item() for t in guided_targets]
+    plt.plot(traj_x, traj_y, "g-", alpha=0.15)
+plt.title("Ideal Geodesic Flow Paths (All 200 Samples)")
+plt.legend()
+plt.grid(True)
+ideal_flow_plot_path = os.path.join(SCRIPT_DIR, "ideal_flow_paths.png")
+plt.savefig(ideal_flow_plot_path)
+print(f"Separate ideal flow paths plot saved to {ideal_flow_plot_path}")
