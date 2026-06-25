@@ -220,10 +220,10 @@ for epoch in range(epochs + 1):
 # 6. Visualization & Trajectory Straightness Comparison
 # ----------------------------------------------------
 obstacle = np.array([0.5, 0.5])
-plt.figure(figsize=(15, 6))
+plt.figure(figsize=(20, 5))
 
 # Subplot 1: Convergence Speed Comparison
-plt.subplot(1, 3, 1)
+plt.subplot(1, 4, 1)
 plt.plot(eval_times * epochs, baseline_losses, "b-o", label="Baseline (Unguided)")
 plt.plot(eval_times * epochs, guided_losses, "r-o", label="Flow-Guided")
 plt.xlabel("Epoch")
@@ -233,7 +233,7 @@ plt.legend()
 plt.grid(True)
 
 # Subplot 2: Baseline Output Trajectories (First 5 samples)
-plt.subplot(1, 3, 2)
+plt.subplot(1, 4, 2)
 plt.scatter(obstacle[0], obstacle[1], color="red", s=150, marker="x", label="Obstacle")
 for sample_idx in range(5):
     traj_x = [t[sample_idx, 0].item() for t in baseline_trajectories]
@@ -242,8 +242,18 @@ for sample_idx in range(5):
 plt.title("Baseline Paths (Curved)")
 plt.grid(True)
 
-# Subplot 3: Flow-Guided Output Trajectories (First 5 samples)
-plt.subplot(1, 3, 3)
+# Subplot 3: Ideal Flow Trajectories (First 5 samples from ODE integration)
+plt.subplot(1, 4, 3)
+plt.scatter(obstacle[0], obstacle[1], color="red", s=150, marker="x", label="Obstacle")
+for sample_idx in range(5):
+    traj_x = [t[sample_idx, 0].item() for t in guided_targets]
+    traj_y = [t[sample_idx, 1].item() for t in guided_targets]
+    plt.plot(traj_x, traj_y, "g--o", alpha=0.6)
+plt.title("Ideal Flow Paths (Geodesic)")
+plt.grid(True)
+
+# Subplot 4: Flow-Guided Output Trajectories (First 5 samples)
+plt.subplot(1, 4, 4)
 plt.scatter(obstacle[0], obstacle[1], color="red", s=150, marker="x", label="Obstacle")
 for sample_idx in range(5):
     traj_x = [t[sample_idx, 0].item() for t in guided_trajectories]
