@@ -156,25 +156,28 @@ def project_points_to_3d_isometric(points, colors, width=320, height=320):
     Projects 3D points using a clean isometric perspective (top-down side view)
     so the 3D structure is immediately recognizable.
     """
+    # Map camera coords to world-like coords: X=x, Y=-y (up is positive), Z=z
+    pts_world = np.stack([points[:, 0], -points[:, 1], points[:, 2]], axis=-1)
+
     # Define an isometric rotation matrix (pitch and yaw rotation)
-    pitch = np.radians(35)
-    yaw = np.radians(-45)
+    pitch = np.radians(20)  # Tilt down slightly to see height/depth
+    yaw = np.radians(-45)  # Angle from side
 
     cos_p, sin_p = np.cos(pitch), np.sin(pitch)
     cos_y, sin_y = np.cos(yaw), np.sin(yaw)
 
-    # Rotation matrices
-    R_yaw = np.array([[cos_y, -sin_y, 0], [sin_y, cos_y, 0], [0, 0, 1]])
+    # Standard 3D rotation matrices
+    R_yaw = np.array([[cos_y, 0, sin_y], [0, 1, 0], [-sin_y, 0, cos_y]])
     R_pitch = np.array([[1, 0, 0], [0, cos_p, -sin_p], [0, sin_p, cos_p]])
 
-    # Apply isometric rotation
-    pts_rot = points @ R_yaw @ R_pitch
+    # Apply rotation
+    pts_rot = pts_world @ R_yaw @ R_pitch
 
     # Scale and center on the screen
     mean_depth = points[:, 2].mean() + 1e-8
-    scale = 320.0 / mean_depth
+    scale = 220.0 / mean_depth
     u = (pts_rot[:, 0] * scale + width / 2).astype(np.int32)
-    v = (-pts_rot[:, 2] * scale + height / 2 + 10).astype(np.int32)
+    v = (-pts_rot[:, 1] * scale + height / 2).astype(np.int32)
 
     # Keep only points within bounds
     valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
@@ -358,15 +361,24 @@ def process_video(video_path, output_path="encoder_visuals.mp4"):
             # Get features from PointNeXt
             pn_feat = pointnet(pts_tensor).cpu().numpy().squeeze(0)  # [N, 128]
 
-        # Project 3D points to isometric 2D coordinates with original RGB colors
+        # Standardize PointNeXt features and map to RGB using PCA to visualize what the model sees
+        pn_feat_std = (pn_feat - pn_feat.mean(axis=0)) / (pn_feat.std(axis=0) + 1e-8)
+        pca = PCA(n_components=3)
+        pca_colors = pca.fit_transform(pn_feat_std)
+        # Normalize to [0, 255]
+        c_min, c_max = pca_colors.min(axis=0), pca_colors.max(axis=0)
+        pca_colors = (pca_colors - c_min) / (c_max - c_min + 1e-8)
+        pca_colors = (pca_colors * 255).astype(np.uint8)
+
+        # Project 3D points to isometric 2D coordinates with PointNeXt PCA colors
         u, v, valid_colors, valid = project_points_to_3d_isometric(
-            pts_3d, point_colors, width=panel_size, height=panel_size
+            pts_3d, pca_colors, width=panel_size, height=panel_size
         )
 
         # Create PointNeXt visualization canvas (3D space representation on black background)
         pn_visual = np.zeros((panel_size, panel_size, 3), dtype=np.uint8)
 
-        # Draw projected 3D points with their actual camera colors (spatially grounded)
+        # Draw projected 3D points with their PointNeXt feature colors
         for i in range(len(u)):
             r, g, b = valid_colors[i]
             # Convert RGB to BGR for CV2
