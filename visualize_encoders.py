@@ -156,8 +156,15 @@ def project_points_to_3d_isometric(points, colors, width=320, height=320):
     Projects 3D points using a clean isometric perspective (top-down side view)
     so the 3D structure is immediately recognizable.
     """
+    # 1. Center the point cloud
+    pts_centered = points - points.mean(axis=0)
+
+    # 2. Scale uniformly so the maximum coordinate extent fits in [-1.0, 1.0]
+    max_extent = np.abs(pts_centered).max() + 1e-8
+    pts_norm = pts_centered / max_extent
+
     # Map camera coords to world-like coords: X=x, Y=-y (up is positive), Z=z
-    pts_world = np.stack([points[:, 0], -points[:, 1], points[:, 2]], axis=-1)
+    pts_world = np.stack([pts_norm[:, 0], -pts_norm[:, 1], pts_norm[:, 2]], axis=-1)
 
     # Define an isometric rotation matrix (pitch and yaw rotation)
     pitch = np.radians(20)  # Tilt down slightly to see height/depth
@@ -173,9 +180,8 @@ def project_points_to_3d_isometric(points, colors, width=320, height=320):
     # Apply rotation
     pts_rot = pts_world @ R_yaw @ R_pitch
 
-    # Scale and center on the screen
-    mean_depth = points[:, 2].mean() + 1e-8
-    scale = 220.0 / mean_depth
+    # Use a fixed scale since points are normalized to [-1, 1] range
+    scale = 100.0
     u = (pts_rot[:, 0] * scale + width / 2).astype(np.int32)
     v = (-pts_rot[:, 1] * scale + height / 2).astype(np.int32)
 
