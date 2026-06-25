@@ -16,7 +16,7 @@ np.random.seed(42)
 
 
 # ----------------------------------------------------
-# 1. Task Definition: Reaching around an obstacle
+# 1. Data Generation (Bimodal Obstacle Avoidance)
 # ----------------------------------------------------
 def generate_data(num_samples=200):
     obstacle = np.array([0.5, 0.5])
@@ -56,7 +56,7 @@ x_data, y_target = generate_data()
 
 
 # ----------------------------------------------------
-# 2. Target Model Definition & Training Trajectory Collection
+# 2. Define the Target Model Architecture
 # ----------------------------------------------------
 class TargetModel(nn.Module):
     def __init__(self):
@@ -69,30 +69,17 @@ class TargetModel(nn.Module):
         return self.net(x)
 
 
-target_model = TargetModel()
-optimizer = optim.Adam(target_model.parameters(), lr=0.01)
-criterion = nn.MSELoss()
-
-epochs = 100
-trajectory_data = {}
-
-print("Training target model and collecting output trajectory...")
-for epoch in range(epochs + 1):
-    optimizer.zero_grad()
-    outputs = target_model(x_data)
-    loss = criterion(outputs, y_target)
-    loss.backward()
-    optimizer.step()
-
-    if epoch % 10 == 0:
-        trajectory_data[epoch / epochs] = outputs.detach().clone()
-        print(f"Epoch {epoch}/{epochs} - Loss: {loss.item():.4f}")
+# Get the initial (untrained) output distribution p_0
+init_model = TargetModel()
+with torch.no_grad():
+    y_init = init_model(x_data).clone()
 
 
 # ----------------------------------------------------
-# 3. Flow Matching Model: Learning the Output Distribution Flow
+# 3. Train the Flow Matching Model (Geodesic Prior)
 # ----------------------------------------------------
-class FlowOracle(nn.Module):
+# Learn the straight vector field (flow) transporting p_0 (init) to p_1 (target)
+class FlowMatchingModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
@@ -103,106 +90,168 @@ class FlowOracle(nn.Module):
             nn.Linear(32, 2),
         )
 
-    def forward(self, y, tau, x):
-        inputs = torch.cat([y, tau, x], dim=-1)
+    def forward(self, y, t, x):
+        inputs = torch.cat([y, t, x], dim=-1)
         return self.net(inputs)
 
 
-flow_oracle = FlowOracle()
-flow_optimizer = optim.Adam(flow_oracle.parameters(), lr=0.005)
+flow_model = FlowMatchingModel()
+flow_optimizer = optim.Adam(flow_model.parameters(), lr=0.005)
 
-print("\nTraining Flow Matching Oracle on output distributions...")
-flow_epochs = 500
-tau_keys = sorted(list(trajectory_data.keys()))
-
+print("Training Flow Matching Model (Geodesic Transport)...")
+flow_epochs = 1000
 for epoch in range(flow_epochs):
     flow_optimizer.zero_grad()
 
-    idx = np.random.choice(len(tau_keys) - 1)
-    t0, t1 = tau_keys[idx], tau_keys[idx + 1]
+    # Sample random virtual time t in [0, 1]
+    t = torch.rand(y_init.shape[0], 1)
 
-    y0 = trajectory_data[t0]
-    y1 = trajectory_data[t1]
+    # Linear interpolation (geodesic path) in output space
+    y_t = (1 - t) * y_init + t * y_target
 
-    t = torch.rand(y0.shape[0], 1)
-    yt = (1 - t) * y0 + t * y1
-    v_target = (y1 - y0) / (t1 - t0)
-    tau = torch.tensor([[t0 + (t1 - t0) * float(t_val)] for t_val in t])
+    # Ideal target velocity vector pointing along the straight path
+    v_target = y_target - y_init
 
-    v_pred = flow_oracle(yt, tau, x_data)
+    # Predict velocity
+    v_pred = flow_model(y_t, t, x_data)
 
-    flow_loss = nn.MSELoss()(v_pred, v_target)
-    flow_loss.backward()
+    loss = nn.MSELoss()(v_pred, v_target)
+    loss.backward()
     flow_optimizer.step()
 
-    if epoch % 50 == 0:
-        print(
-            f"Flow Matching Epoch {epoch}/{flow_epochs} - Loss: {flow_loss.item():.6f}"
-        )
+    if epoch % 100 == 0:
+        print(f"Flow Matching Epoch {epoch}/{flow_epochs} - Loss: {loss.item():.6f}")
 
 # ----------------------------------------------------
-# 4. Integrate Flow ODE and Compare Trajectories
+# 4. Integrate Flow to get Intermediate Targets
 # ----------------------------------------------------
-print("\nIntegrating Flow Matching ODE to reconstruct training trajectory...")
+# Compute the flow-matching guided path targets by integrating the velocity field
+print("\nGenerating guided path targets via ODE integration...")
 
 
 def flow_ode(t, y_flat, x_np):
     y_tensor = torch.tensor(y_flat.reshape(-1, 2), dtype=torch.float32)
     x_tensor = torch.tensor(x_np, dtype=torch.float32)
-    tau_tensor = torch.full((y_tensor.shape[0], 1), t, dtype=torch.float32)
-
+    t_tensor = torch.full((y_tensor.shape[0], 1), t, dtype=torch.float32)
     with torch.no_grad():
-        v = flow_oracle(y_tensor, tau_tensor, x_tensor)
+        v = flow_model(y_tensor, t_tensor, x_tensor)
     return v.numpy().flatten()
 
 
-y_init = trajectory_data[0.0].numpy().flatten()
 x_np = x_data.numpy()
+y_init_np = y_init.numpy().flatten()
+num_eval_steps = 11
+eval_times = np.linspace(0.0, 1.0, num_eval_steps)
 
 sol = solve_ivp(
     flow_ode,
     t_span=(0.0, 1.0),
-    y0=y_init,
+    y0=y_init_np,
     args=(x_np,),
-    t_eval=np.linspace(0.0, 1.0, 11),
+    t_eval=eval_times,
     method="RK45",
 )
 
-# ----------------------------------------------------
-# 5. Plotting and Verification
-# ----------------------------------------------------
-plt.figure(figsize=(12, 5))
+# Extract guided targets for each training epoch step
+guided_targets = []
+for i in range(num_eval_steps):
+    guided_targets.append(torch.tensor(sol.y[:, i].reshape(-1, 2), dtype=torch.float32))
 
-plt.subplot(1, 2, 1)
-plt.scatter(x_np[:, 0], x_np[:, 1], color="gray", alpha=0.5, label="Inputs (x)")
-plt.scatter(0.5, 0.5, color="red", s=200, marker="x", label="Obstacle")
-plt.scatter(1.0, 1.0, color="green", s=200, marker="*", label="Target")
-plt.title("Workspace Definition")
+# ----------------------------------------------------
+# 5. A/B Comparative Training Runs
+# ----------------------------------------------------
+epochs = 100
+eval_interval = epochs // (num_eval_steps - 1)
+
+# --- RUN A: Baseline Training (Unguided) ---
+print("\nRunning Baseline Training (Unguided)...")
+baseline_model = TargetModel()
+baseline_model.load_state_dict(init_model.state_dict())  # start from same init
+baseline_opt = optim.Adam(baseline_model.parameters(), lr=0.01)
+
+baseline_losses = []
+baseline_trajectories = []
+
+for epoch in range(epochs + 1):
+    baseline_opt.zero_grad()
+    outputs = baseline_model(x_data)
+    # Unguided training always pushes directly to final targets
+    loss = nn.MSELoss()(outputs, y_target)
+    loss.backward()
+    baseline_opt.step()
+
+    if epoch % eval_interval == 0:
+        baseline_losses.append(loss.item())
+        baseline_trajectories.append(outputs.detach().clone())
+        print(f"Baseline Epoch {epoch} - Loss: {loss.item():.4f}")
+
+# --- RUN B: Flow-Guided Training (Geodesic Flow) ---
+print("\nRunning Flow-Guided Training...")
+guided_model = TargetModel()
+guided_model.load_state_dict(init_model.state_dict())  # start from same init
+guided_opt = optim.Adam(guided_model.parameters(), lr=0.01)
+
+guided_losses = []
+guided_trajectories = []
+
+for epoch in range(epochs + 1):
+    guided_opt.zero_grad()
+    outputs = guided_model(x_data)
+
+    # Determine which flow step targets to guide with
+    step_idx = min(epoch // eval_interval, num_eval_steps - 1)
+    target_step = guided_targets[step_idx]
+
+    # Guide output towards the intermediate flow-predicted geodesic state
+    loss = nn.MSELoss()(outputs, target_step)
+    loss.backward()
+    guided_opt.step()
+
+    # Track loss relative to the true final targets for fair comparison
+    with torch.no_grad():
+        true_loss = nn.MSELoss()(outputs, y_target)
+
+    if epoch % eval_interval == 0:
+        guided_losses.append(true_loss.item())
+        guided_trajectories.append(outputs.detach().clone())
+        print(f"Guided Epoch {epoch} - True Target Loss: {true_loss.item():.4f}")
+
+# ----------------------------------------------------
+# 6. Visualization & Trajectory Straightness Comparison
+# ----------------------------------------------------
+obstacle = np.array([0.5, 0.5])
+plt.figure(figsize=(15, 6))
+
+# Subplot 1: Convergence Speed Comparison
+plt.subplot(1, 3, 1)
+plt.plot(eval_times * epochs, baseline_losses, "b-o", label="Baseline (Unguided)")
+plt.plot(eval_times * epochs, guided_losses, "r-o", label="Flow-Guided")
+plt.xlabel("Epoch")
+plt.ylabel("MSE Loss to Final Targets")
+plt.title("Convergence Rate Comparison")
 plt.legend()
 plt.grid(True)
 
-plt.subplot(1, 2, 2)
-y_final_pred = sol.y[:, -1].reshape(-1, 2)
-y_final_actual = trajectory_data[1.0].numpy()
+# Subplot 2: Baseline Output Trajectories (First 5 samples)
+plt.subplot(1, 3, 2)
+plt.scatter(obstacle[0], obstacle[1], color="red", s=150, marker="x", label="Obstacle")
+for sample_idx in range(5):
+    traj_x = [t[sample_idx, 0].item() for t in baseline_trajectories]
+    traj_y = [t[sample_idx, 1].item() for t in baseline_trajectories]
+    plt.plot(traj_x, traj_y, "b--o", alpha=0.6)
+plt.title("Baseline Paths (Curved)")
+plt.grid(True)
 
-plt.scatter(
-    y_final_actual[:, 0],
-    y_final_actual[:, 1],
-    color="blue",
-    alpha=0.6,
-    label="Actual Trained Outputs",
-)
-plt.scatter(
-    y_final_pred[:, 0],
-    y_final_pred[:, 1],
-    color="orange",
-    alpha=0.6,
-    label="Flow Reconstructed Outputs",
-)
-plt.title("Reconstructed vs Actual Output Distribution")
-plt.legend()
+# Subplot 3: Flow-Guided Output Trajectories (First 5 samples)
+plt.subplot(1, 3, 3)
+plt.scatter(obstacle[0], obstacle[1], color="red", s=150, marker="x", label="Obstacle")
+for sample_idx in range(5):
+    traj_x = [t[sample_idx, 0].item() for t in guided_trajectories]
+    traj_y = [t[sample_idx, 1].item() for t in guided_trajectories]
+    plt.plot(traj_x, traj_y, "r--o", alpha=0.6)
+plt.title("Flow-Guided Paths (Straightened)")
 plt.grid(True)
 
 plt.tight_layout()
 plt.savefig(PLOT_PATH)
-print(f"\nVerification complete! Plot saved to {PLOT_PATH}")
+print(f"\nA/B test complete! Trajectory comparison saved to {PLOT_PATH}")
