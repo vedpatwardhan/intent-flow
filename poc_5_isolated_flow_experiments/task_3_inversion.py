@@ -129,8 +129,19 @@ print(f"Cycle Consistency Error: Mean = {mean_error:.8f}, Max = {max_error:.8f}"
 # 5. Latent Space Editing (Noise Steering)
 # ----------------------------------------------------
 print("\nPerforming Latent-Space Editing...")
-# Take 5 actual data points
-x1_real = x1_data[:5].numpy()
+# Select 5 spread out data points (2 from inner ring, 3 from outer ring)
+inner_pts = x1_data[torch.norm(x1_data, dim=1) < 1.1].numpy()
+outer_pts = x1_data[torch.norm(x1_data, dim=1) >= 1.1].numpy()
+
+x1_real = np.array(
+    [
+        inner_pts[0],
+        inner_pts[len(inner_pts) // 2],
+        outer_pts[0],
+        outer_pts[len(outer_pts) // 3],
+        outer_pts[2 * len(outer_pts) // 3],
+    ]
+)
 
 # Invert them to noise space (1 -> 0)
 sol_invert = solve_ivp(
@@ -270,6 +281,17 @@ axes[2].scatter(
     zorder=5,
     label="Latent Noise x0",
 )
+# Plot perturbed noise points
+axes[2].scatter(
+    x0_perturbed[:, 0],
+    x0_perturbed[:, 1],
+    color="orange",
+    marker="v",
+    s=60,
+    edgecolors="black",
+    zorder=5,
+    label="Perturbed Noise x0 + delta",
+)
 # Plot edited points
 axes[2].scatter(
     x1_edited[:, 0],
@@ -304,6 +326,38 @@ for idx in range(5):
         xy=(x1_edited[idx, 0], x1_edited[idx, 1]),
         xytext=(x0_perturbed[idx, 0], x0_perturbed[idx, 1]),
         arrowprops=dict(arrowstyle="->", color="green", lw=1.2, ls="-."),
+    )
+
+    # Find the nearest 3 points in the initial noise distribution (t=0) for justification
+    # We compare the perturbed noise point to a reference set of training noise points
+    x0_ref = np.random.normal(0, 1.0, (3000, 2))
+    dists = np.linalg.norm(x0_ref - x0_perturbed[idx], axis=1)
+    nearest_idxs = np.argsort(dists)[:3]
+    nearest_pts = x0_ref[nearest_idxs]
+
+    # Plot nearest training noise points
+    axes[2].scatter(
+        nearest_pts[:, 0],
+        nearest_pts[:, 1],
+        color="red",
+        marker="*",
+        s=45,
+        zorder=4,
+        label="Nearest Train Noise x0" if idx == 0 else "",
+    )
+    # Draw line from perturbed noise point to its 3 nearest training noise points
+    for pt in nearest_pts:
+        axes[2].plot(
+            [x0_perturbed[idx, 0], pt[0]],
+            [x0_perturbed[idx, 1], pt[1]],
+            color="red",
+            linestyle=":",
+            alpha=0.6,
+            lw=1,
+        )
+
+    print(
+        f"Perturbed Noise {idx+1} at [{x0_perturbed[idx, 0]:.4f}, {x0_perturbed[idx, 1]:.4f}]: Distances to 3 nearest train noise pts: {dists[nearest_idxs]}"
     )
 
 axes[2].set_title(
