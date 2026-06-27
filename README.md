@@ -24,6 +24,8 @@ The diagram below highlights the main architectural components and their core re
  │    │                 JEPA World Predictor (EBM)                     │    │
  │    └──────────────────────────────▲───┬─────────────────────────────┘    │
  │                                   │   │ (DAWN Reciprocity Loop)          │
+ │                      [ Action Adapter (f_action) ]                       │
+ │                                   ▲   │                                  │
  │    ┌──────────────────────────────┴───▼─────────────────────────────┐    │
  │    │           Flow-Matching Action Denoiser (CLAP-RF)              │    │
  │    └──────────────────────────────▲───┬─────────────────────────────┘    │
