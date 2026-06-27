@@ -1,0 +1,46 @@
+# LatentFlow Global Configuration
+
+model:
+  latent_dim: 512
+  num_heads: 8
+  num_layers: 4
+  mlp_ratio: 4.0
+  dropout: 0.1
+
+  # Joint limits and dimensions for Fourier GR-1 Hand 6DoF
+  action_dim: 12  # Hand joints torque/velocity output dimensions
+  state_dim: 24   # Proprioceptive state dimensions (joint angles, velocities)
+
+  # Predictor configuration
+  horizon: 8
+  bottleneck_dim: 16
+
+stage1:
+  lr: 0.0005
+  batch_size: 128
+  epochs: 100
+  weight_decay: 0.0001
+  loss_weight_dynamics: 1.0
+
+stage2:
+  lr: 0.0003
+  batch_size: 64
+  epochs: 50
+  flow_steps: 100
+  combostoc_noise_ratio: 0.2
+
+stage3:
+  lr: 0.0001
+  batch_size: 32
+  epochs: 100
+  gamma: 0.99
+  ram_weight: 1.0
+  adv_weight: 0.1
+  distill_weight: 0.5
+  auto_npo_interval: 1000  # Checkpoint evaluation interval (steps)
+
+paths:
+  urdf_path: "/Users/vedpatwardhan/Desktop/cortex-os/repos/Wiki-GRx-Models/GRX/GR1/gr1t2/urdf/gr1t2_fourier_hand_6dof.urdf"
+  dataset_dir: "/Users/vedpatwardhan/Desktop/cortex-os/gr00t_grasp_archive"
+  checkpoint_dir: "/Users/vedpatwardhan/Desktop/cortex-os/latent-flow/checkpoints"
+  log_dir: "/Users/vedpatwardhan/Desktop/cortex-os/latent-flow/logs"
