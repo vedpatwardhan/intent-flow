@@ -1,4 +1,4 @@
-## Latent Flow
+# Latent Flow
 
 ---
 
