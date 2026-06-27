@@ -529,8 +529,21 @@ To support this final demo, the Event Boundary Anchors in our Memory Triad are d
 To execute this architecture systematically, we divide the roadmap into four developmental phases:
 
 ### Phase 1: Proof-of-Concept (PoC) Validation
-* **Task 1.1: Latent Action Bottleneck Validation**: Build a toy script verifying that a shallow MLP Latent Action Encoder ($h_\psi$) can compress visual state transitions ($s_t \to s_{t+1}$) into a 1D vector without memorizing/leaking the future frame.
-* **Task 1.2: Predictor Collapse Test**: Train the dynamics predictor on a tiny dataset of simulated movements. Confirm that the copy-paste shortcut is avoided ($\text{Ratio}_{\text{collapse}} < 0.2$) when using bilinear action-state gating and multi-step rollouts ($H > 1$).
+
+To verify our core mathematical formulations before setting up the full training environment, we will execute three self-contained validations:
+
+*   **Task 1.1: Latent Action Bottleneck & Anti-Leakage Verification (`latent_action_poc.py`)**:
+    *   *Objective*: Verify that a shallow MLP Latent Action Encoder ($h_\psi$) can compress visual state transitions ($s_t \to s_{t+1}$) into a compact latent action vector without memorizing/leaking the future frame.
+    *   *Implementation*: Generate synthetic 512-dim transitions representing a moving point. Train a 2-layer MLP bottleneck ($z \in \mathbb{R}^{16}$) alongside the predictor.
+    *   *Gatekeeper Success Metric*: When feeding randomized noise into the bottleneck $z$, predictor loss must spike, proving the predictor is strictly dependent on the motion vector and cannot copy future features directly.
+*   **Task 1.2: Predictor Collapse Prevention (`predictor_collapse_poc.py`)**:
+    *   *Objective*: Verify that Bilinear Action-State Gating forces the predictor to remain sensitive to actions, preventing copy-paste collapse ($\hat{s}_{t+1} \approx s_t$).
+    *   *Implementation*: Train a standard concatenation predictor against a bilinearly gated predictor ($g = \text{MLP}_1(s) \odot \text{MLP}_2(a)$) under perturbed action inputs.
+    *   *Gatekeeper Success Metric*: The bilinearly gated model must maintain a high **Action Perturbation Drift** ($\Delta_{\text{action}} > 0.1$) under perturbed actions, whereas the concatenation model collapses ($\Delta_{\text{action}} \to 0$).
+*   **Task 1.3: pycapacity Task-Space Limits (`pycapacity_filter_poc.py`)**:
+    *   *Objective*: Verify that joint torque proposals can be mapped dynamically through the robot's Jacobian to satisfy workspace polytope boundaries.
+    *   *Implementation*: Generate out-of-bounds joint-acceleration proposals, project them onto the computed workspace acceleration polytope, and verify limits.
+    *   *Gatekeeper Success Metric*: Projections must execute in $<2\text{ms}$ with $100\%$ limit satisfaction.
 
 ### Phase 2: Data Selection & Preparation
 * **Task 2.1: datasets.bot Audit**: Select a diverse, multi-task tabletop manipulation dataset (e.g., AgiBot or Astribot tabletop trajectories) containing human-teleoperated episodes.
