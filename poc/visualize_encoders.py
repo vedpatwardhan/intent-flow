@@ -12,8 +12,8 @@ try:
     from transformers import (
         CLIPProcessor,
         CLIPTextModel,
-        SamModel,
-        SamProcessor,
+        Sam2Model,
+        Sam2Processor,
         CLIPVisionModel,
     )
 
@@ -206,8 +206,8 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
     if MULTIMODAL_LIBS_AVAILABLE:
         print(f"\n--- Running SAM (Prompt Click: {click_coord}) ---")
         try:
-            sam = SamModel.from_pretrained("facebook/sam-vit-large").to(device)
-            sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-large")
+            sam = Sam2Model.from_pretrained("facebook/sam2-hiera-large").to(device)
+            sam_processor = Sam2Processor.from_pretrained("facebook/sam2-hiera-large")
             sam.eval()
 
             first_frame_pil = Image.fromarray(first_frame)
