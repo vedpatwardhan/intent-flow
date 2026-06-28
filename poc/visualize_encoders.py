@@ -62,7 +62,14 @@ def load_video_frames(video_path, max_frames=10):
 
 
 def save_all_visualizations(
-    first_frame, sam_mask, dino_attn, vggt_tracks, clip_sim, point_cloud, output_dir
+    first_frame,
+    sam_mask,
+    dino_attn,
+    vggt_tracks,
+    clip_sim,
+    point_cloud,
+    output_dir,
+    click_coord,
 ):
     if not MATPLOTLIB_AVAILABLE:
         print("Warning: matplotlib not installed. Skipping saving visualization files.")
@@ -77,6 +84,19 @@ def save_all_visualizations(
     if sam_mask is not None:
         masked = np.ma.masked_where(sam_mask == 0, sam_mask)
         plt.imshow(masked, cmap="jet", alpha=0.5)
+    if click_coord is not None:
+        # Plot the click point as a red star with black outline
+        plt.scatter(
+            click_coord[0],
+            click_coord[1],
+            color="red",
+            marker="*",
+            s=150,
+            edgecolors="black",
+            linewidths=1.5,
+            label="Click Prompt",
+        )
+        plt.legend(loc="upper right")
     plt.title("SAM Segmentation Mask (Click Prompt)")
     plt.axis("off")
     sam_path = os.path.join(output_dir, "sam_mask.png")
@@ -133,12 +153,24 @@ def save_all_visualizations(
     # 5. PointNeXt 3D Segmented Cloud
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
-    if point_cloud is not None:
+    if point_cloud is not None and len(point_cloud) > 0:
         xs = point_cloud[:, 0]
         ys = point_cloud[:, 1]
         zs = point_cloud[:, 2]
         sc = ax.scatter(xs, ys, zs, c=zs, cmap="plasma", s=3)
         fig.colorbar(sc, ax=ax, label="Depth Z")
+    else:
+        # Add a clear text placeholder inside the empty plot
+        ax.text(
+            0.5,
+            0.5,
+            0.5,
+            "No points segmented.\nAdjust SAM click coordinates.",
+            color="red",
+            fontsize=12,
+            ha="center",
+            va="center",
+        )
     ax.set_title("PointNeXt 3D Segmented Geometry Cloud")
     ax.set_xlabel("X (Width)")
     ax.set_ylabel("Y (Height)")
@@ -357,6 +389,10 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
 
                 # Store coordinates (without intensity) for visual plotting
                 point_cloud_np = np.stack([xs, ys, zs], axis=1)
+            else:
+                print(
+                    "Warning: SAM mask has no active pixels. Adjust the click coordinates to point to a valid object."
+                )
         except Exception as e:
             print(f"Error executing PointNeXt: {e}")
     else:
@@ -370,6 +406,7 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
         clip_sim_np,
         point_cloud_np,
         output_dir,
+        click_coord,
     )
     print("\nPoC Result: SUCCESS (All 5 Visualizations saved successfully)")
 
