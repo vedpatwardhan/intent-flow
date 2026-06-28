@@ -8,6 +8,7 @@ from models.vggt import VGGTEncoder
 try:
     from transformers import CLIPProcessor, CLIPTextModel, SamModel, SamProcessor
     from huggingface_hub import hf_hub_download
+    import timm
 
     MULTIMODAL_LIBS_AVAILABLE = True
 except ImportError:
@@ -45,27 +46,27 @@ class DatasetPreprocessor:
         if MULTIMODAL_LIBS_AVAILABLE:
             try:
                 # Load frozen foundation backbones
-                # 1. DINOv3 (using Facebook research hub)
-                self.dino = torch.hub.load(
-                    "facebookresearch/dinov2", "dinov2_vitl14"
+                # 1. DINOv3 (using timm)
+                self.dino = timm.create_model(
+                    "vit_large_patch14_dinov3", pretrained=True, num_classes=0
                 ).to(self.device)
                 self.dino.eval()
 
                 # 2. CLIP Text Encoder
                 self.clip_text_model = CLIPTextModel.from_pretrained(
-                    "openai/clip-vit-base-patch32"
+                    "openai/clip-vit-base-patch16"
                 ).to(self.device)
                 self.clip_processor = CLIPProcessor.from_pretrained(
-                    "openai/clip-vit-base-patch32"
+                    "openai/clip-vit-base-patch16"
                 )
                 self.clip_text_model.eval()
 
                 # 3. Segment Anything Model (SAM) for offline object segmentation
-                self.sam = SamModel.from_pretrained("facebook/sam-vit-base").to(
+                self.sam = SamModel.from_pretrained("facebook/sam-vit-large").to(
                     self.device
                 )
                 self.sam_processor = SamProcessor.from_pretrained(
-                    "facebook/sam-vit-base"
+                    "facebook/sam-vit-large"
                 )
                 self.sam.eval()
             except Exception as e:

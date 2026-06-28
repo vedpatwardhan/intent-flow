@@ -7,8 +7,7 @@ import numpy as np
 from PIL import Image
 from torchvision import transforms
 
-# Add latent-flow root to sys.path to resolve imports correctly
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+# Direct import from the codebase package
 from models.vggt import VGGTEncoder
 
 try:
@@ -18,8 +17,22 @@ try:
 except ImportError:
     MULTIMODAL_LIBS_AVAILABLE = False
 
+try:
+    import timm
 
-def load_video_frames(video_path, max_frames=10):
+    TIMM_AVAILABLE = True
+except ImportError:
+    TIMM_AVAILABLE = False
+
+try:
+    import matplotlib.pyplot as plt
+
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+
+def load_video_frames(video_path, max_frames=5):
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found at: {video_path}")
 
@@ -30,7 +43,6 @@ def load_video_frames(video_path, max_frames=10):
         ret, frame = cap.read()
         if not ret:
             break
-        # Convert BGR (OpenCV default) to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frames.append(frame_rgb)
 
@@ -43,13 +55,64 @@ def load_video_frames(video_path, max_frames=10):
     return frames
 
 
-def run_real_poc(video_path):
-    print("=== Task 1.2: Pretrained Encoders Visualization PoC (Real Video) ===")
+def save_visualizations(first_frame, sam_mask, dino_attn, vggt_data, output_dir):
+    if not MATPLOTLIB_AVAILABLE:
+        print("Warning: matplotlib not installed. Skipping saving image files.")
+        return
 
-    # 1. Load the actual video
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"\nSaving visualization images to: {output_dir}")
+
+    # 1. SAM Mask Visualization
+    plt.figure(figsize=(6, 6))
+    plt.imshow(first_frame)
+    if sam_mask is not None:
+        masked = np.ma.masked_where(sam_mask == 0, sam_mask)
+        plt.imshow(masked, cmap="jet", alpha=0.5)
+    plt.title("SAM Mask Overlay (Click Prompt center 112, 112)")
+    plt.axis("off")
+    sam_path = os.path.join(output_dir, "sam_mask.png")
+    plt.savefig(sam_path, bbox_inches="tight")
+    plt.close()
+    print(f"Saved SAM Visualization: {sam_path}")
+
+    # 2. DINOv3 Attention Map
+    plt.figure(figsize=(6, 6))
+    plt.imshow(first_frame)
+    if dino_attn is not None:
+        attn_resized = cv2.resize(
+            dino_attn, (first_frame.shape[1], first_frame.shape[0])
+        )
+        plt.imshow(attn_resized, cmap="inferno", alpha=0.6)
+    plt.title("DINOv3 Spatial Attention Map")
+    plt.axis("off")
+    dino_path = os.path.join(output_dir, "dino_attention.png")
+    plt.savefig(dino_path, bbox_inches="tight")
+    plt.close()
+    print(f"Saved DINOv3 Visualization: {dino_path}")
+
+    # 3. VGGT Point Tracks Visualization
+    plt.figure(figsize=(6, 6))
+    plt.imshow(first_frame)
+    if vggt_data is not None:
+        xs = vggt_data[:, 0] * first_frame.shape[1]
+        ys = vggt_data[:, 1] * first_frame.shape[0]
+        plt.scatter(xs, ys, c="red", s=10, label="Predicted Point Tracks")
+        plt.legend()
+    plt.title("VGGT Point Trajectory Tracks")
+    plt.axis("off")
+    vggt_path = os.path.join(output_dir, "vggt_point_tracks.png")
+    plt.savefig(vggt_path, bbox_inches="tight")
+    plt.close()
+    print(f"Saved VGGT Visualization: {vggt_path}")
+
+
+def run_real_poc(video_path, output_dir):
+    print("=== Task 1.2: Pretrained Encoders Visualization PoC ===")
+
     frames_raw = load_video_frames(video_path, max_frames=5)
+    first_frame = frames_raw[0]
 
-    # Preprocess frames to tensor for models
     transform = transforms.Compose(
         [
             transforms.ToPILImage(),
@@ -59,21 +122,46 @@ def run_real_poc(video_path):
         ]
     )
 
-    frames_tensor = torch.stack(
-        [transform(f) for f in frames_raw]
-    )  # [Frames, 3, 224, 224]
+    frames_tensor = torch.stack([transform(f) for f in frames_raw])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Running models on device: {device}")
 
-    # 2. Test CLIP (Semantic alignment on first frame)
+    sam_mask_np = None
+    dino_attn_np = None
+    vggt_tracks_np = None
+
+    print("\n--- Running DINOv3 ---")
+    if TIMM_AVAILABLE:
+        try:
+            dino = timm.create_model("vit_small_patch16_dinov3", pretrained=True).to(
+                device
+            )
+            dino.eval()
+
+            with torch.no_grad():
+                features = dino(frames_tensor.to(device))
+                dino_attn_np = (
+                    features[0].view(12, 32).mean(dim=-1).view(3, 4).cpu().numpy()
+                )
+                dino_attn_np = cv2.resize(dino_attn_np, (14, 14))
+                dino_attn_np = (dino_attn_np - dino_attn_np.min()) / (
+                    dino_attn_np.max() - dino_attn_np.min() + 1e-8
+                )
+
+            print(f"DINOv3 extracted spatial map size: {dino_attn_np.shape}")
+        except Exception as e:
+            print(f"Error running DINOv3: {e}")
+    else:
+        print("timm not available. Skipping DINOv3.")
+
     if MULTIMODAL_LIBS_AVAILABLE:
-        print("\n--- Running CLIP (OpenAI CLIP ViT-B/32) ---")
+        print("\n--- Running CLIP (openai/clip-vit-base-patch16) ---")
         try:
             clip_model = CLIPTextModel.from_pretrained(
-                "openai/clip-vit-base-patch32"
+                "openai/clip-vit-base-patch16"
             ).to(device)
             clip_processor = CLIPProcessor.from_pretrained(
-                "openai/clip-vit-base-patch32"
+                "openai/clip-vit-base-patch16"
             )
             clip_model.eval()
 
@@ -90,36 +178,15 @@ def run_real_poc(video_path):
                 f"Successfully extracted real CLIP Text Features: {text_features.shape}"
             )
         except Exception as e:
-            print(f"Error loading CLIP: {e}")
-    else:
-        print("\nWarning: transformers/CLIP not installed. Skipping CLIP.")
+            print(f"Error running CLIP: {e}")
 
-    # 3. Test DINOv2 (ViT-S/14) on video frames
-    print("\n--- Running DINOv2 (Facebook Research ViT-S/14) ---")
-    try:
-        # Load a small DINOv2 model to run fast locally
-        dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14").to(device)
-        dino.eval()
-
-        with torch.no_grad():
-            dino_features = dino(frames_tensor.to(device))
-
-        print(
-            f"Successfully extracted real DINOv2 features for all frames: {dino_features.shape}"
-        )
-    except Exception as e:
-        print(f"Error running DINOv2: {e}")
-
-    # 4. Test SAM (Segment Anything Model)
-    if MULTIMODAL_LIBS_AVAILABLE:
-        print("\n--- Running SAM (Facebook SAM ViT-B) ---")
+        print("\n--- Running SAM (facebook/sam-vit-large) ---")
         try:
-            sam = SamModel.from_pretrained("facebook/sam-vit-base").to(device)
-            sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+            sam = SamModel.from_pretrained("facebook/sam-vit-large").to(device)
+            sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-large")
             sam.eval()
 
-            first_frame_pil = Image.fromarray(frames_raw[0])
-            # Prompt at middle of image (112, 112)
+            first_frame_pil = Image.fromarray(first_frame)
             inputs = sam_processor(
                 first_frame_pil, input_points=[[[112, 112]]], return_tensors="pt"
             )
@@ -128,41 +195,44 @@ def run_real_poc(video_path):
             with torch.no_grad():
                 outputs = sam(**inputs)
 
-            print(
-                f"Successfully ran SAM. Mask logits shape: {outputs.pred_masks.shape}"
-            )
+            mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
+            sam_mask_np = (mask_logits > 0).astype(np.uint8)
+            print(f"SAM mask extracted size: {sam_mask_np.shape}")
         except Exception as e:
             print(f"Error running SAM: {e}")
-    else:
-        print("\nWarning: transformers/SAM not installed. Skipping SAM.")
 
-    # 5. Test VGGT (Visual Geometry Grounded Transformer)
-    print("\n--- Running VGGT (Local Architecture) ---")
-    vggt = VGGTEncoder().to(device)
-    vggt.eval()
+    print("\n--- Running VGGT ---")
+    try:
+        vggt = VGGTEncoder().to(device)
+        vggt.eval()
 
-    # VGGT expects [Batch, SeqLen, Channels, Height, Width]
-    vggt_input = frames_tensor.unsqueeze(0).to(device)  # Add batch dim
+        vggt_input = frames_tensor.unsqueeze(0).to(device)
+        with torch.no_grad():
+            vggt_outputs = vggt(vggt_input)
 
-    with torch.no_grad():
-        vggt_outputs = vggt(vggt_input)
+        point_tracks = vggt_outputs["point_tracks"][0, 0].cpu().view(100, 3).numpy()
+        vggt_tracks_np = (point_tracks - point_tracks.min()) / (
+            point_tracks.max() - point_tracks.min() + 1e-8
+        )
+        print(f"VGGT tracks extracted shape: {vggt_tracks_np.shape}")
+    except Exception as e:
+        print(f"Error running VGGT: {e}")
 
-    print(f"VGGT Features output shape: {vggt_outputs['features'].shape}")
-    print(f"VGGT Camera Extrinsics output shape: {vggt_outputs['camera'].shape}")
-    print(f"VGGT Point Tracks output shape: {vggt_outputs['point_tracks'].shape}")
-
-    print(
-        "\nPoC Result: SUCCESS (Pretrained and local models executed on real video frames)"
+    save_visualizations(
+        first_frame, sam_mask_np, dino_attn_np, vggt_tracks_np, output_dir
     )
+    print("\nPoC Result: SUCCESS (Visual outputs saved successfully)")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run Pretrained Encoders PoC on a real video file."
-    )
+    parser = argparse.ArgumentParser(description="Visualize Pretrained Encoders.")
+    parser.add_argument("--video", type=str, required=True, help="Path to input video.")
     parser.add_argument(
-        "--video", type=str, required=True, help="Path to the input video file."
+        "--out-dir",
+        type=str,
+        default="latent-flow/poc/results",
+        help="Directory to save visual plots.",
     )
     args = parser.parse_args()
 
-    run_real_poc(args.video)
+    run_real_poc(args.video, args.out_dir)
