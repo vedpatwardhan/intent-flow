@@ -14,6 +14,7 @@ model:
   # Predictor configuration
   horizon: 8
   bottleneck_dim: 16
+  vggt_dim: 768
 
 stage1:
   lr: 0.0005

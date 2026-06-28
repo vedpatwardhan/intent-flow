@@ -9,15 +9,15 @@ The diagram below highlights the main architectural components and their core re
 ```
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ 1. FROZEN PERCEPTION & PROPRIOCEPTION ENCODERS                           │
- │  [ Language (CLIP Text) ]  [ DINOv3 Vision ]  [ PointNeXt ]   [ Tactile ]│
- └─────────┬───────────────────────┬──────────────────┬──────────────┬──────┘
-           │                       │                  │              │
-           ▼                       ▼                  ▼              ▼
+ │  [ CLIP Text ]  [ DINOv3 Vision ]  [ PointNeXt ]  [ VGGT Geometry ] [Tact]│
+ └─────────┬──────────────┬──────────────┬──────────────┬──────────────┬────┘
+           │              │              │              │              │
+           ▼              ▼              ▼              ▼              ▼
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ 2. TRAINABLE MLP ADAPTERS (Lightweight Projection Layer ~4M params)      │
- └─────────┬───────────────────────┬──────────────────┬──────────────┬──────┘
-           │ (Text Embedding)      │ (Visual Latent)  │ (Point Cloud)│ (Tactile/Prop)
-           ▼                       ▼                  ▼              ▼
+ │ 2. TRAINABLE MLP ADAPTERS (Lightweight Projection Layer ~5M params)      │
+ └─────────┬──────────────┬──────────────┬──────────────┬──────────────┬────┘
+           │ (Text Embed) │ (Vis Latent) │ (Point Cloud)│ (VGGT Geom)  │ (Tactile/Prop)
+           ▼              ▼              ▼              ▼              ▼
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ 3. CORE LATENT MODELS (Learnable Dynamics & Policy)                      │
  │    ┌────────────────────────────────────────────────────────────────┐    │
@@ -52,14 +52,15 @@ The diagram below highlights the main architectural components and their core re
 
 ---
 
-## Encoder Streams (A1 - A4) Details
+## Encoder Streams (A1 - A5) Details
 
 To build a generalist policy capable of zero-shot transfer, we leverage heterogeneous multimodal encoders that translate raw environment observations into compact latent representations:
 
 *   **A1: Language (CLIP Text)**: Focuses on task and semantic coaching. By embedding natural language descriptions (e.g., *"pinch the cube's corners"*) and general semantic categories, it conditions the flow-matching denoiser to align target behavior with the task goal.
 *   **A2: DINOv3 Full-Frame Vision**: Runs on *every single incoming image frame* (multi-view raw inputs) instead of static waypoints. DINOv3 serves as a self-supervised visual backbone that extracts dense semantic correspondences and spatial layouts across time. This acts as a continuous state-tracking reference for the JEPA world predictor.
-*   **A3: PointNeXt Egocentric Vision**: Focuses on millimeter-level 3D spatial alignment. By extracting point clouds from local bounding boxes around the end-effector and target object, it provides the precise 6DoF geometric vectors needed for dexterous manipulation, bypassing visual occlusions.
-*   **A4: Tactile & Proprioceptive Streams**: Captures contact-rich physical feedback (finger forces, joint positions, velocities, and torques). This bridges the gap between vision and physical execution.
+*   **A3: PointNeXt Egocentric Vision**: Focuses on millimeter-level 3D spatial alignment. During live execution, PointNeXt ingests raw 3D coordinate point sets $(X, Y, Z)$ directly from the robot's depth cameras (or MuJoCo simulation depth buffers). During 2D-only pre-training (Stage 1), PointNeXt is fed by running video frames through a monocular depth estimator (like *Depth Anything V2*) and back-projecting the depth values into a dense 3D point cloud.
+*   **A4: VGGT Visual Geometry**: Infers dense 3D scene layouts, camera parameters (intrinsic/extrinsic matrices $R, T$), and 3D point tracks across frame sequences. It provides camera trajectories and tracks key coordinates $(X, Y, Z)$ over time, giving the model a temporal motion tracking prior.
+*   **A5: Tactile & Proprioceptive Streams**: Captures contact-rich physical feedback (finger forces, joint positions, velocities, and torques). This bridges the gap between vision and physical execution.
 
 ---
 
@@ -129,7 +130,7 @@ JEPA deviates from traditional EBM formulations in its approach to asymmetry and
     *   **SIGReg (Sketched-Isotropic-Gaussian Regularizer)**: Used in **LeWorldModel (LeWM)**, it projects high-dimensional latent variables onto random 1D directions and forces them to match an isotropic Gaussian distribution, mathematically guaranteeing collapse prevention without requiring stop-gradients or EMA.
 
 ### 3. Relevance of EBM Properties Under Frozen Pre-trained Encoders
-In our architecture, we ignore visual encoder training and use **frozen, pre-trained encoders** (DINOv3, CLIP, PointNeXt). Under this configuration, the dynamics behave as a **Conditional or Predictive EBM**:
+In our architecture, we ignore visual encoder training and use **frozen, pre-trained encoders** (DINOv3, CLIP, PointNeXt, VGGT). Under this configuration, the dynamics behave as a **Conditional or Predictive EBM**:
 *   **Elimination of Representation Collapse**: Because the encoders $f_\phi$ are frozen, the latent representations $s_x$ and $s_y$ are static and cannot collapse to a constant vector. This renders encoder-level anti-collapse losses (like VICReg or SIGReg) unnecessary.
 *   **The Threat of Predictor Collapse**: While the representation space cannot collapse, the predictor $g_\theta(s_x, a)$ can still suffer from predictor collapse (or action-ignorance), where it learns to predict a static future state ($\hat{s}_y \approx s_x$) regardless of the action $a$. We prevent this via:
     1. **Multi-Step Rollouts**: We train the predictor to roll out over a temporal horizon of $H = 8$ to $12$ steps auto-regressively: $\hat{s}_{t+k} = g_\theta(\hat{s}_{t+k-1}, a_{t+k-1})$. The loss is accumulated over the horizon: $\mathcal{L}_{\text{dynamics}} = \sum_{k=1}^H \gamma^k \| \hat{s}_{t+k} - s_{t+k} \|_2^2$. This prevents copy-paste collapse.
@@ -139,7 +140,7 @@ In our architecture, we ignore visual encoder training and use **frozen, pre-tra
     1. **"No-Op" Loss Ratio**: $\text{Ratio}_{\text{collapse}} = \frac{\mathbb{E}[ \| g_\theta(s_t, a_t) - s_{t+1} \|^2 ]}{\mathbb{E}[ \| s_t - s_{t+1} \|^2 ]}$. A healthy ratio is significantly below $1.0$. A ratio approaching $1.0$ indicates collapse to copy-paste.
     2. **Action Sensitivity Variance**: $\text{Var}(\hat{s}) = \frac{1}{B} \sum_{i=1}^B \| g_\theta(s_t^{(i)}, a_t^{(i)}) - \bar{\hat{s}} \|_2^2$. If variance drops to zero, the predictor is outputting a constant vector.
     3. **Action Perturbation Drift**: $\Delta_{\text{action}} = \mathbb{E}[ \| g_\theta(s_t, a_t) - g_\theta(s_t, a_{\text{rand}}) \|_2^2 ]$. If this drift drops to zero, the network is ignoring the action input channels.
-*   **Stable Energy Landscapes**: In traditional EBMs, training encoders and predictors simultaneously is highly unstable. Freezing the encoders anchors the latent space to fixed semantic (CLIP) and visual-spatial (DINOv3, PointNeXt) coordinate systems. The predictor $g_\theta$ is trained purely to minimize the transition energy over this fixed landscape.
+*   **Stable Energy Landscapes**: In traditional EBMs, training encoders and predictors simultaneously is highly unstable. Freezing the encoders anchors the latent space to fixed semantic (CLIP) and visual-spatial (DINOv3, PointNeXt, VGGT) coordinate systems. The predictor $g_\theta$ is trained purely to minimize the transition energy over this fixed landscape.
 *   **Highly Relevant for Trajectory Planning**: The energy function $E(x, a, y) = \lVert g_\theta(s_x, a) - s_y \rVert^2$ remains fully active and differentiable. Since the latent space is stabilized, computing the gradient $\nabla_a E$ for MPC path planning or Langevin trajectory refinement becomes highly reliable, avoiding the "latent detachment" (where the latent space drifts from physical reality) common in end-to-end trained joint-embedding architectures.
 
 ### 4. Parameterized EBT-Policy vs. Calculated JEPA-EBM
@@ -155,7 +156,7 @@ To distinguish our calculated transition energy from direct parameterized energy
 To maximize both pre-training sample efficiency and post-training policy robustness, the training pipeline shifts how it stabilizes the predictor and sculpts the energy landscape between Stage 1 and Stage 3:
 
 #### A. Stage 1 (Pre-training): Dynamics-Based Predictor Grounding
-*   **The Goal**: Establish a stable, multi-modal transition dynamics model (JEPA Predictor) over the frozen coordinate systems of DINOv3, CLIP, and PointNeXt.
+*   **The Goal**: Establish a stable, multi-modal transition dynamics model (JEPA Predictor) over the frozen coordinate systems of DINOv3, CLIP, PointNeXt, and VGGT.
 *   **Why Non-Contrastive?**: We do not yet have access to task success boundaries or balanced negative interaction samples. Instead of contrastive training, Stage 1 focuses purely on predicting physical transition trajectories, utilizing **multi-step rollouts** and **bilinear gating** to ensure the predictor is physically grounded and cannot collapse (ignore actions).
 
 #### B. Stage 3 (Post-training/RL): Memory-Driven Contrastive Energy Sculpting
@@ -186,7 +187,7 @@ The table below outlines how our lightweight architecture adapts and retains CLA
 ### 2. Modality Alignment: MLP Adapters and Cross-Attention Fusion
 To capture CLAP's core benefit of cross-modal alignment without the VLM parameters, we implement a two-stage alignment and fusion pipeline:
 * **Step 1: MLP Projection & Contrastive Alignment (CASA)**:
-  * Each frozen perception stream (CLIP Text, DINOv3, PointNeXt, Tactile/Proprioceptive) is projected by its own trainable MLP adapter into a unified $d$-dimensional space (e.g., $d=512$).
+  * Each frozen perception stream (CLIP Text, DINOv3, PointNeXt, VGGT, Tactile/Proprioceptive) is projected by its own trainable MLP adapter into a unified $d$-dimensional space (e.g., $d=512$).
   * To ground these spaces, we train the MLP adapters using a **Contrastive Action-State Alignment (CASA)** loss during Stage 2 SFT. We encode robot action trajectories $a_t$ using a simple MLP action encoder $h_\psi(a_t) \to z_a$. The adapters project state transitions into a visual-action latent space $f_{\theta_v}(s_{t:t+1}) \to z_s$.
   * We optimize an InfoNCE loss to maximize the cosine similarity of matching pairs $(z_s, z_a)$ while minimizing it for mismatched pairs in the batch. This forces the adapters to extract only action-relevant features, resolving "visual entanglement."
 * **Step 2: Attention-Based Fusion (MSAT)**:
@@ -206,7 +207,7 @@ To pre-train our world dynamics model on datasets containing only video transiti
 
 #### Rationale for the Shallow MLP Architecture
 We utilize small, 2-to-3 layer MLPs for $h_\psi$ and $f_{\text{action}}$ because:
-1. **Inputs are Pre-Compressed**: The modules do not process raw pixel arrays. They operate on highly compressed $512$-dim semantic representations produced by DINOv3 and PointNeXt, which reduces the complexity to simple vector projection.
+1. **Inputs are Pre-Compressed**: The modules do not process raw pixel arrays. They operate on highly compressed $512$-dim semantic representations produced by DINOv3, PointNeXt, and VGGT, which reduces the complexity to simple vector projection.
 2. **The Anti-Leakage Bottleneck**: To prevent the model from "cheating" during Stage 1 pre-training, the Latent Action Encoder ($h_\psi$) must be constrained. A deep, high-capacity network would easily memorize the future state $s_{t+1}$ and pass it directly to the predictor, bypassing the dynamics. A shallow MLP acts as a low-dimensional bottleneck ($16$-dim or $32$-dim) that can only convey the abstract motion delta (direction and scale), forcing the predictor to model real physical transitions.
 
 ### 4. Pre-Training Prior & Data Feasibility
@@ -253,7 +254,7 @@ The following blueprint details the sequence of training stages, mapping the arc
 ┌────────────────────────────────────────────────────────────────────────┐
 │ STAGE 1: Latent Dynamics Pre-training                                  │
 │ (Action-Agnostic / Video-Scale / Frozen Checkpoints)                   │
-│  - Encoders (DINOv3, CLIP, PointNeXt) & JEPA World Predictor           │
+│  - Encoders (DINOv3, CLIP, PointNeXt, VGGT) & JEPA World Predictor     │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
@@ -273,7 +274,7 @@ The following blueprint details the sequence of training stages, mapping the arc
 
 | Stage & Active Components | Inputs / Outputs | Objectives & Losses | Outcomes | Validation Checks (Gatekeepers) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Stage 1: Pre-training** *(Zero-Shot prior)*<br><br>**Active Components**:<br>• Frozen Encoders (DINOv3, CLIP, PointNeXt)<br>• JEPA Latent Predictor | **Inputs**: Raw video streams (human + robot), multi-view static frames, point clouds.<br>**Outputs**: Target and predicted latent states ($z_t, \hat{z}_{t+1:t+H}$). | • **Zero-Shot Encoders**: Weights loaded from public pre-trained checkpoints (DINOv3, CLIP).<br>• **JEPA Latent Predictor Loss**: Minimizes next-step latent transition error $D(\hat{s}_y, s_y)$ over the frozen representation space. | • Builds a structured latent dynamics manifold ("directional highway").<br>• Establishes zero-shot priors for spatial waypoints, visual object interaction, and language instruction grounding. | • **"No-Op" Loss Ratio** $< 0.2$ (verifies the dynamics model isn't copy-pasting).<br>• **Action Perturbation Drift** $> \delta$ (verifies predictor is sensitive to action inputs).<br>• **Multi-Step Rollout MSE** remains stable up to $H=10$. |
+| **Stage 1: Pre-training** *(Zero-Shot prior)*<br><br>**Active Components**:<br>• Frozen Encoders (DINOv3, CLIP, PointNeXt, VGGT)<br>• JEPA Latent Predictor | **Inputs**: Raw video streams (human + robot), multi-view static frames, point clouds.<br>**Outputs**: Target and predicted latent states ($z_t, \hat{z}_{t+1:t+H}$). | • **Zero-Shot Encoders**: Weights loaded from public pre-trained checkpoints (DINOv3, CLIP, VGGT).<br>• **JEPA Latent Predictor Loss**: Minimizes next-step latent transition error $D(\hat{s}_y, s_y)$ over the frozen representation space. | • Builds a structured latent dynamics manifold ("directional highway").<br>• Establishes zero-shot priors for spatial waypoints, visual object interaction, and language instruction grounding. | • **"No-Op" Loss Ratio** $< 0.2$ (verifies the dynamics model isn't copy-pasting).<br>• **Action Perturbation Drift** $> \delta$ (verifies predictor is sensitive to action inputs).<br>• **Multi-Step Rollout MSE** remains stable up to $H=10$. |
 | **Stage 2: SFT / Mid-training** *(Action Grounding)*<br><br>**Active Components**:<br>• Flow-Matching Action Denoiser (CLAP-RF)<br>• Trainable MLP Adapters<br>• Tactile/Proprioceptive stream<br>• `pycapacity` Task-Space filter | **Inputs**: Latent states ($z_t$), target spatial waypoints, joint angles/torques, tactile arrays.<br>**Outputs**: Generated multi-step joint trajectory ($a_{t:t+H}$). | • **Conditional Flow Matching (CFM) Loss**: Regresses predicted velocity fields $v_\theta$ to match target trajectories.<br>• **Adapter Mapping Loss**: Trains lightweight MLPs to map DINO/CLIP features into robot dynamics space. | • Binds the abstract world model dynamics to the concrete physical embodiment.<br>• Instructs the model how to propose kinematically feasible trajectories within workspace polytope boundaries. | • **CFM Val Loss** converges below target threshold.<br>• **Workspace Polytope Violation Rate** $= 0\%$ (using the `pycapacity` filter).<br>• **Basic Reaching Success** $\ge 80\%$ (open-loop in sim). |
 | **Stage 3: RL & Exploration** *(Behavior Tuning)*<br><br>**Active Components**:<br>• RAM (Reinforce Adjoint Matching)<br>• Discriminator ($D_\psi$)<br>• d-OPSD / PF-OPSD<br>• EBT-Policy (MCMC / Langevin)<br>• RATs Task Proposer | **Inputs**: On-policy simulator states, dense progress rewards, adversarial perturbations.<br>**Outputs**: Fine-tuned flow fields, programmatic skills in library. | • **RAM Velocity Correction Loss**: Direct regression weighting of flow based on scalar rewards.<br>• **Contrastive Energy Loss**: Minimizes prediction error for successes; maximizes ($E \to \infty$) for failures. | • Aligns policies to perform high-precision grasp, pinch, and lift operations.<br>• Develops robust recovery skills from catastrophic failures through self-distillation.<br>• Populates the latent skill library autonomously. | • **Custom Task Success Rate** $\ge 90\%$ (grasp, lift, place success).<br>• **Energy Delta** (Clear separation: $E_{\text{fail}} \gg E_{\text{success}}$).<br>• **d-OPSD Recovery Rate** $\ge 90\%$ under active physical perturbations. |
 
@@ -518,7 +519,7 @@ Under this vision, a user can walk up to the robot, define a task conceptually, 
 
 ### B. User-Guided Keypoint Anchoring (Future-Proofing the Design)
 To support this final demo, the Event Boundary Anchors in our Memory Triad are designed to be **digitally configurable**:
-1. **Defining the Boundary**: The user provides a target text instruction (e.g., *"place the block in the mug"*) and optionally specifies visual/spatial keypoints (e.g., matching the block's coordinate tokens to the mug's coordinate tokens in the PointNeXt projection space).
+1. **Defining the Boundary (SAM Point Cloud Filtering)**: The user interacts with the UI camera feed and clicks on the target object (e.g., the block or the mug). The **Segment Anything Model (SAM)** runs offline on this click, generating a 2D mask. We use this mask to filter the raw point cloud, cropping out everything except the target coordinates. This cropped point cloud is passed through PointNeXt, allowing the user to configure precise visual/spatial keypoints (e.g., matching the block's coordinate tokens to the mug's coordinate tokens in PointNeXt projection space) without background clutter.
 2. **Dynamic Reward Construction**: These keypoints are used to dynamically configure the Reward Discriminator ($D_\psi$) and the Event Boundary Anchor. The robot knows the task is complete the moment the sensor/visual representations match the keypoint boundaries.
 3. **Exploratory Trials**: The robot attempts multiple approaches. When a trial successfully crosses the user's defined Event Boundary, the success trajectory is recorded in the Memory Triad, distilled via d-OPSD, saved as an executable symbolic vector in the PSN, and exported as a standalone macro.
 
@@ -547,7 +548,7 @@ To verify our core mathematical formulations before setting up the full training
 
 ### Phase 2: Data Selection & Preparation
 * **Task 2.1: datasets.bot Audit**: Select a diverse, multi-task tabletop manipulation dataset (e.g., AgiBot or Astribot tabletop trajectories) containing human-teleoperated episodes.
-* **Task 2.2: Modal Tokenization Pipeline**: Write the dataloader wrapper to load the selected dataset, passing images, point clouds, and text instructions through frozen DINOv3, CLIP, and PointNeXt backbones to cache the token representations.
+* **Task 2.2: Modal Tokenization & Caching Pipeline**: Write the preprocessing script (`preprocess_dataset.py`) to pass images, point clouds, and text instructions through frozen DINOv3, CLIP, PointNeXt, and VGGT backbones. If raw point clouds are missing (e.g. on 2D video datasets), the pipeline estimates monocular depth maps and back-projects them into 3D camera space to extract PointNeXt features.
 
 ### Phase 3: SFT Training Loop Implementation
 * **Task 3.1: MLP Adapter & MSAT Coding**: Write the PyTorch code for the trainable MLP adapters and the Multi-Stream Action Transformer (MSAT) cross-attention layers.

@@ -94,3 +94,21 @@ class ActionAdapter(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class VGGTAdapter(nn.Module):
+    """
+    Projects VGGT visual geometry features (d_in=768) to the shared latent dimension (d_out=512).
+    """
+
+    def __init__(self, d_in=768, d_out=512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_in, d_out),
+            nn.LayerNorm(d_out),
+            nn.GELU(),
+            nn.Linear(d_out, d_out),
+        )
+
+    def forward(self, x):
+        return self.net(x)

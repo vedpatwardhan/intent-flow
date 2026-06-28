@@ -44,8 +44,41 @@ class SafetyFilter:
             self._load_urdf_limits(urdf_path)
 
     def _load_urdf_limits(self, urdf_path):
-        # In mock/offline setup, we keep default boundaries if parser isn't initialized
-        pass
+        import xml.etree.ElementTree as ET
+
+        try:
+            tree = ET.parse(urdf_path)
+            root = tree.getroot()
+
+            joint_limits_min = []
+            joint_limits_max = []
+            joint_efforts = []
+
+            # Find all joint limit configurations in URDF XML structure
+            for joint in root.findall("joint"):
+                limit = joint.find("limit")
+                if limit is not None:
+                    lower = float(limit.get("lower", -1.57))
+                    upper = float(limit.get("upper", 1.57))
+                    effort = float(limit.get("effort", 10.0))
+
+                    joint_limits_min.append(lower)
+                    joint_limits_max.append(upper)
+                    joint_efforts.append(effort)
+
+            # If we successfully parsed limits, update the arrays
+            if len(joint_limits_min) > 0:
+                # Align array dimensions to the 12 hand joints
+                self.joint_min = np.array(joint_limits_min[:12])
+                self.joint_max = np.array(joint_limits_max[:12])
+                self.torque_max = np.array(joint_efforts[:12])
+                print(
+                    f"Successfully loaded joint limits from URDF: {len(self.joint_min)} joints configured."
+                )
+        except Exception as e:
+            print(
+                f"Warning: Failed to parse URDF file ({e}). Retaining default hand joint limits."
+            )
 
     def filter_actions(self, proposed_actions, J=None):
         """

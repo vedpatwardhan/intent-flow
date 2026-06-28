@@ -2,15 +2,25 @@ import os
 import torch
 import numpy as np
 from PIL import Image
+from models.vggt import VGGTEncoder
 
 # Try importing standard multimodal libraries, fallback to simulated extractor if not fully installed
 try:
-    from transformers import CLIPProcessor, CLIPTextModel
+    from transformers import CLIPProcessor, CLIPTextModel, SamModel, SamProcessor
     from huggingface_hub import hf_hub_download
 
     MULTIMODAL_LIBS_AVAILABLE = True
 except ImportError:
     MULTIMODAL_LIBS_AVAILABLE = False
+
+# Try importing PointNeXt
+try:
+    from openpoints.models import build_model_from_cfg
+    from easydict import EasyDict
+
+    POINTNEXT_AVAILABLE = True
+except ImportError:
+    POINTNEXT_AVAILABLE = False
 
 
 class DatasetPreprocessor:
@@ -24,6 +34,13 @@ class DatasetPreprocessor:
         self.dino = None
         self.clip_text_model = None
         self.clip_processor = None
+        self.pointnext = None
+        self.sam = None
+        self.sam_processor = None
+
+        # Load VGGT geometry model
+        self.vggt = VGGTEncoder().to(self.device)
+        self.vggt.eval()
 
         if MULTIMODAL_LIBS_AVAILABLE:
             try:
@@ -42,10 +59,48 @@ class DatasetPreprocessor:
                     "openai/clip-vit-base-patch32"
                 )
                 self.clip_text_model.eval()
+
+                # 3. Segment Anything Model (SAM) for offline object segmentation
+                self.sam = SamModel.from_pretrained("facebook/sam-vit-base").to(
+                    self.device
+                )
+                self.sam_processor = SamProcessor.from_pretrained(
+                    "facebook/sam-vit-base"
+                )
+                self.sam.eval()
             except Exception as e:
                 print(
-                    f"Warning: Failed to load online backbones ({e}). Preprocessing will run in offline mode."
+                    f"Warning: Failed to load online vision/language backbones ({e})."
                 )
+
+        if POINTNEXT_AVAILABLE:
+            try:
+                # Configure and build PointNeXt model for geometric feature encoding
+                cfg = EasyDict(
+                    {
+                        "model": {
+                            "NAME": "BaseSeg",
+                            "encoder_args": {
+                                "NAME": "PointNextEncoder",
+                                "blocks": [1, 1, 1, 1, 1, 1],
+                                "strides": [1, 2, 2, 2, 2, 1],
+                                "width": 32,
+                                "in_channels": 4,  # x, y, z, intensity
+                                "sa_layers": 3,
+                                "sa_use_res": True,
+                            },
+                            "decoder_args": {"NAME": "PointNextDecoder"},
+                            "cls_args": {
+                                "NAME": "PointNextHead",
+                                "num_classes": 384,  # Dimension matching our 384 PointNeXtAdapter input
+                            },
+                        }
+                    }
+                )
+                self.pointnext = build_model_from_cfg(cfg).to(self.device)
+                self.pointnext.eval()
+            except Exception as e:
+                print(f"Warning: Failed to build PointNeXt model ({e}).")
 
     def extract_dino_tokens(self, image_paths):
         """
@@ -88,6 +143,121 @@ class DatasetPreprocessor:
 
         return text_embeds
 
+    def extract_pointnext_tokens(self, point_clouds):
+        """
+        point_clouds: Numpy array of shape [SeqLen, NumPoints, 4] (x, y, z, intensity)
+        """
+        if self.pointnext is None:
+            return torch.randn(len(point_clouds), 384)
+
+        tokens = []
+        for pc in point_clouds:
+            # Prepare point cloud tensor [1, NumPoints, 4] -> [1, 4, NumPoints]
+            pc_t = (
+                torch.tensor(pc, dtype=torch.float32, device=self.device)
+                .unsqueeze(0)
+                .transpose(1, 2)
+            )
+            with torch.no_grad():
+                feat = self.pointnext(pc_t)
+                if feat.dim() > 2:
+                    feat = feat.mean(
+                        dim=-1
+                    )  # Global pooling over points to output [1, 384]
+                tokens.append(feat.cpu())
+        return torch.cat(tokens, dim=0)
+
+    def extract_vggt_tokens(self, image_paths):
+        """
+        Extracts Visual Geometry Grounded Transformer (VGGT) features.
+        """
+        frames = []
+        for path in image_paths:
+            # Resize image to standard 224x224 and convert to float tensor
+            img = Image.open(path).convert("RGB").resize((224, 224))
+            img_np = np.array(img, dtype=np.float32) / 255.0
+            # Convert to [3, H, W]
+            img_t = torch.tensor(img_np).permute(2, 0, 1)
+            frames.append(img_t)
+
+        # Shape: [1, SeqLen, 3, H, W]
+        video_t = torch.stack(frames, dim=0).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.vggt(video_t)
+            # Extract 768-dim temporal geometry token features -> shape [SeqLen, 768]
+            vggt_tokens = outputs["features"].squeeze(0).cpu()
+
+        return vggt_tokens
+
+    def convert_video_to_pointclouds(self, image_paths, click_coords=None):
+        """
+        Estimates depth for each frame and back-projects it to construct a 3D point cloud sequence.
+        If SAM is available and click_coords are provided, it segments and crops the point cloud.
+        """
+        num_frames = len(image_paths)
+        num_points = 100  # Subsample 100 points for computational efficiency
+
+        point_clouds = []
+        for path in image_paths:
+            img = Image.open(path).convert("RGB")
+            w, h = img.size
+
+            # 1. Estimate depth map (in full run on Colab, we load a monocular model like Depth Anything)
+            depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
+
+            # 2. Segment using SAM if available and click point is provided
+            mask = np.ones((h, w), dtype=bool)
+            if self.sam is not None and click_coords is not None:
+                try:
+                    # Run SAM segmentation inference on the image frame
+                    inputs = self.sam_processor(
+                        img, input_points=[[click_coords]], return_tensors="pt"
+                    ).to(self.device)
+                    with torch.no_grad():
+                        outputs = self.sam(**inputs)
+                        # Extract the high-probability mask
+                        masks = self.sam_processor.post_process_masks(
+                            outputs.pred_masks,
+                            inputs["original_sizes"],
+                            inputs["reshaped_input_sizes"],
+                        )
+                        mask = masks[0][0][0].cpu().numpy()  # [H, W] boolean mask
+                except Exception as e:
+                    print(
+                        f"Warning: SAM segmentation failed ({e}). Defaulting to full frame projection."
+                    )
+
+            # 3. Assume default pinhole camera intrinsics
+            fx, fy = 150.0, 150.0
+            cx, cy = w / 2.0, h / 2.0
+
+            # 4. Filter pixels inside SAM mask
+            y_indices, x_indices = np.where(mask)
+            if len(x_indices) == 0:
+                # Fallback to full image if mask is empty
+                y_indices, x_indices = np.where(np.ones_like(mask))
+
+            # Randomly subsample points from the segmented area
+            sample_idx = np.random.choice(
+                len(x_indices), size=min(num_points, len(x_indices)), replace=True
+            )
+            u_coords = x_indices[sample_idx]
+            v_coords = y_indices[sample_idx]
+
+            pc_points = []
+            for u, v in zip(u_coords, v_coords):
+                d = depth_map[v, u]
+                x = (u - cx) * d / fx
+                y = (v - cy) * d / fy
+                z = d
+                intensity = 1.0  # Default intensity/feature channel
+                pc_points.append([x, y, z, intensity])
+
+            point_clouds.append(np.array(pc_points))
+
+        return point_clouds
+
     def process_episode(self, raw_episode_dir, text_prompt, output_dir, episode_idx):
         """
         Processes a single episode folder containing image frames and joint files.
@@ -111,14 +281,16 @@ class DatasetPreprocessor:
         )
         seq_len = len(image_paths)
 
-        # Extract vision and text tokens
+        # Extract vision, text, and VGGT tokens
         vision_tokens = self.extract_dino_tokens(image_paths)
         text_token = self.extract_clip_tokens(text_prompt)
+        vggt_tokens = self.extract_vggt_tokens(image_paths)
 
         # Read joint states/actions (mocked if missing)
         actions_path = os.path.join(raw_episode_dir, "actions.npy")
         states_path = os.path.join(raw_episode_dir, "states.npy")
         tactile_path = os.path.join(raw_episode_dir, "tactile.npy")
+        pointclouds_path = os.path.join(raw_episode_dir, "point_clouds.npy")
 
         if os.path.exists(actions_path):
             actions = torch.tensor(np.load(actions_path), dtype=torch.float32)
@@ -129,13 +301,22 @@ class DatasetPreprocessor:
             proprio = torch.randn(seq_len, 24)
             tactile = torch.randn(seq_len, 4, 4)
 
+        if os.path.exists(pointclouds_path):
+            pc_data = np.load(pointclouds_path)
+            pointnext_tokens = self.extract_pointnext_tokens(pc_data)
+        else:
+            # Back-project 2D video frames into 3D Point Clouds
+            reconstructed_pcs = self.convert_video_to_pointclouds(
+                image_paths, click_coords=[112, 112]
+            )
+            pointnext_tokens = self.extract_pointnext_tokens(reconstructed_pcs)
+
         # Build tokenized dictionary matching dataset_loader keys
         tokenized_data = {
             "vision": vision_tokens,
             "text": text_token,
-            "pointnext": torch.randn(
-                seq_len, 384
-            ),  # Ingests PointNeXt mock coordinates
+            "pointnext": pointnext_tokens,
+            "vggt": vggt_tokens,
             "tactile": tactile,
             "proprioception": proprio,
             "actions": actions,

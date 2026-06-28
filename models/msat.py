@@ -15,6 +15,7 @@ class MultiStreamActionTransformer(nn.Module):
                 "text": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "vision": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "pointnext": nn.Parameter(torch.randn(1, 1, latent_dim)),
+                "vggt": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "tactile": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "proprioception": nn.Parameter(torch.randn(1, 1, latent_dim)),
             }

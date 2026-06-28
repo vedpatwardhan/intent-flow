@@ -1,7 +1,8 @@
+import os
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from models.adapters import VisualAdapter, TextAdapter, PointNeXtAdapter
+from models.adapters import VisualAdapter, TextAdapter, PointNeXtAdapter, VGGTAdapter
 from models.msat import MultiStreamActionTransformer
 from models.jepa_predictor import LatentActionEncoder, JepaPredictor
 from utils.dataset_loader import get_dataloader
@@ -15,6 +16,7 @@ def train_stage1(config):
     vis_adapter = VisualAdapter().to(device)
     txt_adapter = TextAdapter().to(device)
     pt_adapter = PointNeXtAdapter().to(device)
+    vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
     msat = MultiStreamActionTransformer().to(device)
 
     latent_action_encoder = LatentActionEncoder(
@@ -26,6 +28,7 @@ def train_stage1(config):
         list(vis_adapter.parameters())
         + list(txt_adapter.parameters())
         + list(pt_adapter.parameters())
+        + list(vggt_adapter.parameters())
         + list(msat.parameters())
         + list(latent_action_encoder.parameters())
         + list(predictor.parameters()),
@@ -54,6 +57,7 @@ def train_stage1(config):
             vision = batch["vision"].to(device)
             text = batch["text"].to(device)
             pointnext = batch["pointnext"].to(device)
+            vggt = batch["vggt"].to(device)
 
             batch_size = vision.size(0)
             horizon = vision.size(1)
@@ -65,6 +69,7 @@ def train_stage1(config):
                 vis_tok = vis_adapter(vision[:, t, :])
                 txt_tok = txt_adapter(text.squeeze(1))
                 pt_tok = pt_adapter(pointnext[:, t, :])
+                vggt_tok = vggt_adapter(vggt[:, t, :])
 
                 # Fused context s_t (Tactile is masked to zeroes during pretraining)
                 tactile_mask = torch.zeros(batch_size, 512, device=device)
@@ -72,6 +77,7 @@ def train_stage1(config):
                     "vision": vis_tok,
                     "text": txt_tok,
                     "pointnext": pt_tok,
+                    "vggt": vggt_tok,
                     "tactile": tactile_mask,
                 }
                 s_t = msat(modality_dict)
@@ -80,10 +86,12 @@ def train_stage1(config):
                 with torch.no_grad():
                     vis_tok_next = vis_adapter(vision[:, t + 1, :])
                     pt_tok_next = pt_adapter(pointnext[:, t + 1, :])
+                    vggt_tok_next = vggt_adapter(vggt[:, t + 1, :])
                     modality_dict_next = {
                         "vision": vis_tok_next,
                         "text": txt_tok,
                         "pointnext": pt_tok_next,
+                        "vggt": vggt_tok_next,
                         "tactile": tactile_mask,
                     }
                     s_next = msat(modality_dict_next)
@@ -133,6 +141,7 @@ def train_stage1(config):
             "vis_adapter": vis_adapter.state_dict(),
             "txt_adapter": txt_adapter.state_dict(),
             "pt_adapter": pt_adapter.state_dict(),
+            "vggt_adapter": vggt_adapter.state_dict(),
             "msat": msat.state_dict(),
             "predictor": predictor.state_dict(),
         },

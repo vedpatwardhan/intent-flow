@@ -9,6 +9,7 @@ from models.adapters import (
     PointNeXtAdapter,
     TactileAdapter,
     ActionAdapter,
+    VGGTAdapter,
 )
 from models.msat import MultiStreamActionTransformer
 from models.jepa_predictor import JepaPredictor
@@ -53,6 +54,7 @@ def train_stage3(config):
     vis_adapter = VisualAdapter().to(device)
     txt_adapter = TextAdapter().to(device)
     pt_adapter = PointNeXtAdapter().to(device)
+    vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
     tactile_adapter = TactileAdapter().to(device)
     action_adapter = ActionAdapter(d_in=config["model"]["action_dim"], d_out=512).to(
         device
@@ -69,6 +71,7 @@ def train_stage3(config):
     vis_adapter.load_state_dict(checkpoint["vis_adapter"])
     txt_adapter.load_state_dict(checkpoint["txt_adapter"])
     pt_adapter.load_state_dict(checkpoint["pt_adapter"])
+    vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
     tactile_adapter.load_state_dict(checkpoint["tactile_adapter"])
     action_adapter.load_state_dict(checkpoint["action_adapter"])
     msat.load_state_dict(checkpoint["msat"])
@@ -81,7 +84,14 @@ def train_stage3(config):
     optimizer = optim.AdamW(
         list(flow_matcher.parameters())
         + list(predictor.parameters())
-        + list(discriminator.parameters()),
+        + list(discriminator.parameters())
+        + list(vis_adapter.parameters())
+        + list(txt_adapter.parameters())
+        + list(pt_adapter.parameters())
+        + list(vggt_adapter.parameters())
+        + list(tactile_adapter.parameters())
+        + list(action_adapter.parameters())
+        + list(msat.parameters()),
         lr=config["stage3"]["lr"],
     )
 
@@ -105,6 +115,7 @@ def train_stage3(config):
             vision = batch["vision"].to(device)
             text = batch["text"].to(device)
             pointnext = batch["pointnext"].to(device)
+            vggt = batch["vggt"].to(device)
             tactile = batch["tactile"].to(device)
             proprioception = batch["proprioception"].to(device)
             actions = batch["actions"].to(device)
@@ -130,12 +141,14 @@ def train_stage3(config):
                     vis_tok = vis_adapter(vision[:, t, :])
                     txt_tok = txt_adapter(text.squeeze(1))
                     pt_tok = pt_adapter(pointnext[:, t, :])
+                    vggt_tok = vggt_adapter(vggt[:, t, :])
                     tactile_emb = tactile_adapter(tactile[:, t, :, :])
 
                 modality_dict = {
                     "vision": vis_tok,
                     "text": txt_tok,
                     "pointnext": pt_tok,
+                    "vggt": vggt_tok,
                     "tactile": tactile_emb,
                     "proprioception": proprioception[:, t, :],
                 }
@@ -145,10 +158,12 @@ def train_stage3(config):
                 with torch.no_grad():
                     vis_tok_next = vis_adapter(vision[:, t + 1, :])
                     pt_tok_next = pt_adapter(pointnext[:, t + 1, :])
+                    vggt_tok_next = vggt_adapter(vggt[:, t + 1, :])
                     modality_dict_next = {
                         "vision": vis_tok_next,
                         "text": txt_tok,
                         "pointnext": pt_tok_next,
+                        "vggt": vggt_tok_next,
                         "tactile": tactile_adapter(tactile[:, t + 1, :, :]),
                         "proprioception": proprioception[:, t + 1, :],
                     }
@@ -231,6 +246,7 @@ def train_stage3(config):
             "vis_adapter": vis_adapter.state_dict(),
             "txt_adapter": txt_adapter.state_dict(),
             "pt_adapter": pt_adapter.state_dict(),
+            "vggt_adapter": vggt_adapter.state_dict(),
             "tactile_adapter": tactile_adapter.state_dict(),
             "msat": msat.state_dict(),
             "action_adapter": action_adapter.state_dict(),

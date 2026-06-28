@@ -43,6 +43,7 @@ class LatentFlowDataset(Dataset):
                 "pointnext": torch.randn(
                     self.seq_len, 384
                 ),  # PointNeXt local point clouds
+                "vggt": torch.randn(self.seq_len, 768),  # VGGT visual geometry features
                 "tactile": torch.randn(
                     self.seq_len, 4, 4
                 ),  # Spatial fingertip pressure pads
