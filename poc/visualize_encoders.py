@@ -225,12 +225,19 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
             with torch.no_grad():
                 # Extract sequence of tokens (includes CLS, register tokens, and patches)
                 features = dino.forward_features(frames_tensor[:1].to(device))
-                # Robustly slice only the last 196 tokens representing the 14x14 spatial patches
-                patches = features[0, -196:]  # [196, 384]
-                # Compute L2 feature magnitude of each patch to construct a 14x14 attention grid
-                dino_attn_np = torch.norm(patches, dim=-1).view(14, 14).cpu().numpy()
-                # Invert the values to map the highly-salient foreground features to yellow and background to purple
-                dino_attn_np = -dino_attn_np
+
+                # Extract CLS token [384] and spatial patch tokens [196, 384]
+                cls_token = features[0, 0]
+                patches = features[0, -196:]
+
+                # Normalize for cosine similarity
+                cls_token = cls_token / (cls_token.norm(dim=-1, keepdim=True) + 1e-8)
+                patches = patches / (patches.norm(dim=-1, keepdim=True) + 1e-8)
+
+                # Compute similarity of each patch to the global CLS token
+                dino_attn_np = (
+                    torch.matmul(patches, cls_token.T).view(14, 14).cpu().numpy()
+                )
                 dino_attn_np = (dino_attn_np - dino_attn_np.min()) / (
                     dino_attn_np.max() - dino_attn_np.min() + 1e-8
                 )
