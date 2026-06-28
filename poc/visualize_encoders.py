@@ -12,8 +12,8 @@ try:
     from transformers import (
         CLIPProcessor,
         CLIPModel,
-        Sam2Model,
-        Sam2Processor,
+        Sam3Model,
+        Sam3Processor,
         AutoImageProcessor,
         AutoModelForDepthEstimation,
     )
@@ -217,17 +217,18 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
     print("\n--- Running DINOv3 ---")
     if TIMM_AVAILABLE:
         try:
-            dino = timm.create_model("vit_small_patch16_dinov3", pretrained=True).to(
-                device
-            )
+            dino = timm.create_model(
+                "vit_small_patch16_dinov3", pretrained=True, num_classes=0
+            ).to(device)
             dino.eval()
 
             with torch.no_grad():
-                features = dino(frames_tensor[:1].to(device))
-                dino_attn_np = (
-                    features[0].view(12, 32).mean(dim=-1).view(3, 4).cpu().numpy()
-                )
-                dino_attn_np = cv2.resize(dino_attn_np, (14, 14))
+                # Extract sequence of spatial and class tokens: [1, 197, 384]
+                features = dino.forward_features(frames_tensor[:1].to(device))
+                # Ignore the first token (CLS token), extract remaining 196 patch tokens
+                patches = features[0, 1:]  # [196, 384]
+                # Compute L2 feature magnitude of each patch to construct a 14x14 attention grid
+                dino_attn_np = torch.norm(patches, dim=-1).view(14, 14).cpu().numpy()
                 dino_attn_np = (dino_attn_np - dino_attn_np.min()) / (
                     dino_attn_np.max() - dino_attn_np.min() + 1e-8
                 )
@@ -239,8 +240,8 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
     if MULTIMODAL_LIBS_AVAILABLE:
         print(f"\n--- Running SAM (Prompt Click: {click_coord}) ---")
         try:
-            sam = Sam2Model.from_pretrained("facebook/sam2-hiera-large").to(device)
-            sam_processor = Sam2Processor.from_pretrained("facebook/sam2-hiera-large")
+            sam = Sam3Model.from_pretrained("facebook/sam3.1").to(device)
+            sam_processor = Sam3Processor.from_pretrained("facebook/sam3.1")
             sam.eval()
 
             first_frame_pil = Image.fromarray(first_frame)

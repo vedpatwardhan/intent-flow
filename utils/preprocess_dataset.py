@@ -6,7 +6,7 @@ from models.vggt import VGGTEncoder
 
 # Try importing standard multimodal libraries, fallback to simulated extractor if not fully installed
 try:
-    from transformers import CLIPProcessor, CLIPTextModel, Sam2Model, Sam2Processor
+    from transformers import CLIPProcessor, CLIPTextModel, Sam3Model, Sam3Processor
     from huggingface_hub import hf_hub_download
     import timm
 
@@ -62,12 +62,8 @@ class DatasetPreprocessor:
                 self.clip_text_model.eval()
 
                 # 3. Segment Anything Model (SAM) for offline object segmentation
-                self.sam = Sam2Model.from_pretrained("facebook/sam2-hiera-large").to(
-                    self.device
-                )
-                self.sam_processor = Sam2Processor.from_pretrained(
-                    "facebook/sam2-hiera-large"
-                )
+                self.sam = Sam3Model.from_pretrained("facebook/sam3.1").to(self.device)
+                self.sam_processor = Sam3Processor.from_pretrained("facebook/sam3.1")
                 self.sam.eval()
             except Exception as e:
                 print(
