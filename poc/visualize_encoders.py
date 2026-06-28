@@ -245,11 +245,7 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
             with torch.no_grad():
                 text_feat = clip_model.get_text_features(**inputs_text)
                 vision_out = clip_model.vision_model(**inputs_vision)
-                # Apply post_layernorm to all tokens (class token + patches)
-                norm_states = clip_model.vision_model.post_layernorm(
-                    vision_out.last_hidden_state
-                )
-                patches = norm_states[0, 1:]
+                patches = vision_out.last_hidden_state[0, 1:]
                 patches_projected = clip_model.visual_projection(patches)
 
             text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
