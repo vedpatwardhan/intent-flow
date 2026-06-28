@@ -9,13 +9,7 @@ from torchvision import transforms
 from models.vggt import VGGTEncoder
 
 try:
-    from transformers import (
-        CLIPProcessor,
-        CLIPTextModel,
-        Sam2Model,
-        Sam2Processor,
-        CLIPVisionModel,
-    )
+    from transformers import CLIPProcessor, CLIPModel, Sam2Model, Sam2Processor
 
     MULTIMODAL_LIBS_AVAILABLE = True
 except ImportError:
@@ -231,17 +225,13 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
     if MULTIMODAL_LIBS_AVAILABLE:
         print(f"\n--- Running CLIP (Prompt Text: '{text_prompt}') ---")
         try:
-            clip_model = CLIPTextModel.from_pretrained(
-                "openai/clip-vit-base-patch16"
-            ).to(device)
-            clip_vision = CLIPVisionModel.from_pretrained(
-                "openai/clip-vit-base-patch16"
-            ).to(device)
+            clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16").to(
+                device
+            )
             clip_processor = CLIPProcessor.from_pretrained(
                 "openai/clip-vit-base-patch16"
             )
             clip_model.eval()
-            clip_vision.eval()
 
             inputs_text = clip_processor(
                 text=[text_prompt], return_tensors="pt", padding=True
@@ -253,11 +243,10 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
             inputs_vision = {k: v.to(device) for k, v in inputs_vision.items()}
 
             with torch.no_grad():
-                text_feat = clip_model(**inputs_text).pooler_output
-                vision_out = clip_vision(**inputs_vision)
+                text_feat = clip_model.get_text_features(**inputs_text)
+                vision_out = clip_model.vision_model(**inputs_vision)
                 patches = vision_out.last_hidden_state[0, 1:]
-                proj = torch.nn.Linear(768, 512).to(device)
-                patches_projected = proj(patches)
+                patches_projected = clip_model.visual_projection(patches)
 
             text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
             patches_projected = patches_projected / patches_projected.norm(
