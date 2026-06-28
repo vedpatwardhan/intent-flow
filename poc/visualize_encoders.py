@@ -256,9 +256,12 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
             patches_projected = patches_projected / patches_projected.norm(
                 dim=-1, keepdim=True
             )
-            clip_sim_np = (
-                torch.matmul(patches_projected, text_feat.T).view(14, 14).cpu().numpy()
-            )
+
+            # Compute standard cosine similarity
+            sim = torch.matmul(patches_projected, text_feat.T).view(14, 14)
+
+            # Invert the similarity values directly (making lowest similarity highest)
+            clip_sim_np = -sim.cpu().numpy()
             clip_sim_np = (clip_sim_np - clip_sim_np.min()) / (
                 clip_sim_np.max() - clip_sim_np.min() + 1e-8
             )
