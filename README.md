@@ -7,21 +7,19 @@
 The diagram below highlights the main architectural components and their core relationships, detailing the path from raw observations and user prompts through the parallel perception pathways (including SAM masking filters and VGGT tracking) into the trainable adapters, MSAT cross-attention fusion, and core model loop.
 
 ```
-                           [ USER INPUTS & OBSERVATIONS ]
-       ┌─────────────────┬─────────────────┬──────────────────┐
-       │ (Text Prompt)   │ (2D Frames)     │ (3D Point Cloud) │ (Tactile/Prop)
-       ▼                 ▼                 │                  ▼
- ┌───────────┐     ┌───────────┐           │            ┌───────────┐
- │ CLIP Text │     │  DINOv3   │           │            │ Sensor IO │
- └─────┬─────┘     └─────┬─────┘           │            └─────┬─────┘
-       │                 │ (Click Prompt)  ▼                  │
-       │                 ├───────────────►[SAM Crop Filter]    │
-       │                 │                │                   │
-       │                 │                ▼ (Segmented Cloud) │
-       │           ┌─────▼─────┐     ┌────┴──────┐            │
-       │           │   VGGT    │     │ PointNeXt │            │
-       │           └─────┬─────┘     └────┬──────┘            │
-       ▼                 ▼                ▼                   ▼
+                              [ USER INPUT ]
+       ┌──────────────┬──────────────┬──────────────┬──────────────┐
+       │ (Text Inst)  │ (2D Frames)  │ (3D Cloud)   │ (Tactile/Prop)
+       ▼              ▼              │              ▼              ▼
+ ┌───────────┐  ┌───────────┐        │ (Click)      │        ┌───────────┐
+ │ CLIP Text │  ├─► DINOv3  │        ▼              │        │ Sensor IO │
+ └─────┬─────┘  │           │   ┌───────────┐       │        └─────┬─────┘
+       │        ├─► VGGT    │   │    SAM    │       │              │
+       │        └─────┬─────┘   └─────┬─────┘       │              │
+       │              │         ┌─────▼─────┐       │              │
+       │              │         │ PointNeXt │◄──────┘              │
+       │              │         └─────┬─────┘                      │
+       ▼              ▼               ▼                            ▼
  ┌──────────────────────────────────────────────────────────────────┐
  │ 2. TRAINABLE MLP ADAPTERS (Text, DINO, VGGT, PointNeXt, Tactile) │
  └───────────────────────────────┬──────────────────────────────────┘
@@ -48,7 +46,7 @@ The diagram below highlights the main architectural components and their core re
  │ 5. SAFETY & FEASIBILITY REGULATORS                               │
  │    pycapacity Workspace Polytope ──► EBT Safeguards (Langevin)   │
  └──────────────────────────────────────────────────────────────────┘
-```��──────────────────────────┘    │
+```��──────────────────────────┘    │
  │                                   │   │ (DAWN Reciprocity Loop)          │
  │                      [ Action Adapter (f_action) ]                       │
  │                                   ▲   │                                  │
@@ -557,20 +555,28 @@ To execute this architecture systematically, we divide the roadmap into four dev
 
 ### Phase 1: Proof-of-Concept (PoC) Validation
 
-To verify our core mathematical formulations before setting up the full training environment, we will execute three self-contained validations:
+To verify our core mathematical formulations before setting up the full training environment, we will execute five self-contained validations:
 
-*   **Task 1.1: Latent Action Bottleneck & Anti-Leakage Verification (`latent_action_poc.py`)**:
-    *   *Objective*: Verify that a shallow MLP Latent Action Encoder ($h_\psi$) can compress visual state transitions ($s_t \to s_{t+1}$) into a compact latent action vector without memorizing/leaking the future frame.
-    *   *Implementation*: Generate synthetic 512-dim transitions representing a moving point. Train a 2-layer MLP bottleneck ($z \in \mathbb{R}^{16}$) alongside the predictor.
-    *   *Gatekeeper Success Metric*: When feeding randomized noise into the bottleneck $z$, predictor loss must spike, proving the predictor is strictly dependent on the motion vector and cannot copy future features directly.
-*   **Task 1.2: Predictor Collapse Prevention (`predictor_collapse_poc.py`)**:
-    *   *Objective*: Verify that Bilinear Action-State Gating forces the predictor to remain sensitive to actions, preventing copy-paste collapse ($\hat{s}_{t+1} \approx s_t$).
-    *   *Implementation*: Train a standard concatenation predictor against a bilinearly gated predictor ($g = \text{MLP}_1(s) \odot \text{MLP}_2(a)$) under perturbed action inputs.
-    *   *Gatekeeper Success Metric*: The bilinearly gated model must maintain a high **Action Perturbation Drift** ($\Delta_{\text{action}} > 0.1$) under perturbed actions, whereas the concatenation model collapses ($\Delta_{\text{action}} \to 0$).
-*   **Task 1.3: pycapacity Task-Space Limits (`pycapacity_filter_poc.py`)**:
-    *   *Objective*: Verify that joint torque proposals can be mapped dynamically through the robot's Jacobian to satisfy workspace polytope boundaries.
-    *   *Implementation*: Generate out-of-bounds joint-acceleration proposals, project them onto the computed workspace acceleration polytope, and verify limits.
-    *   *Gatekeeper Success Metric*: Projections must execute in $<2\text{ms}$ with $100\%$ limit satisfaction.
+*   **Task 1.1: CLAP Flow Matcher Validation (`flow_matcher_poc.py`)**:
+    *   *Objective*: Verify the vector field regression and trajectory generation capability of the CLAP-RF head.
+    *   *Implementation*: Regress velocity fields on expert actions and test Euler integration sampling under asynchronous noise schedules (ComboStoc).
+    *   *Gatekeeper Success Metric*: Flow trajectories must converge to target endpoints in $< 20$ integration steps without path divergence.
+*   **Task 1.2: Pretrained Encoders Visualization (`visualize_encoders_poc.py`)**:
+    *   *Objective*: Verify the outputs and feature characteristics of CLIP, DINOv3, VGGT, SAM, and PointNeXt.
+    *   *Implementation*: Render cosine similarity maps (CLIP), self-attention keypoints (DINO), camera ego-motion tracks (VGGT), visual segmentation masks (SAM), and cropped coordinate arrays (PointNeXt).
+    *   *Gatekeeper Success Metric*: All visualizations must yield correct semantic highlighting, correct depth tracks, and clean coordinate bounds without background bleed.
+*   **Task 1.3: Latent Action Encoder & MSAT Validation (`msat_latent_action_poc.py`)**:
+    *   *Objective*: Verify state-transition compression and cross-modal attention routing.
+    *   *Implementation*: Compress transitions ($s_t \to s_{t+1}$) using the shallow Latent Action Encoder helper ($h_\psi$) and test MSAT cross-attention weighting.
+    *   *Gatekeeper Success Metric*: Visualized MSAT attention maps must dynamically route focus to contact modalities (tactile) upon impact and visual modalities during approach, with $0\%$ state identity leakage from $h_\psi$.
+*   **Task 1.4: Predictor Grounding & Sensitivity (`predictor_poc.py`)**:
+    *   *Objective*: Prevent predictor copy-paste collapse ($\hat{s}_{t+1} \approx s_t$) and test rollout stability.
+    *   *Implementation*: Evaluate prediction error across multi-step rollouts ($H > 1$) and compute action-sensitivity gradients ($\nabla_a E$).
+    *   *Gatekeeper Success Metric*: Maintain a high action perturbation drift ($\Delta_{\text{action}} > 0.1$) under modified action inputs, ensuring the world model remains highly sensitive to actions.
+*   **Task 1.5: Tactile Adapter Calibration (`tactile_adapter_poc.py`)**:
+    *   *Objective*: Project and align simulated touch sensor outputs into the unified token space.
+    *   *Implementation*: Extract $4 \times 4$ normal force arrays from MuJoCo `sensordata` and align them with vision using the InfoNCE-based contrastive loss (CASA).
+    *   *Gatekeeper Success Metric*: Adapter successfully filters low-force sensor noise ($< \epsilon$) and establishes high cosine similarity alignment during contact events.
 
 ### Phase 2: Data Selection & Preparation
 * **Task 2.1: datasets.bot Audit**: Select a diverse, multi-task tabletop manipulation dataset (e.g., AgiBot or Astribot tabletop trajectories) containing human-teleoperated episodes.
