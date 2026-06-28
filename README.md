@@ -2,27 +2,53 @@
 
 ---
 
-## High-Level Component Architecture Diagram
+### High-Level Component Architecture Diagram
 
-The diagram below highlights the main architectural components and their core relationships, detailing the path from frozen encoders through trainable adapters into the core latent loop, safety constraints, and memory triad.
+The diagram below highlights the main architectural components and their core relationships, detailing the path from raw observations and user prompts through the parallel perception pathways (including SAM masking filters and VGGT tracking) into the trainable adapters, MSAT cross-attention fusion, and core model loop.
 
 ```
- ┌──────────────────────────────────────────────────────────────────────────┐
- │ 1. FROZEN PERCEPTION & PROPRIOCEPTION ENCODERS                           │
- │  [ CLIP Text ]  [ DINOv3 Vision ]  [ PointNeXt ]  [ VGGT Geometry ] [Tact]│
- └─────────┬──────────────┬──────────────┬──────────────┬──────────────┬────┘
-           │              │              │              │              │
-           ▼              ▼              ▼              ▼              ▼
- ┌──────────────────────────────────────────────────────────────────────────┐
- │ 2. TRAINABLE MLP ADAPTERS (Lightweight Projection Layer ~5M params)      │
- └─────────┬──────────────┬──────────────┬──────────────┬──────────────┬────┘
-           │ (Text Embed) │ (Vis Latent) │ (Point Cloud)│ (VGGT Geom)  │ (Tactile/Prop)
-           ▼              ▼              ▼              ▼              ▼
- ┌──────────────────────────────────────────────────────────────────────────┐
- │ 3. CORE LATENT MODELS (Learnable Dynamics & Policy)                      │
- │    ┌────────────────────────────────────────────────────────────────┐    │
- │    │                 JEPA World Predictor (EBM)                     │    │
- │    └──────────────────────────────▲───┬─────────────────────────────┘    │
+                           [ USER INPUTS & OBSERVATIONS ]
+       ┌─────────────────┬─────────────────┬──────────────────┐
+       │ (Text Prompt)   │ (2D Frames)     │ (3D Point Cloud) │ (Tactile/Prop)
+       ▼                 ▼                 │                  ▼
+ ┌───────────┐     ┌───────────┐           │            ┌───────────┐
+ │ CLIP Text │     │  DINOv3   │           │            │ Sensor IO │
+ └─────┬─────┘     └─────┬─────┘           │            └─────┬─────┘
+       │                 │ (Click Prompt)  ▼                  │
+       │                 ├───────────────►[SAM Crop Filter]    │
+       │                 │                │                   │
+       │                 │                ▼ (Segmented Cloud) │
+       │           ┌─────▼─────┐     ┌────┴──────┐            │
+       │           │   VGGT    │     │ PointNeXt │            │
+       │           └─────┬─────┘     └────┬──────┘            │
+       ▼                 ▼                ▼                   ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ 2. TRAINABLE MLP ADAPTERS (Text, DINO, VGGT, PointNeXt, Tactile) │
+ └───────────────────────────────┬──────────────────────────────────┘
+                                 ▼ (Shared 512-dim tokens)
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ 3. MSAT CROSS-ATTENTION FUSION LAYER                             │
+ └───────────────────────────────┬──────────────────────────────────┘
+                                 ▼ (Unified State s_t)
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ 4. CORE LATENT MODELS (Learnable Dynamics & Policy)              │
+ │    ┌────────────────────────────────────────────────────────┐    │
+ │    │              JEPA World Predictor (EBM)                │    │
+ │    └───────────────────────────▲───┬────────────────────────┘    │
+ │                                │   │ (DAWN Reciprocity Loop)     │
+ │                   [ Action Adapter (f_action) ]                  │
+ │                                ▲   │                             │
+ │    ┌───────────────────────────┴───▼────────────────────────┐    │
+ │    │        Flow-Matching Action Denoiser (CLAP-RF)         │    │
+ │    └───────────────────────────▲───┬────────────────────────┘    │
+ └────────────────────────────────║───║──────────────────────────────┘
+                                  ║   ║ (Proposed Actions)
+                                  ║   ▼
+ ┌────────────────────────────────║───║──────────────────────────────┐
+ │ 5. SAFETY & FEASIBILITY REGULATORS                               │
+ │    pycapacity Workspace Polytope ──► EBT Safeguards (Langevin)   │
+ └──────────────────────────────────────────────────────────────────┘
+```��──────────────────────────┘    │
  │                                   │   │ (DAWN Reciprocity Loop)          │
  │                      [ Action Adapter (f_action) ]                       │
  │                                   ▲   │                                  │
