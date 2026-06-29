@@ -212,8 +212,12 @@ class DatasetPreprocessor:
             if self.sam is not None and click_coords is not None:
                 try:
                     # Run SAM segmentation inference on the image frame
+                    cx, cy = float(click_coords[0]), float(click_coords[1])
                     inputs = self.sam_processor(
-                        img, input_points=[[click_coords]], return_tensors="pt"
+                        img,
+                        input_points=[[[[cx, cy]]]],
+                        input_labels=[[[1]]],
+                        return_tensors="pt",
                     ).to(self.device)
                     with torch.no_grad():
                         outputs = self.sam(**inputs)
