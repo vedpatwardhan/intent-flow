@@ -3,12 +3,15 @@ import shutil
 import urllib.request
 import torch
 import cv2
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from utils.preprocess_dataset import run_preprocessing
+
+from torchcodec.decoders import VideoDecoder
 
 
 def download_file(url, path):
@@ -47,7 +50,6 @@ def prepare_and_visualize_dataset():
         f"\n--- Downloading Stream A: Droid ({bridge_repo}) (100% of training shard) ---"
     )
     try:
-        import pandas as pd
 
         # 1. Fetch repo file list to download the entire first data/video shard chunk
         files = list_repo_files(bridge_repo, repo_type="dataset")
@@ -82,27 +84,18 @@ def prepare_and_visualize_dataset():
             f"Preparing all {num_episodes_to_prep} episodes for the training pipeline..."
         )
 
-        # Initialize video decoders
-        use_torchcodec = False
-        decoder = None
-        cap = None
-        try:
-            from torchcodec.decoders import VideoDecoder
+        # Initialize torchcodec video decoder
+        decoder = VideoDecoder(local_video, device="cpu")
+        print(
+            "Using torchcodec for fast, PyTorch-native video decoding (AV1 supported)."
+        )
 
-            decoder = VideoDecoder(local_video, device="cpu")
-            use_torchcodec = True
-            print(
-                "Using torchcodec for fast, PyTorch-native video decoding (AV1 supported)."
-            )
-        except ImportError:
-            print("torchcodec not found. Falling back to OpenCV.")
-            cap = cv2.VideoCapture(local_video)
-
-        current_frame_idx = 0
-
+        # Build mapping configurations for all episodes first
+        episode_configs = []
         for ep_idx in range(num_episodes_to_prep):
             ep_id = unique_episodes[ep_idx]
             df_ep = df[df["episode_index"] == ep_id]
+            ep_len = len(df_ep)
 
             bridge_raw_dir = os.path.join(raw_data_dir, f"bridge_ep{ep_idx:02d}")
             frame_dir_bridge = os.path.join(bridge_raw_dir, "frames")
@@ -117,50 +110,54 @@ def prepare_and_visualize_dataset():
 
             bridge_actions = df_ep[action_cols].to_numpy()
             bridge_states = (
-                df_ep[state_cols].to_numpy()
-                if state_cols
-                else np.zeros((len(df_ep), 24))
+                df_ep[state_cols].to_numpy() if state_cols else np.zeros((ep_len, 24))
             )
             if bridge_actions.shape[1] < 12:
                 pad = np.zeros((bridge_actions.shape[0], 12 - bridge_actions.shape[1]))
                 bridge_actions = np.concatenate([bridge_actions, pad], axis=1)
 
-            # Read video frames corresponding to this episode length
-            count = 0
-            if use_torchcodec:
-                end_frame_idx = current_frame_idx + len(df_ep)
-                try:
-                    frames_tensor = decoder[current_frame_idx:end_frame_idx]
-                    current_frame_idx = end_frame_idx
-                    for i in range(frames_tensor.shape[0]):
-                        frame_rgb = frames_tensor[i].permute(1, 2, 0).numpy()
-                        Image.fromarray(frame_rgb).save(
-                            os.path.join(frame_dir_bridge, f"frame_{count:04d}.png")
-                        )
-                        count += 1
-                except Exception as dec_err:
-                    print(
-                        f"Warning: torchcodec failed on episode {ep_idx} ({dec_err})."
-                    )
-            else:
-                while cap.isOpened() and count < len(df_ep):
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    Image.fromarray(frame_rgb).save(
-                        os.path.join(frame_dir_bridge, f"frame_{count:04d}.png")
-                    )
-                    count += 1
-
-            np.save(os.path.join(bridge_raw_dir, "actions.npy"), bridge_actions[:count])
-            np.save(os.path.join(bridge_raw_dir, "states.npy"), bridge_states[:count])
-            np.save(
-                os.path.join(bridge_raw_dir, "tactile.npy"), np.zeros((count, 4, 4))
+            episode_configs.append(
+                {
+                    "dir": bridge_raw_dir,
+                    "frame_dir": frame_dir_bridge,
+                    "length": ep_len,
+                    "actions": bridge_actions,
+                    "states": bridge_states,
+                }
             )
 
-        if cap is not None:
-            cap.release()
+        # Decode frames sequentially in a single pass (O(F) linear time)
+        print("Extracting Droid frames sequentially...")
+        current_ep_idx = 0
+        current_frame_in_ep = 0
+
+        # Iterate sequentially through the decoder without seeking
+        for frame_idx, frame_tensor in enumerate(decoder):
+            if current_ep_idx >= len(episode_configs):
+                break
+
+            cfg = episode_configs[current_ep_idx]
+            frame_rgb = frame_tensor.permute(1, 2, 0).numpy()
+            Image.fromarray(frame_rgb).save(
+                os.path.join(cfg["frame_dir"], f"frame_{current_frame_in_ep:04d}.png")
+            )
+
+            current_frame_in_ep += 1
+            if current_frame_in_ep >= cfg["length"]:
+                np.save(os.path.join(cfg["dir"], "actions.npy"), cfg["actions"])
+                np.save(os.path.join(cfg["dir"], "states.npy"), cfg["states"])
+                np.save(
+                    os.path.join(cfg["dir"], "tactile.npy"),
+                    np.zeros((cfg["length"], 4, 4)),
+                )
+
+                if current_ep_idx % 50 == 0:
+                    print(
+                        f"[Droid] Structured episode {current_ep_idx}/{len(episode_configs)}..."
+                    )
+
+                current_ep_idx += 1
+                current_frame_in_ep = 0
         print(
             f"Successfully loaded and structured all Droid robot pre-training episodes."
         )
@@ -194,6 +191,8 @@ def prepare_and_visualize_dataset():
         print(f"Preparing all {num_human_eps} human episodes...")
 
         for ep_idx in range(num_human_eps):
+            if ep_idx % 10 == 0:
+                print(f"[CMU Stretch] Structuring episode {ep_idx}/{num_human_eps}...")
             ego_raw_dir = os.path.join(raw_data_dir, f"ego4d_ep{ep_idx:02d}")
             frame_dir_ego = os.path.join(ego_raw_dir, "frames")
             os.makedirs(frame_dir_ego, exist_ok=True)
