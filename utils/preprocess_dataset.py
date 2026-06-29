@@ -305,10 +305,23 @@ class DatasetPreprocessor:
         tactile_path = os.path.join(raw_episode_dir, "tactile.npy")
         pointclouds_path = os.path.join(raw_episode_dir, "point_clouds.npy")
 
+        def load_and_clean_array(path):
+            arr = np.load(path, allow_pickle=True)
+            if arr.dtype == object:
+                # Convert strings/objects to floats, defaulting to 0.0 for conversion errors
+                def clean_val(x):
+                    try:
+                        return float(x)
+                    except (ValueError, TypeError):
+                        return 0.0
+
+                arr = np.vectorize(clean_val)(arr)
+            return torch.tensor(arr.astype(np.float32))
+
         if os.path.exists(actions_path):
-            actions = torch.tensor(np.load(actions_path), dtype=torch.float32)
-            proprio = torch.tensor(np.load(states_path), dtype=torch.float32)
-            tactile = torch.tensor(np.load(tactile_path), dtype=torch.float32)
+            actions = load_and_clean_array(actions_path)
+            proprio = load_and_clean_array(states_path)
+            tactile = load_and_clean_array(tactile_path)
         else:
             actions = torch.randn(seq_len, 12)
             proprio = torch.randn(seq_len, 24)

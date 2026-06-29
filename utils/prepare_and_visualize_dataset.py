@@ -55,7 +55,7 @@ def prepare_and_visualize_dataset():
     processed_dir = "latent-flow/data/processed"
 
     # Clear directory only if CLEAN_CACHE flag is enabled
-    CLEAN_CACHE = False
+    CLEAN_CACHE = True
     if CLEAN_CACHE:
         print("Cleaning local dataset caches...")
         if os.path.exists(processed_dir):
