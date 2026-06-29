@@ -24,11 +24,10 @@ def compile_video(frame_dir, output_mp4_path, fps=15):
     return True
 
 
-def sample_and_package():
+def sample_and_package(
+    raw_data_dir="latent-flow/data/raw", zip_filename="dataset_samples.zip"
+):
     print("=== LatentFlow Raw Dataset Video Compiler & Packager ===")
-
-    raw_data_dir = "latent-flow/data/raw"
-    zip_filename = "dataset_samples.zip"
 
     if not os.path.exists(raw_data_dir):
         print(f"Error: Raw data directory '{raw_data_dir}' does not exist.")
@@ -90,4 +89,22 @@ def sample_and_package():
 
 
 if __name__ == "__main__":
-    sample_and_package()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Package raw dataset episodes and compile videos"
+    )
+    parser.add_argument(
+        "--raw_dir",
+        type=str,
+        default="latent-flow/data/raw",
+        help="Path to the flat raw data directory on Colab",
+    )
+    parser.add_argument(
+        "--output_zip",
+        type=str,
+        default="dataset_samples.zip",
+        help="Path/name of the generated ZIP output file",
+    )
+    args = parser.parse_args()
+    sample_and_package(raw_data_dir=args.raw_dir, zip_filename=args.output_zip)

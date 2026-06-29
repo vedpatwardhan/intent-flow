@@ -265,7 +265,7 @@ def prepare_and_visualize_dataset():
 
             # Retrieve the frame index sequence for this episode
             ep_f_indices = ep_indices_dict[unique_human_eps[ep_idx]]
-            frame_indices = ep_f_indices[: min(16, len(ep_f_indices))]
+            frame_indices = ep_f_indices
             img_key = next(
                 k
                 for k in dataset_human[frame_indices[0]].keys()
