@@ -54,7 +54,7 @@ def prepare_and_visualize_dataset():
     # ==========================================
     # STREAM A: Droid Tabletop Robot (60% of mix) - Full First Shard
     # ==========================================
-    bridge_repo = "lerobot/droid"
+    bridge_repo = "lerobot/droid_1.0.1"
     print(
         f"\n--- Downloading Stream A: Droid ({bridge_repo}) (100% of training shard) ---"
     )
@@ -67,7 +67,9 @@ def prepare_and_visualize_dataset():
             f for f in files if f.endswith(".parquet") and "data/chunk-000" in f
         )
         video_path = next(
-            f for f in files if f.endswith(".mp4") and "videos/chunk-000" in f
+            f
+            for f in files
+            if f.endswith(".mp4") and "videos/" in f and "chunk-000" in f
         )
 
         print(f"Downloading training Parquet shard: {parquet_path}")
@@ -144,19 +146,9 @@ def prepare_and_visualize_dataset():
         )
     except Exception as e:
         print(
-            f"Warning: Failed to load Droid dataset ({e}). Creating fallback training structure."
+            f"Error: Failed to load Droid dataset ({e}). Enforcing pipeline integrity, crashing script."
         )
-        for ep_idx in range(5):
-            bridge_raw_dir = os.path.join(raw_data_dir, f"bridge_ep{ep_idx:02d}")
-            frame_dir_bridge = os.path.join(bridge_raw_dir, "frames")
-            os.makedirs(frame_dir_bridge, exist_ok=True)
-            for i in range(8):
-                Image.new("RGB", (224, 224), color=(34, 139, 34)).save(
-                    os.path.join(frame_dir_bridge, f"frame_{i:04d}.png")
-                )
-            np.save(os.path.join(bridge_raw_dir, "actions.npy"), np.random.randn(8, 12))
-            np.save(os.path.join(bridge_raw_dir, "states.npy"), np.random.randn(8, 24))
-            np.save(os.path.join(bridge_raw_dir, "tactile.npy"), np.zeros((8, 4, 4)))
+        raise e
 
     # ==========================================
     # STREAM B: CMU Human Tabletop (30% of mix) - Full Shard
@@ -169,8 +161,16 @@ def prepare_and_visualize_dataset():
         # Download the entire CMU tabletop human-exploration dataset (~300MB, perfectly safe for disk)
         dataset_human = LeRobotDataset(human_repo)
 
-        # Load up to 10 full episodes to represent 100% of our human pre-training partition
-        num_human_eps = min(10, len(dataset_human.episode_data_index))
+        # Retrieve unique episode indexes in a version-agnostic way
+        ep_indices_dict = {}
+        for idx, ep_val in enumerate(dataset_human.hf_dataset["episode_index"]):
+            ep_val_item = ep_val.item() if hasattr(ep_val, "item") else ep_val
+            if ep_val_item not in ep_indices_dict:
+                ep_indices_dict[ep_val_item] = []
+            ep_indices_dict[ep_val_item].append(idx)
+
+        unique_human_eps = sorted(list(ep_indices_dict.keys()))
+        num_human_eps = min(10, len(unique_human_eps))
         print(f"Preparing all {num_human_eps} human episodes...")
 
         for ep_idx in range(num_human_eps):
@@ -178,17 +178,12 @@ def prepare_and_visualize_dataset():
             frame_dir_ego = os.path.join(ego_raw_dir, "frames")
             os.makedirs(frame_dir_ego, exist_ok=True)
 
-            start_f = dataset_human.episode_data_index[ep_idx].item()
-            end_f = (
-                dataset_human.episode_data_index[ep_idx + 1].item()
-                if (ep_idx + 1) < len(dataset_human.episode_data_index)
-                else len(dataset_human)
-            )
-
-            frame_indices = list(range(start_f, min(start_f + 16, end_f)))
+            # Retrieve the frame index sequence for this episode
+            ep_f_indices = ep_indices_dict[unique_human_eps[ep_idx]]
+            frame_indices = ep_f_indices[: min(16, len(ep_f_indices))]
             img_key = next(
                 k
-                for k in dataset_human[start_f].keys()
+                for k in dataset_human[frame_indices[0]].keys()
                 if "images" in k or "image" in k
             )
 
@@ -221,41 +216,8 @@ def prepare_and_visualize_dataset():
             "Successfully loaded and structured all human tabletop pre-training episodes."
         )
     except Exception as e:
-        print(
-            f"Warning: Failed to load CMU Human dataset ({e}). Creating fallback egocentric video."
-        )
-        # Fallback to downloading a single public video clip if CMU fails
-        ego_raw_dir = os.path.join(raw_data_dir, "ego4d_ep00")
-        frame_dir_ego = os.path.join(ego_raw_dir, "frames")
-        os.makedirs(frame_dir_ego, exist_ok=True)
-        video_sample_url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/video.mp4"
-        video_local_path = os.path.join(ego_raw_dir, "ego4d_sample.mp4")
-        download_file(video_sample_url, video_local_path)
-        try:
-            cap = cv2.VideoCapture(video_local_path)
-            count = 0
-            while cap.isOpened() and count < 16:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                Image.fromarray(frame_rgb).resize((224, 224)).save(
-                    os.path.join(frame_dir_ego, f"frame_{count:04d}.png")
-                )
-                count += 1
-            cap.release()
-            np.save(os.path.join(ego_raw_dir, "actions.npy"), np.zeros((count, 12)))
-            np.save(os.path.join(ego_raw_dir, "states.npy"), np.zeros((count, 24)))
-            np.save(os.path.join(ego_raw_dir, "tactile.npy"), np.zeros((count, 4, 4)))
-        except Exception as e2:
-            print(f"Warning: Video parsing failed ({e2}). Creating mock human frames.")
-            for i in range(8):
-                Image.new("RGB", (224, 224), color=(139, 34, 34)).save(
-                    os.path.join(frame_dir_ego, f"frame_{i:04d}.png")
-                )
-            np.save(os.path.join(ego_raw_dir, "actions.npy"), np.zeros((8, 12)))
-            np.save(os.path.join(ego_raw_dir, "states.npy"), np.zeros((8, 24)))
-            np.save(os.path.join(ego_raw_dir, "tactile.npy"), np.zeros((8, 4, 4)))
+        print(f"Error: Failed to load CMU Human dataset ({e}).")
+        raise e
 
     # ==========================================
     # STREAM C: Geometry Tracks (10% of mix) - Full Pool
