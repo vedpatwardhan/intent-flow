@@ -32,6 +32,21 @@ def download_file(url, path):
             f.write(b"\x00" * 1024)
 
 
+def flatten_dataframe_columns(df_subset, cols):
+    rows_list = []
+    for _, row in df_subset[cols].iterrows():
+        flat_vals = []
+        for val in row:
+            if isinstance(val, (list, np.ndarray)):
+                flat_vals.extend(val)
+            elif isinstance(val, (int, float, np.floating, np.integer)):
+                flat_vals.append(val)
+            else:
+                flat_vals.append(0.0)
+        rows_list.append(flat_vals)
+    return np.array(rows_list, dtype=np.float32)
+
+
 def prepare_and_visualize_dataset():
     print("=== LatentFlow Stage 1 Pre-training Dataset Mixture Builder ===")
 
@@ -119,13 +134,32 @@ def prepare_and_visualize_dataset():
             if not state_cols:
                 state_cols = [c for c in df_ep.columns if "state" in c]
 
-            bridge_actions = df_ep[action_cols].to_numpy()
+            bridge_actions = flatten_dataframe_columns(df_ep, action_cols)
             bridge_states = (
-                df_ep[state_cols].to_numpy() if state_cols else np.zeros((ep_len, 24))
+                flatten_dataframe_columns(df_ep, state_cols)
+                if state_cols
+                else np.zeros((ep_len, 24), dtype=np.float32)
             )
+
+            # Squeeze or pad actions to exactly 12 dimensions
             if bridge_actions.shape[1] < 12:
-                pad = np.zeros((bridge_actions.shape[0], 12 - bridge_actions.shape[1]))
+                pad = np.zeros(
+                    (bridge_actions.shape[0], 12 - bridge_actions.shape[1]),
+                    dtype=np.float32,
+                )
                 bridge_actions = np.concatenate([bridge_actions, pad], axis=1)
+            elif bridge_actions.shape[1] > 12:
+                bridge_actions = bridge_actions[:, :12]
+
+            # Squeeze or pad states to exactly 24 dimensions
+            if bridge_states.shape[1] < 24:
+                pad = np.zeros(
+                    (bridge_states.shape[0], 24 - bridge_states.shape[1]),
+                    dtype=np.float32,
+                )
+                bridge_states = np.concatenate([bridge_states, pad], axis=1)
+            elif bridge_states.shape[1] > 24:
+                bridge_states = bridge_states[:, :24]
 
             episode_configs.append(
                 {
@@ -301,6 +335,7 @@ def prepare_and_visualize_dataset():
         raw_data_dir,
         "tabletop manipulation and visual geometric grounding",
         processed_dir,
+        disable_encoders=True,
     )
 
     # ==========================================

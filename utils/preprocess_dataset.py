@@ -31,7 +31,7 @@ class DatasetPreprocessor:
     modal tokens (DINOv3, CLIP, PointNeXt), and caches them into tokenized .pt files.
     """
 
-    def __init__(self, device="cpu"):
+    def __init__(self, device="cpu", disable_encoders=False):
         self.device = torch.device(device)
         self.dino = None
         self.clip_text_model = None
@@ -39,6 +39,13 @@ class DatasetPreprocessor:
         self.pointnext = None
         self.sam = None
         self.sam_processor = None
+        self.vggt = None
+
+        if disable_encoders:
+            print(
+                "Frozen encoders are disabled. Preprocessing will run in fast mock mode."
+            )
+            return
 
         # Load VGGT geometry model
         self.vggt = VGGTEncoder().to(self.device)
@@ -173,6 +180,9 @@ class DatasetPreprocessor:
         """
         Extracts Visual Geometry Grounded Transformer (VGGT) features.
         """
+        if self.vggt is None:
+            return torch.randn(len(image_paths), 768)
+
         frames = []
         for path in image_paths:
             # Resize image to standard 224x224 and convert to float tensor
@@ -332,10 +342,10 @@ class DatasetPreprocessor:
         print(f"Processed and cached: {output_path}")
 
 
-def run_preprocessing(raw_data_dir, text_prompt, output_dir):
+def run_preprocessing(raw_data_dir, text_prompt, output_dir, disable_encoders=False):
     print("--- STARTING DATASET TOKENIZATION PREPROCESSING ---")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    preprocessor = DatasetPreprocessor(device=device)
+    preprocessor = DatasetPreprocessor(device=device, disable_encoders=disable_encoders)
 
     # Process mock/real folders
     if not os.path.exists(raw_data_dir):
