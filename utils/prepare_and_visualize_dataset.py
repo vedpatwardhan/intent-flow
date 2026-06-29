@@ -52,11 +52,11 @@ def prepare_and_visualize_dataset():
     os.makedirs(processed_dir, exist_ok=True)
 
     # ==========================================
-    # STREAM A: BridgeV2 Tabletop Robot (60% of mix) - Full First Shard
+    # STREAM A: Droid Tabletop Robot (60% of mix) - Full First Shard
     # ==========================================
-    bridge_repo = "nvidia/BridgeData2_LeRobot_v3"
+    bridge_repo = "lerobot/droid"
     print(
-        f"\n--- Downloading Stream A: Bridge V2 ({bridge_repo}) (100% of training shard) ---"
+        f"\n--- Downloading Stream A: Droid ({bridge_repo}) (100% of training shard) ---"
     )
     try:
         import pandas as pd
@@ -139,10 +139,12 @@ def prepare_and_visualize_dataset():
             )
 
         cap.release()
-        print(f"Successfully loaded and structured all robot pre-training episodes.")
+        print(
+            f"Successfully loaded and structured all Droid robot pre-training episodes."
+        )
     except Exception as e:
         print(
-            f"Warning: Failed to load BridgeV2 dataset ({e}). Creating fallback training structure."
+            f"Warning: Failed to load Droid dataset ({e}). Creating fallback training structure."
         )
         for ep_idx in range(5):
             bridge_raw_dir = os.path.join(raw_data_dir, f"bridge_ep{ep_idx:02d}")
@@ -374,7 +376,7 @@ def prepare_and_visualize_dataset():
     axes[1, 2].axis("off")
     stats_text = (
         f"--- Dataset Mix Summary ---\n"
-        f"Base Model: nvidia/BridgeData2\n"
+        f"Base Model: lerobot/droid\n"
         f"Sequence Length: {actions_np.shape[0]} frames\n"
         f"DINOv3 Feature Dim: {data['vision'].shape[1]}\n"
         f"PointNeXt Feature Dim: {data['pointnext'].shape[1]}\n"
