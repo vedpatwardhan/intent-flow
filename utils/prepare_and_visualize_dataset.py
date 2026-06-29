@@ -7,11 +7,17 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from utils.preprocess_dataset import run_preprocessing
 
 from torchcodec.decoders import VideoDecoder
+
+
+def save_image_worker(frame_np, target_path):
+    Image.fromarray(frame_np).save(target_path)
 
 
 def download_file(url, path):
@@ -126,38 +132,50 @@ def prepare_and_visualize_dataset():
                 }
             )
 
-        # Decode frames sequentially in a single pass (O(F) linear time)
-        print("Extracting Droid frames sequentially...")
+        # Decode frames sequentially in a single pass with parallel background disk writes
+        print("Extracting Droid frames sequentially (Parallel saving)...")
         current_ep_idx = 0
         current_frame_in_ep = 0
+        total_frames = (
+            len(decoder)
+            if hasattr(decoder, "__len__")
+            else sum(cfg["length"] for cfg in episode_configs)
+        )
 
-        # Iterate sequentially through the decoder without seeking
-        for frame_idx, frame_tensor in enumerate(decoder):
-            if current_ep_idx >= len(episode_configs):
-                break
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            # Iterate sequentially through the decoder without seeking, wrapped in tqdm
+            for frame_idx, frame_tensor in enumerate(
+                tqdm(decoder, desc="Extracting Droid frames", total=total_frames)
+            ):
+                if current_ep_idx >= len(episode_configs):
+                    break
 
-            cfg = episode_configs[current_ep_idx]
-            frame_rgb = frame_tensor.permute(1, 2, 0).numpy()
-            Image.fromarray(frame_rgb).save(
-                os.path.join(cfg["frame_dir"], f"frame_{current_frame_in_ep:04d}.png")
-            )
-
-            current_frame_in_ep += 1
-            if current_frame_in_ep >= cfg["length"]:
-                np.save(os.path.join(cfg["dir"], "actions.npy"), cfg["actions"])
-                np.save(os.path.join(cfg["dir"], "states.npy"), cfg["states"])
-                np.save(
-                    os.path.join(cfg["dir"], "tactile.npy"),
-                    np.zeros((cfg["length"], 4, 4)),
+                cfg = episode_configs[current_ep_idx]
+                frame_rgb = frame_tensor.permute(1, 2, 0).numpy()
+                target_path = os.path.join(
+                    cfg["frame_dir"], f"frame_{current_frame_in_ep:04d}.png"
                 )
 
-                if current_ep_idx % 50 == 0:
-                    print(
-                        f"[Droid] Structured episode {current_ep_idx}/{len(episode_configs)}..."
+                # Offload disk write to the thread pool
+                executor.submit(save_image_worker, frame_rgb, target_path)
+
+                current_frame_in_ep += 1
+                if current_frame_in_ep >= cfg["length"]:
+                    np.save(os.path.join(cfg["dir"], "actions.npy"), cfg["actions"])
+                    np.save(os.path.join(cfg["dir"], "states.npy"), cfg["states"])
+                    np.save(
+                        os.path.join(cfg["dir"], "tactile.npy"),
+                        np.zeros((cfg["length"], 4, 4)),
                     )
 
-                current_ep_idx += 1
-                current_frame_in_ep = 0
+                    if current_ep_idx % 50 == 0:
+                        print(
+                            f"[Droid] Structured episode {current_ep_idx}/{len(episode_configs)}..."
+                        )
+
+                    current_ep_idx += 1
+                    current_frame_in_ep = 0
+
         print(
             f"Successfully loaded and structured all Droid robot pre-training episodes."
         )
@@ -190,9 +208,7 @@ def prepare_and_visualize_dataset():
         num_human_eps = len(unique_human_eps)
         print(f"Preparing all {num_human_eps} human episodes...")
 
-        for ep_idx in range(num_human_eps):
-            if ep_idx % 10 == 0:
-                print(f"[CMU Stretch] Structuring episode {ep_idx}/{num_human_eps}...")
+        for ep_idx in tqdm(range(num_human_eps), desc="Processing CMU Stretch"):
             ego_raw_dir = os.path.join(raw_data_dir, f"ego4d_ep{ep_idx:02d}")
             frame_dir_ego = os.path.join(ego_raw_dir, "frames")
             os.makedirs(frame_dir_ego, exist_ok=True)
