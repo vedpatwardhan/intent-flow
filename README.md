@@ -223,6 +223,7 @@ To pre-train our world dynamics model on datasets containing only video transiti
 
 * **Latent Action Encoder ($h_\psi$, Stage 1 Only)**:
   * During dynamics pre-training, we do not have joint torques ($a_t$). We feed the current state $s_t$ and the future state $s_{t+1}$ into a shallow MLP: $z^{\text{latent\_action}}_t = h_\psi(s_t, s_{t+1})$. 
+  * **OlafWorld Regularization**: To ensure this latent space is continuous, smooth, and behaves as a well-defined prior for skill composition, we apply a **Variational Information Bottleneck (VIB)** constraint. We output mean and variance vectors to compute a KL-divergence loss against a standard Gaussian prior: $\mathcal{D}_{\text{KL}}(q_\psi(z|s_t, s_{t+1}) \parallel \mathcal{N}(0, I))$.
   * The predictor learns to forecast using this latent action: $\hat{s}_{t+1} = g_\theta(s_t, z^{\text{latent\_action}}_t)$.
   * At Stage 2, this module is completely discarded.
 * **Action Adapter ($f_{\text{action}}$, Stage 2 Onwards)**:
@@ -498,6 +499,11 @@ To maintain object permanence and stable skill recall during continuous humanoid
 3. **Long-Range Gist (Relevance-Driven HyDRA Tokens)**:
    * **Mechanism**: Historical tokens are compressed using a relevance-based attention bottleneck (HyDRA tokens) to summarize the past.
    * **Purpose**: Maintains object permanence. If an object is temporarily occluded by the robot's own arm or moved out of the egocentric camera field, the Gist tokens retain its spatial coordinates, preventing "visual memory fade."
+
+### Skill Chaining & Composability via Event Boundaries
+Rather than using memory solely to avoid visual drift, the Memory Triad acts as a **composability coordinator** for skills:
+* **Sequential Skills**: Complex long-horizon behaviors (e.g., drawer-opening followed by picking an object inside) are composed of primitive skills. The transition between skills is managed programmatically via **Event Boundary Anchors** (physical landmarks like a tactile contact spike or position milestone).
+* **Composition Routing**: When a milestone triggers, the memory system indexes the next skill token from the **Programmatic Skill Network (PSN)** library, swapping the conditioning input of the flow matcher on-the-fly. This allows modular, zero-shot skill chaining without needing to train a monolithic, end-to-end policy for every new task combination.
 
 ### Offline Consolidation (Sleep Phase)
 * **Knowledge Seeding**: Distills the fragile, short-term exploratory trajectories captured in the memory triad during the day into the core weights of the dynamics predictor and adapters.
