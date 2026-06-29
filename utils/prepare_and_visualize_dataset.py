@@ -2,25 +2,13 @@ import os
 import shutil
 import urllib.request
 import torch
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from huggingface_hub import hf_hub_download, list_repo_files
 from utils.preprocess_dataset import run_preprocessing
-
-# Import LeRobot and Hugging Face Hub dynamically (installs if missing)
-try:
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from huggingface_hub import hf_hub_download, list_repo_files
-except ImportError:
-    print("Installing lerobot and huggingface_hub libraries...")
-    os.system("pip install -q lerobot huggingface-hub pandas pyarrow")
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from huggingface_hub import hf_hub_download, list_repo_files
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None
 
 
 def download_file(url, path):
@@ -88,14 +76,29 @@ def prepare_and_visualize_dataset():
             f"Found {len(unique_episodes)} real robot trajectories in this training shard."
         )
 
-        # We will process 20 full episodes to represent 100% of our active pre-training partition
-        num_episodes_to_prep = min(20, len(unique_episodes))
+        # Prepare 100% of the active pre-training partition (all unique episodes in this shard)
+        num_episodes_to_prep = len(unique_episodes)
         print(
             f"Preparing all {num_episodes_to_prep} episodes for the training pipeline..."
         )
 
-        # Extract frames for all targeted episodes
-        cap = cv2.VideoCapture(local_video)
+        # Initialize video decoders
+        use_torchcodec = False
+        decoder = None
+        cap = None
+        try:
+            from torchcodec.decoders import VideoDecoder
+
+            decoder = VideoDecoder(local_video, device="cpu")
+            use_torchcodec = True
+            print(
+                "Using torchcodec for fast, PyTorch-native video decoding (AV1 supported)."
+            )
+        except ImportError:
+            print("torchcodec not found. Falling back to OpenCV.")
+            cap = cv2.VideoCapture(local_video)
+
+        current_frame_idx = 0
 
         for ep_idx in range(num_episodes_to_prep):
             ep_id = unique_episodes[ep_idx]
@@ -124,15 +127,31 @@ def prepare_and_visualize_dataset():
 
             # Read video frames corresponding to this episode length
             count = 0
-            while cap.isOpened() and count < len(df_ep):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                Image.fromarray(frame_rgb).save(
-                    os.path.join(frame_dir_bridge, f"frame_{count:04d}.png")
-                )
-                count += 1
+            if use_torchcodec:
+                end_frame_idx = current_frame_idx + len(df_ep)
+                try:
+                    frames_tensor = decoder[current_frame_idx:end_frame_idx]
+                    current_frame_idx = end_frame_idx
+                    for i in range(frames_tensor.shape[0]):
+                        frame_rgb = frames_tensor[i].permute(1, 2, 0).numpy()
+                        Image.fromarray(frame_rgb).save(
+                            os.path.join(frame_dir_bridge, f"frame_{count:04d}.png")
+                        )
+                        count += 1
+                except Exception as dec_err:
+                    print(
+                        f"Warning: torchcodec failed on episode {ep_idx} ({dec_err})."
+                    )
+            else:
+                while cap.isOpened() and count < len(df_ep):
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    Image.fromarray(frame_rgb).save(
+                        os.path.join(frame_dir_bridge, f"frame_{count:04d}.png")
+                    )
+                    count += 1
 
             np.save(os.path.join(bridge_raw_dir, "actions.npy"), bridge_actions[:count])
             np.save(os.path.join(bridge_raw_dir, "states.npy"), bridge_states[:count])
@@ -140,7 +159,8 @@ def prepare_and_visualize_dataset():
                 os.path.join(bridge_raw_dir, "tactile.npy"), np.zeros((count, 4, 4))
             )
 
-        cap.release()
+        if cap is not None:
+            cap.release()
         print(
             f"Successfully loaded and structured all Droid robot pre-training episodes."
         )
@@ -170,7 +190,7 @@ def prepare_and_visualize_dataset():
             ep_indices_dict[ep_val_item].append(idx)
 
         unique_human_eps = sorted(list(ep_indices_dict.keys()))
-        num_human_eps = min(10, len(unique_human_eps))
+        num_human_eps = len(unique_human_eps)
         print(f"Preparing all {num_human_eps} human episodes...")
 
         for ep_idx in range(num_human_eps):

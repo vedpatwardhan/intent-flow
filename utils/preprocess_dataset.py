@@ -1,6 +1,7 @@
 import os
 import torch
 import numpy as np
+import cv2
 from PIL import Image
 from models.vggt import VGGTEncoder
 
@@ -221,13 +222,10 @@ class DatasetPreprocessor:
                     ).to(self.device)
                     with torch.no_grad():
                         outputs = self.sam(**inputs)
-                        # Extract the high-probability mask
-                        masks = self.sam_processor.post_process_masks(
-                            outputs.pred_masks,
-                            inputs["original_sizes"],
-                            inputs["reshaped_input_sizes"],
-                        )
-                        mask = masks[0][0][0].cpu().numpy()  # [H, W] boolean mask
+                        # Extract the high-probability mask (batch=0, frame=0, mask=0) and resize manually
+                        mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
+                        mask_logits_resized = cv2.resize(mask_logits, (w, h))
+                        mask = mask_logits_resized > 0.0
                 except Exception as e:
                     print(
                         f"Warning: SAM segmentation failed ({e}). Defaulting to full frame projection."
