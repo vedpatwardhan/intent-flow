@@ -90,8 +90,10 @@ class SafetyFilter:
         if is_tensor:
             device = proposed_actions.device
             actions_np = proposed_actions.detach().cpu().numpy()
+            J_np = J.detach().cpu().numpy() if J is not None else None
         else:
             actions_np = np.array(proposed_actions)
+            J_np = np.array(J) if J is not None else None
 
         batch_size = actions_np.shape[0]
         filtered = []
@@ -100,21 +102,48 @@ class SafetyFilter:
             action = actions_np[b]
 
             # Apply pycapacity workspace polytope projection if available and Jacobian is provided
-            if PYCAPACITY_AVAILABLE and J is not None:
+            if PYCAPACITY_AVAILABLE and J_np is not None:
                 try:
-                    # Map joint torque limits through the Jacobian (J)
-                    # We compute the acceleration or force boundaries
+                    # Map joint torque limits through the Jacobian (J_np)
                     torque_limit_max = self.torque_max
                     torque_limit_min = -self.torque_max
 
-                    # Project actions onto the polytope boundary using pycapacity QP solvers
-                    action_proj = pycapacity.robot.torque_to_force(
-                        J, action, torque_limit_min, torque_limit_max
-                    )
+                    # Compute force polytope inequalities H * f <= d directly from joint boundaries:
+                    # tau_min <= J_np^T * f <= tau_max  =>
+                    # J_np^T * f <= tau_max AND -J_np^T * f <= -tau_min
+                    H = np.vstack([J_np.T, -J_np.T])  # [24, 6]
+                    d = np.concatenate([torque_limit_max, -torque_limit_min])  # [24]
+
+                    # Map joint torques to Cartesian force: f = (J_np^T)^+ * tau
+                    JT_pinv = np.linalg.pinv(J_np.T)
+                    f_prop = (JT_pinv @ action).astype(np.float64)
+
+                    # Ensure H and d are float64 for SciPy solvers
+                    H = H.astype(np.float64)
+                    d = d.astype(np.float64)
+
+                    # If force violates H * f <= d, project it onto the polytope boundary
+                    if np.any(H @ f_prop > d):
+                        from scipy.optimize import minimize
+
+                        # Objective: minimize L2 distance to proposed force
+                        obj = lambda f: np.sum((f - f_prop) ** 2)
+                        # Constraint: d - H * f >= 0
+                        cons = {"type": "ineq", "fun": lambda f: d - H @ f}
+                        res = minimize(obj, f_prop, constraints=cons, method="SLSQP")
+                        f_proj = res.x
+                    else:
+                        f_proj = f_prop
+
+                    # Convert back to joint torque space: tau = J_np^T * f_proj
+                    action_proj = J_np.T @ f_proj
                     filtered.append(action_proj)
                     continue
-                except Exception:
+                except Exception as e:
                     # Fallback to analytical clipping on failure
+                    print(
+                        f"Warning: pycapacity projection failed ({e}). Falling back to clipping."
+                    )
                     pass
 
             # Fallback clipping to ensure physical bounds are never violated

@@ -43,7 +43,7 @@ def train_and_eval_flow_matcher():
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     # 2. Train using Rectified Flow objective
-    epochs = 200
+    epochs = 3000
     for epoch in range(epochs):
         optimizer.zero_grad()
 
@@ -63,7 +63,7 @@ def train_and_eval_flow_matcher():
         loss.backward()
         optimizer.step()
 
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % 500 == 0:
             print(f"Epoch {epoch+1}/{epochs} | Loss: {loss.item():.4f}")
 
     # 3. ODE Integration Inference Loop (Euler solver)
