@@ -39,11 +39,14 @@ def prepare_and_visualize_dataset():
     raw_data_dir = "latent-flow/data/raw"
     processed_dir = "latent-flow/data/processed"
 
-    # Clear directory to avoid stale cache and disk bloat from old runs
-    if os.path.exists(processed_dir):
-        shutil.rmtree(processed_dir)
-    if os.path.exists(raw_data_dir):
-        shutil.rmtree(raw_data_dir)
+    # Clear directory only if CLEAN_CACHE flag is enabled
+    CLEAN_CACHE = False
+    if CLEAN_CACHE:
+        print("Cleaning local dataset caches...")
+        if os.path.exists(processed_dir):
+            shutil.rmtree(processed_dir)
+        if os.path.exists(raw_data_dir):
+            shutil.rmtree(raw_data_dir)
 
     os.makedirs(raw_data_dir, exist_ok=True)
     os.makedirs(processed_dir, exist_ok=True)
@@ -80,6 +83,8 @@ def prepare_and_visualize_dataset():
         # 2. Read all episodes from this shard to build the full pre-training subset
         df = pd.read_parquet(local_parquet)
         unique_episodes = df["episode_index"].unique()
+        # Filter unique episodes to only include those stored inside file-000.mp4 (episodes 0 to 326)
+        unique_episodes = sorted([ep for ep in unique_episodes if ep < 327])
         print(
             f"Found {len(unique_episodes)} real robot trajectories in this training shard."
         )
@@ -151,6 +156,15 @@ def prepare_and_visualize_dataset():
                     break
 
                 cfg = episode_configs[current_ep_idx]
+
+                # Skip writing files if they are already on disk (supports resuming/restarting)
+                if os.path.exists(os.path.join(cfg["dir"], "actions.npy")):
+                    current_frame_in_ep += 1
+                    if current_frame_in_ep >= cfg["length"]:
+                        current_ep_idx += 1
+                        current_frame_in_ep = 0
+                    continue
+
                 frame_rgb = frame_tensor.permute(1, 2, 0).numpy()
                 target_path = os.path.join(
                     cfg["frame_dir"], f"frame_{current_frame_in_ep:04d}.png"
@@ -210,6 +224,8 @@ def prepare_and_visualize_dataset():
 
         for ep_idx in tqdm(range(num_human_eps), desc="Processing CMU Stretch"):
             ego_raw_dir = os.path.join(raw_data_dir, f"ego4d_ep{ep_idx:02d}")
+            if os.path.exists(os.path.join(ego_raw_dir, "actions.npy")):
+                continue
             frame_dir_ego = os.path.join(ego_raw_dir, "frames")
             os.makedirs(frame_dir_ego, exist_ok=True)
 
