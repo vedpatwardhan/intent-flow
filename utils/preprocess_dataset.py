@@ -48,7 +48,7 @@ class DatasetPreprocessor:
                 # Load frozen foundation backbones
                 # 1. DINOv3 (using timm)
                 self.dino = timm.create_model(
-                    "vit_large_patch14_dinov3", pretrained=True, num_classes=0
+                    "vit_small_patch16_dinov3", pretrained=True, num_classes=0
                 ).to(self.device)
                 self.dino.eval()
 
@@ -265,7 +265,7 @@ class DatasetPreprocessor:
         """
         # Scan image paths in episode folder
         frame_dir = os.path.join(raw_episode_dir, "frames")
-        if not os.path.exists(frame_dir):
+        if not os.path.exists(frame_dir) or len(os.listdir(frame_dir)) == 0:
             os.makedirs(frame_dir, exist_ok=True)
             # Create mock frame files if directory is empty to verify process runs
             for i in range(8):
