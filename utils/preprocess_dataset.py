@@ -140,7 +140,7 @@ class DatasetPreprocessor:
             except Exception as e:
                 print(f"Warning: Failed to build PointNeXt model ({e}).")
 
-    def extract_dino_tokens(self, image_paths, batch_size=16):
+    def extract_dino_tokens(self, image_paths, batch_size=8):
         """
         Extracts visual representations for a sequence of image frames in batches.
         """
@@ -240,7 +240,7 @@ class DatasetPreprocessor:
         """
         num_frames = len(image_paths)
         num_points = 100  # Subsample 100 points for computational efficiency
-        batch_size = 16
+        batch_size = 8
 
         # Pre-compute depth maps and SAM masks in batches for massive GPU speedup
         depth_maps = []
