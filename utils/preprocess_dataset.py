@@ -140,22 +140,27 @@ class DatasetPreprocessor:
             except Exception as e:
                 print(f"Warning: Failed to build PointNeXt model ({e}).")
 
-    def extract_dino_tokens(self, image_paths):
+    def extract_dino_tokens(self, image_paths, batch_size=16):
         """
-        Extracts visual representations for a sequence of image frames.
+        Extracts visual representations for a sequence of image frames in batches.
         """
         if self.dino is None:
             # Fallback representation size matching vit_small_patch16_dinov3
             return torch.randn(len(image_paths), 384)
 
         tokens = []
-        for path in image_paths:
-            img = Image.open(path).convert("RGB")
-            # Apply standard DINO resize and normalization preprocessing
-            img_t = self.transform(img).unsqueeze(0).to(self.device)
+        for i in range(0, len(image_paths), batch_size):
+            batch_paths = image_paths[i : i + batch_size]
+            batch_imgs = []
+            for path in batch_paths:
+                img = Image.open(path).convert("RGB")
+                batch_imgs.append(self.transform(img))
+
+            # Stack into shape [B, 3, 224, 224]
+            img_t = torch.stack(batch_imgs, dim=0).to(self.device)
 
             with torch.no_grad():
-                feat = self.dino(img_t)  # Extracts 1024-dim visual token
+                feat = self.dino(img_t)  # Extracts visual tokens for the entire batch
                 tokens.append(feat.cpu())
 
         return torch.cat(tokens, dim=0)
@@ -235,62 +240,82 @@ class DatasetPreprocessor:
         """
         num_frames = len(image_paths)
         num_points = 100  # Subsample 100 points for computational efficiency
+        batch_size = 16
 
-        point_clouds = []
-        for path in image_paths:
-            img = Image.open(path).convert("RGB")
-            w, h = img.size
+        # Pre-compute depth maps and SAM masks in batches for massive GPU speedup
+        depth_maps = []
+        masks = []
 
-            # 1. Estimate depth map using Depth Anything V2 if available
-            if self.depth_model is not None:
-                try:
+        try:
+            for i in range(0, num_frames, batch_size):
+                batch_paths = image_paths[i : i + batch_size]
+                batch_imgs = [Image.open(p).convert("RGB") for p in batch_paths]
+                w, h = batch_imgs[0].size
+
+                # 1. Batched Depth Anything V2
+                if self.depth_model is not None:
                     inputs_depth = self.depth_processor(
-                        images=img, return_tensors="pt"
+                        images=batch_imgs, return_tensors="pt"
                     ).to(self.device)
                     with torch.no_grad():
                         outputs_depth = self.depth_model(**inputs_depth)
                         predicted_depth = outputs_depth.predicted_depth
-                        depth_map = (
+                        depth_batch = (
                             torch.nn.functional.interpolate(
                                 predicted_depth.unsqueeze(1),
                                 size=(h, w),
                                 mode="bicubic",
                                 align_corners=False,
                             )
-                            .squeeze()
+                            .squeeze(1)
                             .cpu()
                             .numpy()
                         )
-                except Exception as e_depth:
-                    print(
-                        f"Warning: Depth estimation failed ({e_depth}). Falling back to heuristic depth."
+                        if depth_batch.ndim == 2:
+                            depth_batch = np.expand_dims(depth_batch, axis=0)
+                        depth_maps.extend(list(depth_batch))
+                else:
+                    depth_maps.extend(
+                        [np.random.uniform(0.5, 3.0, size=(h, w)) for _ in batch_imgs]
                     )
-                    depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
-            else:
-                depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
 
-            # 2. Segment using SAM if available and click point is provided
-            mask = np.ones((h, w), dtype=bool)
-            if self.sam is not None and click_coords is not None:
-                try:
-                    # Run SAM segmentation inference on the image frame
+                # 2. Batched SAM 2
+                if self.sam is not None and click_coords is not None:
                     cx, cy = float(click_coords[0]), float(click_coords[1])
-                    inputs = self.sam_processor(
-                        img,
-                        input_points=[[[[cx, cy]]]],
-                        input_labels=[[[1]]],
+                    inputs_sam = self.sam_processor(
+                        images=batch_imgs,
+                        input_points=[[[[cx, cy]]]] * len(batch_imgs),
+                        input_labels=[[[1]]] * len(batch_imgs),
                         return_tensors="pt",
                     ).to(self.device)
                     with torch.no_grad():
-                        outputs = self.sam(**inputs)
-                        # Extract the high-probability mask (batch=0, frame=0, mask=0) and resize manually
-                        mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
-                        mask_logits_resized = cv2.resize(mask_logits, (w, h))
-                        mask = mask_logits_resized > 0.0
-                except Exception as e:
-                    print(
-                        f"Warning: SAM segmentation failed ({e}). Defaulting to full frame projection."
-                    )
+                        outputs_sam = self.sam(**inputs_sam)
+                        pred_masks = (
+                            outputs_sam.pred_masks.squeeze(1)[:, 0].cpu().numpy()
+                        )  # [B, 256, 256]
+                        for logits in pred_masks:
+                            logits_resized = cv2.resize(logits, (w, h))
+                            masks.append(logits_resized > 0.0)
+                else:
+                    masks.extend([np.ones((h, w), dtype=bool) for _ in batch_imgs])
+        except Exception as e:
+            print(
+                f"Warning: Batched depth/SAM preprocessing failed ({e}). Falling back to frame-by-frame heuristics."
+            )
+            depth_maps = []
+            masks = []
+
+        point_clouds = []
+        for idx, path in enumerate(image_paths):
+            img = Image.open(path).convert("RGB")
+            w, h = img.size
+
+            if idx < len(depth_maps):
+                depth_map = depth_maps[idx]
+                mask = masks[idx]
+            else:
+                depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
+                mask = np.ones((h, w), dtype=bool)
 
             # 3. Assume default pinhole camera intrinsics
             fx, fy = 150.0, 150.0
