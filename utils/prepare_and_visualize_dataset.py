@@ -1,3 +1,4 @@
+import argparse
 import os
 import shutil
 import urllib.request
@@ -47,16 +48,15 @@ def flatten_dataframe_columns(df_subset, cols):
     return np.array(rows_list, dtype=np.float32)
 
 
-def prepare_and_visualize_dataset():
+def prepare_and_visualize_dataset(disable_encoders=True, clean_cache=True):
     print("=== LatentFlow Stage 1 Pre-training Dataset Mixture Builder ===")
 
     # 1. Setup paths
     raw_data_dir = "latent-flow/data/raw"
     processed_dir = "latent-flow/data/processed"
 
-    # Clear directory only if CLEAN_CACHE flag is enabled
-    CLEAN_CACHE = True
-    if CLEAN_CACHE:
+    # Clear directory only if clean_cache flag is enabled
+    if clean_cache:
         print("Cleaning local dataset caches...")
         if os.path.exists(processed_dir):
             shutil.rmtree(processed_dir)
@@ -335,7 +335,7 @@ def prepare_and_visualize_dataset():
         raw_data_dir,
         "tabletop manipulation and visual geometric grounding",
         processed_dir,
-        disable_encoders=True,
+        disable_encoders=disable_encoders,
     )
 
     # ==========================================
@@ -450,4 +450,22 @@ def prepare_and_visualize_dataset():
 
 
 if __name__ == "__main__":
-    prepare_and_visualize_dataset()
+    parser = argparse.ArgumentParser(
+        description="Prepare and preprocess LatentFlow Stage 1 pre-training dataset mix"
+    )
+    parser.add_argument(
+        "--enable_encoders",
+        action="store_true",
+        help="Run preprocessing with active vision/language encoders on GPU (default is disabled/mock mode)",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Wipe raw and processed directories to start from scratch (default is False/resume mode)",
+    )
+
+    args = parser.parse_args()
+    # If --enable_encoders is passed, disable_encoders becomes False
+    prepare_and_visualize_dataset(
+        disable_encoders=not args.enable_encoders, clean_cache=args.clean
+    )

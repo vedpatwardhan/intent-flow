@@ -12,8 +12,8 @@ def compile_video(frame_dir, output_mp4_path, fps=15):
     first_frame = Image.open(os.path.join(frame_dir, frames[0]))
     width, height = first_frame.size
 
-    # Define mp4v codec and create VideoWriter
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    # Define vp09 (VP9) codec and create VideoWriter
+    fourcc = cv2.VideoWriter_fourcc(*"vp09")
     out = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
 
     for f in frames:
