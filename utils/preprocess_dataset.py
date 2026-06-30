@@ -1,5 +1,5 @@
 import os
-import time
+from tqdm import tqdm
 import torch
 import numpy as np
 import cv2
@@ -384,10 +384,6 @@ class DatasetPreprocessor:
         Processes a single episode folder containing image frames and joint files with
         detailed timing profile logs.
         """
-        import time
-
-        t_start = time.perf_counter()
-
         # Scan image paths in episode folder
         frame_dir = os.path.join(raw_episode_dir, "frames")
         if not os.path.exists(frame_dir) or len(os.listdir(frame_dir)) == 0:
@@ -407,22 +403,13 @@ class DatasetPreprocessor:
         seq_len = len(image_paths)
 
         # 1. DINOv3 visual features
-        t0 = time.perf_counter()
         vision_tokens = self.extract_dino_tokens(image_paths)
-        t_dino = time.perf_counter() - t0
-        print(f"DINOv3 took {t_dino:.3f} seconds")
 
         # 2. CLIP Text
-        t0 = time.perf_counter()
         text_token = self.extract_clip_tokens(text_prompt)
-        t_clip = time.perf_counter() - t0
-        print(f"CLIP Text took {t_clip:.3f} seconds")
 
         # 3. VGGT
-        t0 = time.perf_counter()
         vggt_tokens = self.extract_vggt_tokens(image_paths)
-        t_vggt = time.perf_counter() - t0
-        print(f"VGGT took {t_vggt:.3f} seconds")
 
         # Read joint states/actions (mocked if missing)
         actions_path = os.path.join(raw_episode_dir, "actions.npy")
@@ -430,7 +417,6 @@ class DatasetPreprocessor:
         tactile_path = os.path.join(raw_episode_dir, "tactile.npy")
         pointclouds_path = os.path.join(raw_episode_dir, "point_clouds.npy")
 
-        t0 = time.perf_counter()
         if not os.path.exists(actions_path):
             raise FileNotFoundError(
                 f"Error: Missing action/state files in '{raw_episode_dir}'. "
@@ -439,26 +425,17 @@ class DatasetPreprocessor:
         actions = torch.tensor(np.load(actions_path), dtype=torch.float32)
         proprio = torch.tensor(np.load(states_path), dtype=torch.float32)
         tactile = torch.tensor(np.load(tactile_path), dtype=torch.float32)
-        t_arrays = time.perf_counter() - t0
-        print(f"Arrays took {t_arrays:.3f} seconds")
 
         # 4. Point Cloud Reconstructions (SAM + Depth Anything + PointNeXt)
-        t0 = time.perf_counter()
         if os.path.exists(pointclouds_path):
             pc_data = np.load(pointclouds_path)
             pointnext_tokens = self.extract_pointnext_tokens(pc_data)
-            t_pc = time.perf_counter() - t0
-            print(f"PointNeXt took {t_pc:.3f} seconds")
         else:
             # Back-project 2D video frames into 3D Point Clouds
             reconstructed_pcs = self.convert_video_to_pointclouds(
                 image_paths, click_coords=[112, 112]
             )
-            t_reconstruct = time.perf_counter() - t0
-            print(f"Reconstruction took {t_reconstruct:.3f} seconds")
             pointnext_tokens = self.extract_pointnext_tokens(reconstructed_pcs)
-            t_pc = time.perf_counter() - t0 - t_reconstruct
-            print(f"PointNeXt took {t_pc:.3f} seconds")
 
         # Build tokenized dictionary matching dataset_loader keys
         tokenized_data = {
@@ -472,17 +449,9 @@ class DatasetPreprocessor:
         }
 
         # Cache the processed file
-        t0 = time.perf_counter()
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"episode_{episode_idx:04d}.pt")
         torch.save(tokenized_data, output_path)
-        t_save = time.perf_counter() - t0
-        print(f"Disk save took {t_save:.3f} seconds")
-
-        t_total = time.perf_counter() - t_start
-        print(
-            f"Episode {episode_idx:04d} ({seq_len} frames) Preprocessed in {t_total:.2f}s:"
-        )
 
 
 def run_preprocessing(raw_data_dir, text_prompt, output_dir, disable_encoders=False):
@@ -496,10 +465,16 @@ def run_preprocessing(raw_data_dir, text_prompt, output_dir, disable_encoders=Fa
         mock_episode = os.path.join(raw_data_dir, "episode_0")
         os.makedirs(mock_episode, exist_ok=True)
 
-    episodes = [os.path.join(raw_data_dir, d) for d in os.listdir(raw_data_dir)]
-    for idx, ep_dir in enumerate(episodes):
-        if os.path.isdir(ep_dir):
-            preprocessor.process_episode(ep_dir, text_prompt, output_dir, idx)
+    episodes = sorted(
+        [
+            os.path.join(raw_data_dir, d)
+            for d in os.listdir(raw_data_dir)
+            if os.path.isdir(os.path.join(raw_data_dir, d))
+        ]
+    )
+
+    for idx, ep_dir in enumerate(tqdm(episodes, desc="Preprocessing Episodes")):
+        preprocessor.process_episode(ep_dir, text_prompt, output_dir, idx)
 
     print("--- PREPROCESSING COMPLETE ---")
 
