@@ -384,6 +384,12 @@ class DatasetPreprocessor:
         Processes a single episode folder containing image frames and joint files with
         detailed timing profile logs.
         """
+        output_path = os.path.join(output_dir, f"episode_{episode_idx:04d}.pt")
+        if os.path.exists(output_path):
+            print(
+                f"Skipping episode {episode_idx:04d} (already processed: {output_path})"
+            )
+            return
         # Scan image paths in episode folder
         frame_dir = os.path.join(raw_episode_dir, "frames")
         if not os.path.exists(frame_dir) or len(os.listdir(frame_dir)) == 0:

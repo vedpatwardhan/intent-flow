@@ -311,18 +311,29 @@ def prepare_and_visualize_dataset(disable_encoders=True, clean_cache=True):
     for ep_idx in range(5):
         geometry_raw_dir = os.path.join(raw_data_dir, f"geometry_ep{ep_idx:02d}")
         frame_dir_geom = os.path.join(geometry_raw_dir, "frames")
-        os.makedirs(frame_dir_geom, exist_ok=True)
-        for i in range(8):
-            img = Image.new("RGB", (224, 224), color=(34, 34, 139))
-            img.save(os.path.join(frame_dir_geom, f"frame_{i:04d}.png"))
 
-        np.save(
-            os.path.join(geometry_raw_dir, "actions.npy"), np.random.randn(8, 12) * 0.1
-        )
-        np.save(
-            os.path.join(geometry_raw_dir, "states.npy"), np.random.randn(8, 24) * 0.1
-        )
-        np.save(os.path.join(geometry_raw_dir, "tactile.npy"), np.zeros((8, 4, 4)))
+        if not os.path.exists(frame_dir_geom) or len(os.listdir(frame_dir_geom)) == 0:
+            raise FileNotFoundError(
+                f"Error: Missing PointOdyssey files in '{geometry_raw_dir}'. "
+                "You must download and extract the raw PointOdyssey dataset files first."
+            )
+
+        actions_file = os.path.join(geometry_raw_dir, "actions.npy")
+        states_file = os.path.join(geometry_raw_dir, "states.npy")
+        tactile_file = os.path.join(geometry_raw_dir, "tactile.npy")
+
+        num_frames = len([f for f in os.listdir(frame_dir_geom) if f.endswith(".png")])
+        if num_frames == 0:
+            raise ValueError(f"Error: No frame files found in '{frame_dir_geom}'")
+
+        # Save clean zero arrays on disk for downstream loading consistency
+        if not os.path.exists(actions_file):
+            np.save(actions_file, np.zeros((num_frames, 12), dtype=np.float32))
+        if not os.path.exists(states_file):
+            np.save(states_file, np.zeros((num_frames, 24), dtype=np.float32))
+        if not os.path.exists(tactile_file):
+            np.save(tactile_file, np.zeros((num_frames, 4, 4), dtype=np.float32))
+
     print("Structured complete 3D tracking pre-training pool.")
 
     # ==========================================
