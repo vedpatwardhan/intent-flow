@@ -1,4 +1,5 @@
 import os
+import time
 import torch
 import numpy as np
 import cv2
@@ -237,129 +238,164 @@ class DatasetPreprocessor:
         """
         Estimates depth for each frame and back-projects it to construct a 3D point cloud sequence.
         If SAM is available and click_coords are provided, it segments and crops the point cloud.
+        Uses KLT Optical Flow for efficient point tracking across time steps.
         """
-        num_frames = len(image_paths)
-        num_points = 100  # Subsample 100 points for computational efficiency
-        batch_size = 8
+        if len(image_paths) == 0:
+            return []
 
-        # Pre-compute depth maps and SAM masks in batches for massive GPU speedup
-        depth_maps = []
-        masks = []
+        # Open the first frame to initialize tracking
+        first_img = Image.open(image_paths[0]).convert("RGB")
+        w, h = first_img.size
+        num_points = 100
 
-        try:
-            for i in range(0, num_frames, batch_size):
-                batch_paths = image_paths[i : i + batch_size]
-                batch_imgs = [Image.open(p).convert("RGB") for p in batch_paths]
-                w, h = batch_imgs[0].size
-
-                # 1. Batched Depth Anything V2
-                if self.depth_model is not None:
-                    inputs_depth = self.depth_processor(
-                        images=batch_imgs, return_tensors="pt"
-                    ).to(self.device)
-                    with torch.no_grad():
-                        outputs_depth = self.depth_model(**inputs_depth)
-                        predicted_depth = outputs_depth.predicted_depth
-                        depth_batch = (
-                            torch.nn.functional.interpolate(
-                                predicted_depth.unsqueeze(1),
-                                size=(h, w),
-                                mode="bicubic",
-                                align_corners=False,
-                            )
-                            .squeeze(1)
-                            .cpu()
-                            .numpy()
+        # 1. Estimate initial depth map
+        depth_map = None
+        if self.depth_model is not None:
+            try:
+                inputs_depth = self.depth_processor(
+                    images=first_img, return_tensors="pt"
+                ).to(self.device)
+                with torch.no_grad():
+                    outputs_depth = self.depth_model(**inputs_depth)
+                    predicted_depth = outputs_depth.predicted_depth
+                    depth_map = (
+                        torch.nn.functional.interpolate(
+                            predicted_depth.unsqueeze(1),
+                            size=(h, w),
+                            mode="bicubic",
+                            align_corners=False,
                         )
-                        if depth_batch.ndim == 2:
-                            depth_batch = np.expand_dims(depth_batch, axis=0)
-                        depth_maps.extend(list(depth_batch))
-                else:
-                    depth_maps.extend(
-                        [np.random.uniform(0.5, 3.0, size=(h, w)) for _ in batch_imgs]
+                        .squeeze()
+                        .cpu()
+                        .numpy()
                     )
+            except Exception as e:
+                print(f"Warning: Depth estimation failed on first frame ({e}).")
 
-                # 2. Batched SAM 2
-                if self.sam is not None and click_coords is not None:
-                    cx, cy = float(click_coords[0]), float(click_coords[1])
-                    inputs_sam = self.sam_processor(
-                        images=batch_imgs,
-                        input_points=[[[[cx, cy]]]] * len(batch_imgs),
-                        input_labels=[[[1]]] * len(batch_imgs),
-                        return_tensors="pt",
-                    ).to(self.device)
-                    with torch.no_grad():
-                        outputs_sam = self.sam(**inputs_sam)
-                        pred_masks = (
-                            outputs_sam.pred_masks.squeeze(1)[:, 0].cpu().numpy()
-                        )  # [B, 256, 256]
-                        for logits in pred_masks:
-                            logits_resized = cv2.resize(logits, (w, h))
-                            masks.append(logits_resized > 0.0)
-                else:
-                    masks.extend([np.ones((h, w), dtype=bool) for _ in batch_imgs])
-        except Exception as e:
-            print(
-                f"Warning: Batched depth/SAM preprocessing failed ({e}). Falling back to frame-by-frame heuristics."
-            )
-            depth_maps = []
-            masks = []
+        if depth_map is None:
+            depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
+
+        # 2. Get SAM mask on first frame
+        mask = np.ones((h, w), dtype=bool)
+        if self.sam is not None and click_coords is not None:
+            try:
+                cx, cy = float(click_coords[0]), float(click_coords[1])
+                inputs_sam = self.sam_processor(
+                    images=first_img,
+                    input_points=[[[[cx, cy]]]],
+                    input_labels=[[[1]]],
+                    return_tensors="pt",
+                ).to(self.device)
+                with torch.no_grad():
+                    outputs_sam = self.sam(**inputs_sam)
+                    logits = outputs_sam.pred_masks[0, 0, 0].cpu().numpy()
+                    logits_resized = cv2.resize(logits, (w, h))
+                    mask = logits_resized > 0.0
+            except Exception as e:
+                print(f"Warning: SAM segmentation failed on first frame ({e}).")
+
+        # 3. Find initial N keypoints inside the mask area
+        y_indices, x_indices = np.where(mask)
+        if len(x_indices) == 0:
+            y_indices, x_indices = np.where(np.ones_like(mask))
+
+        # Use Shi-Tomasi corners inside the mask area for robust tracking
+        first_np = np.array(first_img)
+        first_gray = cv2.cvtColor(first_np, cv2.COLOR_RGB2GRAY)
+        track_mask = mask.astype(np.uint8) * 255
+
+        corners = cv2.goodFeaturesToTrack(
+            first_gray,
+            maxCorners=num_points,
+            qualityLevel=0.01,
+            minDistance=5,
+            mask=track_mask,
+        )
+
+        if corners is not None and len(corners) > 0:
+            p_init = corners.reshape(-1, 2)
+            if len(p_init) < num_points:
+                extra_idx = np.random.choice(
+                    len(x_indices), size=num_points - len(p_init), replace=True
+                )
+                p_extra = np.stack([x_indices[extra_idx], y_indices[extra_idx]], axis=1)
+                p_init = np.concatenate([p_init, p_extra], axis=0)
+        else:
+            sample_idx = np.random.choice(len(x_indices), size=num_points, replace=True)
+            p_init = np.stack([x_indices[sample_idx], y_indices[sample_idx]], axis=1)
+
+        p_init = p_init[:num_points].astype(np.float32)
+
+        # Get Z depths for the selected keypoints
+        u_coords = np.clip(p_init[:, 0].astype(int), 0, w - 1)
+        v_coords = np.clip(p_init[:, 1].astype(int), 0, h - 1)
+        zs_init = depth_map[v_coords, u_coords]
+
+        # 4. Project keypoints to 3D
+        fx, fy = 150.0, 150.0
+        cx, cy = w / 2.0, h / 2.0
 
         point_clouds = []
-        for idx, path in enumerate(image_paths):
-            img = Image.open(path).convert("RGB")
-            w, h = img.size
 
-            if idx < len(depth_maps):
-                depth_map = depth_maps[idx]
-                mask = masks[idx]
-            else:
-                depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
-                mask = np.ones((h, w), dtype=bool)
+        # t=0 frame point cloud
+        pc0 = []
+        for (u, v), z in zip(p_init, zs_init):
+            x = (u - cx) * z / fx
+            y = (v - cy) * z / fy
+            pc0.append([x, y, z, 1.0])
+        point_clouds.append(np.array(pc0))
 
-            # 3. Assume default pinhole camera intrinsics
-            fx, fy = 150.0, 150.0
-            cx, cy = w / 2.0, h / 2.0
+        # 5. Track points using Lucas-Kanade across the rest of the sequence
+        p_prev = p_init.reshape(-1, 1, 2).copy()
+        gray_prev = first_gray
 
-            # 4. Filter pixels inside SAM mask
-            y_indices, x_indices = np.where(mask)
-            if len(x_indices) == 0:
-                # Fallback to full image if mask is empty
-                y_indices, x_indices = np.where(np.ones_like(mask))
+        for t in range(1, len(image_paths)):
+            img_curr = Image.open(image_paths[t]).convert("RGB")
+            img_np = np.array(img_curr)
+            gray_curr = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-            # Randomly subsample points from the segmented area
-            sample_idx = np.random.choice(
-                len(x_indices), size=min(num_points, len(x_indices)), replace=True
+            p_next, st, err = cv2.calcOpticalFlowPyrLK(
+                gray_prev, gray_curr, p_prev, None
             )
-            u_coords = x_indices[sample_idx]
-            v_coords = y_indices[sample_idx]
 
-            pc_points = []
-            for u, v in zip(u_coords, v_coords):
-                d = depth_map[v, u]
-                x = (u - cx) * d / fx
-                y = (v - cy) * d / fy
-                z = d
-                intensity = 1.0  # Default intensity/feature channel
-                pc_points.append([x, y, z, intensity])
+            p_curr = []
+            for idx, (pt, status) in enumerate(zip(p_next, st)):
+                if status[0] == 1:
+                    p_curr.append(pt[0])
+                else:
+                    p_curr.append(p_prev[idx][0])
 
-            point_clouds.append(np.array(pc_points))
+            p_curr = np.array(p_curr, dtype=np.float32)
+            p_prev = p_curr.reshape(-1, 1, 2).copy()
+            gray_prev = gray_curr.copy()
+
+            # Back-project current frame coordinates to 3D using initial depth (shape rigidity)
+            pc_t = []
+            for (u, v), z in zip(p_curr, zs_init):
+                x = (u - cx) * z / fx
+                y = (v - cy) * z / fy
+                pc_t.append([x, y, z, 1.0])
+            point_clouds.append(np.array(pc_t))
 
         return point_clouds
 
     def process_episode(self, raw_episode_dir, text_prompt, output_dir, episode_idx):
         """
-        Processes a single episode folder containing image frames and joint files.
+        Processes a single episode folder containing image frames and joint files with
+        detailed timing profile logs.
         """
+        import time
+
+        t_start = time.perf_counter()
+
         # Scan image paths in episode folder
         frame_dir = os.path.join(raw_episode_dir, "frames")
         if not os.path.exists(frame_dir) or len(os.listdir(frame_dir)) == 0:
-            os.makedirs(frame_dir, exist_ok=True)
-            # Create mock frame files if directory is empty to verify process runs
-            for i in range(8):
-                Image.new("RGB", (224, 224), color=(73, 109, 137)).save(
-                    os.path.join(frame_dir, f"frame_{i:04d}.png")
-                )
+            raise FileNotFoundError(
+                f"Error: Episode directory '{raw_episode_dir}' does not contain visual"
+                " frame PNG files. The raw extraction phase must complete successfully"
+                " before running the preprocessor."
+            )
 
         image_paths = sorted(
             [
@@ -370,10 +406,23 @@ class DatasetPreprocessor:
         )
         seq_len = len(image_paths)
 
-        # Extract vision, text, and VGGT tokens
+        # 1. DINOv3 visual features
+        t0 = time.perf_counter()
         vision_tokens = self.extract_dino_tokens(image_paths)
+        t_dino = time.perf_counter() - t0
+        print(f"DINOv3 took {t_dino:.3f} seconds")
+
+        # 2. CLIP Text
+        t0 = time.perf_counter()
         text_token = self.extract_clip_tokens(text_prompt)
+        t_clip = time.perf_counter() - t0
+        print(f"CLIP Text took {t_clip:.3f} seconds")
+
+        # 3. VGGT
+        t0 = time.perf_counter()
         vggt_tokens = self.extract_vggt_tokens(image_paths)
+        t_vggt = time.perf_counter() - t0
+        print(f"VGGT took {t_vggt:.3f} seconds")
 
         # Read joint states/actions (mocked if missing)
         actions_path = os.path.join(raw_episode_dir, "actions.npy")
@@ -381,37 +430,35 @@ class DatasetPreprocessor:
         tactile_path = os.path.join(raw_episode_dir, "tactile.npy")
         pointclouds_path = os.path.join(raw_episode_dir, "point_clouds.npy")
 
-        def load_and_clean_array(path):
-            arr = np.load(path, allow_pickle=True)
-            if arr.dtype == object:
-                # Convert strings/objects to floats, defaulting to 0.0 for conversion errors
-                def clean_val(x):
-                    try:
-                        return float(x)
-                    except (ValueError, TypeError):
-                        return 0.0
+        t0 = time.perf_counter()
+        if not os.path.exists(actions_path):
+            raise FileNotFoundError(
+                f"Error: Missing action/state files in '{raw_episode_dir}'. "
+                "Ensure that actions.npy and states.npy are successfully written before preprocessing."
+            )
+        actions = torch.tensor(np.load(actions_path), dtype=torch.float32)
+        proprio = torch.tensor(np.load(states_path), dtype=torch.float32)
+        tactile = torch.tensor(np.load(tactile_path), dtype=torch.float32)
+        t_arrays = time.perf_counter() - t0
+        print(f"Arrays took {t_arrays:.3f} seconds")
 
-                arr = np.vectorize(clean_val)(arr)
-            return torch.tensor(arr.astype(np.float32))
-
-        if os.path.exists(actions_path):
-            actions = load_and_clean_array(actions_path)
-            proprio = load_and_clean_array(states_path)
-            tactile = load_and_clean_array(tactile_path)
-        else:
-            actions = torch.randn(seq_len, 12)
-            proprio = torch.randn(seq_len, 24)
-            tactile = torch.randn(seq_len, 4, 4)
-
+        # 4. Point Cloud Reconstructions (SAM + Depth Anything + PointNeXt)
+        t0 = time.perf_counter()
         if os.path.exists(pointclouds_path):
             pc_data = np.load(pointclouds_path)
             pointnext_tokens = self.extract_pointnext_tokens(pc_data)
+            t_pc = time.perf_counter() - t0
+            print(f"PointNeXt took {t_pc:.3f} seconds")
         else:
             # Back-project 2D video frames into 3D Point Clouds
             reconstructed_pcs = self.convert_video_to_pointclouds(
                 image_paths, click_coords=[112, 112]
             )
+            t_reconstruct = time.perf_counter() - t0
+            print(f"Reconstruction took {t_reconstruct:.3f} seconds")
             pointnext_tokens = self.extract_pointnext_tokens(reconstructed_pcs)
+            t_pc = time.perf_counter() - t0 - t_reconstruct
+            print(f"PointNeXt took {t_pc:.3f} seconds")
 
         # Build tokenized dictionary matching dataset_loader keys
         tokenized_data = {
@@ -425,10 +472,17 @@ class DatasetPreprocessor:
         }
 
         # Cache the processed file
+        t0 = time.perf_counter()
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"episode_{episode_idx:04d}.pt")
         torch.save(tokenized_data, output_path)
-        print(f"Processed and cached: {output_path}")
+        t_save = time.perf_counter() - t0
+        print(f"Disk save took {t_save:.3f} seconds")
+
+        t_total = time.perf_counter() - t_start
+        print(
+            f"Episode {episode_idx:04d} ({seq_len} frames) Preprocessed in {t_total:.2f}s:"
+        )
 
 
 def run_preprocessing(raw_data_dir, text_prompt, output_dir, disable_encoders=False):

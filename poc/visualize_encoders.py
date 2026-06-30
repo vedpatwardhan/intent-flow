@@ -439,10 +439,38 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
                 ys_norm = (ys - ys.mean()) / (ys.std() + 1e-8)
                 zs_norm = (zs - zs.mean()) / (zs.std() + 1e-8)
                 intensity = np.ones_like(xs_norm) * 0.5
-
                 point_cloud_np = np.stack(
                     [xs_norm, ys_norm, zs_norm, intensity], axis=1
                 )
+
+                # C. Use Lucas-Kanade (KLT) tracking to propagate 3D points frame-by-frame instantly
+                p_prev = np.stack([xs, ys], axis=1).astype(np.float32).reshape(-1, 1, 2)
+                gray_prev = cv2.cvtColor(first_frame, cv2.COLOR_RGB2GRAY)
+
+                tracked_points_seq = []
+                tracked_points_seq.append(np.stack([xs, ys, zs], axis=1))
+
+                for t in range(1, len(frames_raw)):
+                    gray_curr = cv2.cvtColor(frames_raw[t], cv2.COLOR_RGB2GRAY)
+                    p_next, st, err = cv2.calcOpticalFlowPyrLK(
+                        gray_prev, gray_curr, p_prev, None
+                    )
+
+                    p_curr = []
+                    for idx, (pt, status) in enumerate(zip(p_next, st)):
+                        if status[0] == 1:
+                            p_curr.append(pt[0])
+                        else:
+                            p_curr.append(p_prev[idx][0])
+
+                    p_curr = np.array(p_curr, dtype=np.float32)
+                    p_prev = p_curr.reshape(-1, 1, 2).copy()
+                    gray_prev = gray_curr.copy()
+
+                    # Project current coordinates using initial depth topology (rigidity assumption)
+                    x_curr = p_curr[:, 0]
+                    y_curr = p_curr[:, 1]
+                    tracked_points_seq.append(np.stack([x_curr, y_curr, zs], axis=1))
 
                 # B. Execute actual PointNeXt forward pass if openpoints is installed
                 if POINTNEXT_AVAILABLE:
@@ -483,8 +511,8 @@ def run_real_poc(video_path, output_dir, click_coord, text_prompt):
                         "openpoints not available. Skipping actual PointNeXt forward pass, using back-projected cloud."
                     )
 
-                # Store coordinates (without intensity) for visual plotting
-                point_cloud_np = np.stack([xs, ys, zs], axis=1)
+                # Store coordinates of final tracked step for visual plotting
+                point_cloud_np = tracked_points_seq[-1]
             else:
                 print(
                     "Warning: SAM mask has no active pixels. Adjust the click coordinates to point to a valid object."
