@@ -28,6 +28,11 @@ def main():
         default="config/default_config.yaml",
         help="Path to global YAML configuration file",
     )
+    parser.add_argument(
+        "--use_subset",
+        action="store_true",
+        help="Limit pre-training dataset to first 5 files for dry-run validation",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -38,7 +43,7 @@ def main():
     os.makedirs(config["paths"]["log_dir"], exist_ok=True)
 
     if args.stage == 1:
-        train_stage1(config)
+        train_stage1(config, use_subset=args.use_subset)
     elif args.stage == 2:
         train_stage2(config)
     elif args.stage == 3:

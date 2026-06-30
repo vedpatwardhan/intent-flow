@@ -651,3 +651,37 @@ To train and fine-tune LatentFlow on standard Google Colab instances without dis
 *   **Tactile-Dexterous Real Touch Datasets**:
     *   *Role*: Aligns tactile pressure maps with visual contact boundaries via InfoNCE.
 
+
+## Execution Quickstart Reference
+
+Here are the standard commands to run the data preparation, sampling, and training modules.
+
+### 1. Dataset Preparation & Mixing
+Downloads and preprocesses the multi-modal pre-training mixture.
+* **CPU / Mock Mode Run (Dry-run)**:
+  ```bash
+  PYTHONPATH=latent-flow python latent-flow/utils/prepare_and_visualize_dataset.py
+  ```
+* **GPU Run (Extracts real foundation features on CUDA)**:
+  ```bash
+  PYTHONPATH=latent-flow python latent-flow/utils/prepare_and_visualize_dataset.py --enable_encoders --clean
+  ```
+
+### 2. Multi-Modal Verification & Zip Packaging
+Compiles raw image sequences into VS Code compatible VP9 MP4 videos, audits processed representation tensors, and packages files for local inspection.
+```bash
+python latent-flow/utils/sample_and_package.py --raw_dir latent-flow/data/raw --processed_dir latent-flow/data/processed --output_zip dataset_samples.zip
+```
+
+### 3. Stage 1 Latent Dynamics Pre-training
+Optimizes transition predictive dynamics inside the V-JEPA transformer core, logging checkpoints and curves to PyTorch Lightning and W&B.
+* **Diagnostic Check (Subset of 5 episodes, fast verification)**:
+  ```bash
+  python latent-flow/train.py --stage 1 --use_subset --config latent-flow/config/default_config.yaml
+  ```
+* **Full Pre-training Run**:
+  ```bash
+  python latent-flow/train.py --stage 1 --config latent-flow/config/default_config.yaml
+  ```
+
+
