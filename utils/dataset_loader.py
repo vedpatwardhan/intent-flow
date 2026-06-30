@@ -25,10 +25,33 @@ class PretrainingDataset(Dataset):
             raise ValueError(f"No processed .pt files found in {data_dir}")
 
         if use_subset:
-            # Restrict to first 5 files for dry-run verification
-            self.files = self.files[:5]
+            # Pick first 2 episodes from each of the three dataset groups if available
+            subset = []
+            try:
+                droid_files = [
+                    f for f in self.files if int(f.split("_")[1].split(".")[0]) <= 326
+                ]
+                cmu_files = [
+                    f
+                    for f in self.files
+                    if 327 <= int(f.split("_")[1].split(".")[0]) <= 461
+                ]
+                odyssey_files = [
+                    f for f in self.files if int(f.split("_")[1].split(".")[0]) >= 462
+                ]
+
+                subset.extend(droid_files[:2])
+                subset.extend(cmu_files[:2])
+                subset.extend(odyssey_files[:2])
+            except Exception:
+                pass
+
+            if not subset:
+                subset = self.files[:6]
+
+            self.files = subset
             print(
-                f"[Dataset] Running in diagnostic SUBSET mode. Loaded {len(self.files)} files."
+                f"[Dataset] Running in diagnostic SUBSET mode. Loaded {len(self.files)} files: {self.files}"
             )
         else:
             print(
