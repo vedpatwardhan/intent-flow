@@ -1,7 +1,9 @@
+import argparse
 import os
 import zipfile
 import cv2
 from PIL import Image
+import torch
 
 
 def compile_video(frame_dir, output_mp4_path, fps=15):
@@ -88,8 +90,6 @@ def sample_and_package(
     # 3. Processed Data Auditing & Packaging
     print("\n--- Auditing Processed (.pt) Representations ---")
     if os.path.exists(processed_dir):
-        import torch
-
         proc_files = sorted([f for f in os.listdir(processed_dir) if f.endswith(".pt")])
         if proc_files:
             print(
@@ -169,8 +169,6 @@ def sample_and_package(
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Package raw dataset episodes and compile videos"
     )

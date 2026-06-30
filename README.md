@@ -212,11 +212,12 @@ The table below outlines how our lightweight architecture adapts and retains CLA
 To capture CLAP's core benefit of cross-modal alignment without the VLM parameters, we implement a two-stage alignment and fusion pipeline:
 * **Step 1: MLP Projection & Contrastive Alignment (CASA)**:
   * Each frozen perception stream (CLIP Text, DINOv3, PointNeXt, VGGT, Tactile/Proprioceptive) is projected by its own trainable MLP adapter into a unified $d$-dimensional space (e.g., $d=512$).
-  * To ground these spaces, we train the MLP adapters using a **Contrastive Action-State Alignment (CASA)** loss during Stage 2 SFT. We encode robot action trajectories $a_t$ using a simple MLP action encoder $h_\psi(a_t) \to z_a$. The adapters project state transitions into a visual-action latent space $f_{\theta_v}(s_{t:t+1}) \to z_s$.
+  * **Stage Transitions**: During Stage 1 pre-training, no contrastive alignment is performed; the adapters are updated purely via the predictive transition loss to capture physical motion. Contrastive Action-State Alignment (CASA) is introduced in **Stage 2 SFT** to ground state representations. We encode robot action trajectories $a_t$ using a simple MLP action encoder $h_\psi(a_t) \to z_a$. The adapters project state transitions into a visual-action latent space $f_{\theta_v}(s_{t:t+1}) \to z_s$.
   * We optimize an InfoNCE loss to maximize the cosine similarity of matching pairs $(z_s, z_a)$ while minimizing it for mismatched pairs in the batch. This forces the adapters to extract only action-relevant features, resolving "visual entanglement."
-* **Step 2: Attention-Based Fusion (MSAT)**:
+* **Step 2: Attention-Based Fusion & Modality Parity (MSAT)**:
   * Once the modality tokens are dimensionally matched and contrastively aligned, they are concatenated and fed into the **Multi-Stream Action Transformer (MSAT)**.
-  * The MSAT utilizes self-attention and cross-attention layers to dynamically fuse the modalities (e.g., weighing visual DINOv3 tokens against tactile finger pressures and textual commands), passing the fused representation to the CLAP-RF flow matching head.
+  * **Visual Parity Breaking**: In Stage 1, all inputs maintain structural visual parity (DINOv3 full frames and KLT depth track regions are geometrically aligned). In **Stage 3 RL & Downstream execution**, we break this parity: the user's camera click isolates only the target object point cloud (PointNeXt), while DINOv3 continues to process the entire visual scene. MSAT's cross-attention layers learn to route focal attention to the PointNeXt object tokens, ignoring background clutter.
+  * **Tactile Masking Evolution**: Since pre-training datasets lack touch skins, the tactile stream is **100% zero-masked during Stage 1**. The adapter learns to treat tactile coordinates as flat zeros. In **Stage 3**, when executing contact-rich tasks in the simulator, tactile grids become active, allowing MSAT to dynamically weigh visual target tokens against finger contact pressures.
 
 ### 3. Action Vector Space: Latent Action Encoder & Action Adapter
 To pre-train our world dynamics model on datasets containing only video transitions (human or robot videos without joint values) and then map them to physical robot commands, we use a dual-module action mapping setup:
@@ -637,6 +638,19 @@ To train and fine-tune LatentFlow on standard Google Colab instances without dis
 *   **10% 3D Visual Geometry & Tracking (PointOdyssey)**:
     *   *Dataset*: PointOdyssey coordinate point tracking and synthetic table blocks.
     *   *Role*: Anchors predictor transitions in strict 3D topological tracking and geometric camera transformations.
+
+#### Modality Mapping and Processing Rules:
+The table below highlights what modalities are present in each dataset stream, and how they are handled during Stage 1 pre-training:
+
+| Modality / Step | Stream A: Droid (Robot) | Stream B: CMU Stretch (Human) | Stream C: PointOdyssey (Geometry) |
+| :--- | :--- | :--- | :--- |
+| **2D Video Frames (RGB)** | **Present** (Franka cameras) | **Present** (Egocentric camera) | **Present** (CG camera render) |
+| **Text Instruction** | **Present** (H-L Task prompt) | **Present** (H-L Task prompt) | **Present** (H-L Task prompt) |
+| **Ground-Truth 3D Coordinates** | **Missing** | **Missing** | **Present** (Saved on disk as `point_clouds.npy`) |
+| **Actions (Robot joints)** | **Present** (Franka joint torques) | **Missing** (Zero-padded / Zero-masked) | **Missing** (Zero-padded / Zero-masked) |
+| **Proprioception (Robot state)** | **Present** (Franka joint angles) | **Missing** (Zero-padded / Zero-masked) | **Missing** (Zero-padded / Zero-masked) |
+| **Tactile Grid (Touch)** | **Missing** (Zero-padded / Zero-masked) | **Missing** (Zero-padded / Zero-masked) | **Missing** (Zero-padded / Zero-masked) |
+| **3D Generation Method** | **Calculated** (SAM + Depth + KLT tracking) | **Calculated** (SAM + Depth + KLT tracking) | **Direct Load** (Loaded directly from `point_clouds.npy`) |
 
 ### B. Stage 2: Supervised Fine-Tuning (SFT) & Action Grounding
 *   **Bimanual ALOHA Tabletop (`lerobot/aloha_mobile_cabinet`)**:
