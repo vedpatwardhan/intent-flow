@@ -25,9 +25,11 @@ def compile_video(frame_dir, output_mp4_path, fps=15):
 
 
 def sample_and_package(
-    raw_data_dir="latent-flow/data/raw", zip_filename="dataset_samples.zip"
+    raw_data_dir="latent-flow/data/raw",
+    processed_dir="latent-flow/data/processed",
+    zip_filename="dataset_samples.zip",
 ):
-    print("=== LatentFlow Raw Dataset Video Compiler & Packager ===")
+    print("=== LatentFlow Raw & Processed Dataset Sampler & Validator ===")
 
     if not os.path.exists(raw_data_dir):
         print(f"Error: Raw data directory '{raw_data_dir}' does not exist.")
@@ -83,8 +85,86 @@ def sample_and_package(
                             fpath, arcname=f"arrays/{cat_name}/{ep_name}/{arr_file}"
                         )
 
+    # 3. Processed Data Auditing & Packaging
+    print("\n--- Auditing Processed (.pt) Representations ---")
+    if os.path.exists(processed_dir):
+        import torch
+
+        proc_files = sorted([f for f in os.listdir(processed_dir) if f.endswith(".pt")])
+        if proc_files:
+            print(
+                f"Found {len(proc_files)} processed files. Auditing first file: {proc_files[0]}"
+            )
+            target_pt = os.path.join(processed_dir, proc_files[0])
+            try:
+                data = torch.load(target_pt, map_location="cpu")
+                expected_keys = {
+                    "vision": 384,
+                    "text": 768,
+                    "pointnext": 384,
+                    "vggt": 768,
+                    "tactile": (4, 4),
+                    "proprioception": 24,
+                    "actions": 12,
+                }
+                issues_found = 0
+                for key, expected_dim in expected_keys.items():
+                    if key not in data:
+                        print(f"  [MISSING KEY] '{key}' is missing.")
+                        issues_found += 1
+                        continue
+                    val = data[key]
+                    shape_list = list(val.shape)
+                    seq_len = data["vision"].shape[0]
+
+                    if key == "text":
+                        expected_shape = [1, 768]
+                    elif key == "tactile":
+                        expected_shape = [seq_len, 4, 4]
+                    else:
+                        expected_shape = [seq_len, expected_dim]
+
+                    if shape_list != expected_shape:
+                        print(
+                            f"  [SHAPE WARNING] '{key}' shape {shape_list} != {expected_shape}"
+                        )
+                        issues_found += 1
+
+                    mean_val = val.mean().item()
+                    var_val = val.var().item()
+                    is_dead = var_val == 0.0
+
+                    status_str = "ACTIVE"
+                    if is_dead:
+                        if key in ["tactile", "proprioception"] and proc_files[
+                            0
+                        ].startswith("ego4d_"):
+                            status_str = "ZERO-PAD (Expected for human demos)"
+                        elif key == "tactile":
+                            status_str = "ZERO-PAD (Expected for no-tactile setups)"
+                        else:
+                            status_str = "DEAD (Warning: Zero variance!)"
+                            issues_found += 1
+
+                    print(
+                        f"  - {key:15s} | Shape: {str(shape_list):15s} | Mean: {mean_val:7.4f} | Var: {var_val:7.4f} | Status: {status_str}"
+                    )
+
+                # Write first processed PT file into the zip
+                with zipfile.ZipFile(zip_filename, "a") as zipf:
+                    zipf.write(target_pt, arcname=f"processed/{proc_files[0]}")
+                print(
+                    f"Successfully packaged '{proc_files[0]}' into ZIP processed/ folder."
+                )
+            except Exception as e:
+                print(f"Failed to audit processed file: {e}")
+        else:
+            print("No processed files found to verify.")
+    else:
+        print(f"Processed directory '{processed_dir}' does not exist.")
+
     print(
-        f"\n=== Completed! Package with 6 compiled videos saved to '{zip_filename}' ==="
+        f"\n=== Completed! Package with 6 videos and audited processed file saved to '{zip_filename}' ==="
     )
 
 
@@ -101,10 +181,20 @@ if __name__ == "__main__":
         help="Path to the flat raw data directory on Colab",
     )
     parser.add_argument(
+        "--processed_dir",
+        type=str,
+        default="latent-flow/data/processed",
+        help="Path to the processed data directory containing .pt files",
+    )
+    parser.add_argument(
         "--output_zip",
         type=str,
         default="dataset_samples.zip",
         help="Path/name of the generated ZIP output file",
     )
     args = parser.parse_args()
-    sample_and_package(raw_data_dir=args.raw_dir, zip_filename=args.output_zip)
+    sample_and_package(
+        raw_data_dir=args.raw_dir,
+        processed_dir=args.processed_dir,
+        zip_filename=args.output_zip,
+    )
