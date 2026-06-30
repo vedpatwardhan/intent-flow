@@ -7,7 +7,15 @@ from models.vggt import VGGTEncoder
 
 # Try importing standard multimodal libraries, fallback to simulated extractor if not fully installed
 try:
-    from transformers import CLIPProcessor, CLIPTextModel, Sam2Model, Sam2Processor
+    from transformers import (
+        CLIPProcessor,
+        CLIPTextModel,
+        Sam2Model,
+        Sam2Processor,
+        AutoImageProcessor,
+        AutoModelForDepthEstimation,
+    )
+    from torchvision import transforms
     from huggingface_hub import hf_hub_download
     import timm
 
@@ -40,6 +48,18 @@ class DatasetPreprocessor:
         self.sam = None
         self.sam_processor = None
         self.vggt = None
+        self.depth_model = None
+        self.depth_processor = None
+
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
 
         if disable_encoders:
             print(
@@ -77,6 +97,15 @@ class DatasetPreprocessor:
                     "facebook/sam2-hiera-large"
                 )
                 self.sam.eval()
+
+                # 4. Depth Anything V2 for 3D coordinate estimation
+                self.depth_processor = AutoImageProcessor.from_pretrained(
+                    "depth-anything/Depth-Anything-V2-Small-hf"
+                )
+                self.depth_model = AutoModelForDepthEstimation.from_pretrained(
+                    "depth-anything/Depth-Anything-V2-Small-hf"
+                ).to(self.device)
+                self.depth_model.eval()
             except Exception as e:
                 print(
                     f"Warning: Failed to load online vision/language backbones ({e})."
@@ -116,17 +145,14 @@ class DatasetPreprocessor:
         Extracts visual representations for a sequence of image frames.
         """
         if self.dino is None:
-            # Fallback representation size
-            return torch.randn(len(image_paths), 1024)
+            # Fallback representation size matching vit_small_patch16_dinov3
+            return torch.randn(len(image_paths), 384)
 
         tokens = []
         for path in image_paths:
             img = Image.open(path).convert("RGB")
-            # Standard DINO resize and normalization preprocessing
-            # In a full run, we apply: Resize(224), CenterCrop(224), Normalize()
-            img_t = torch.randn(1, 3, 224, 224).to(
-                self.device
-            )  # Placeholder tensor matching image dimensions
+            # Apply standard DINO resize and normalization preprocessing
+            img_t = self.transform(img).unsqueeze(0).to(self.device)
 
             with torch.no_grad():
                 feat = self.dino(img_t)  # Extracts 1024-dim visual token
@@ -215,8 +241,33 @@ class DatasetPreprocessor:
             img = Image.open(path).convert("RGB")
             w, h = img.size
 
-            # 1. Estimate depth map (in full run on Colab, we load a monocular model like Depth Anything)
-            depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
+            # 1. Estimate depth map using Depth Anything V2 if available
+            if self.depth_model is not None:
+                try:
+                    inputs_depth = self.depth_processor(
+                        images=img, return_tensors="pt"
+                    ).to(self.device)
+                    with torch.no_grad():
+                        outputs_depth = self.depth_model(**inputs_depth)
+                        predicted_depth = outputs_depth.predicted_depth
+                        depth_map = (
+                            torch.nn.functional.interpolate(
+                                predicted_depth.unsqueeze(1),
+                                size=(h, w),
+                                mode="bicubic",
+                                align_corners=False,
+                            )
+                            .squeeze()
+                            .cpu()
+                            .numpy()
+                        )
+                except Exception as e_depth:
+                    print(
+                        f"Warning: Depth estimation failed ({e_depth}). Falling back to heuristic depth."
+                    )
+                    depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
+            else:
+                depth_map = np.random.uniform(0.5, 3.0, size=(h, w))
 
             # 2. Segment using SAM if available and click point is provided
             mask = np.ones((h, w), dtype=bool)
