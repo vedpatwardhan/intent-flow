@@ -7,14 +7,14 @@
 The diagram below highlights the main architectural components and their core relationships, detailing the path from raw observations and user prompts through the parallel perception pathways (including SAM masking filters and VGGT tracking) into the trainable adapters, MSAT cross-attention fusion, and core model loop.
 
 ```
-                              [ USER INPUT ]
+                               [ USER INPUT ]
        ┌──────────────┬──────────────┬──────────────┬──────────────┐
        │ (Text Inst)  │ (2D Frames)  │ (3D Cloud)   │ (Tactile/Prop)
        ▼              ▼              │              ▼              ▼
  ┌───────────┐  ┌───────────┐        │ (Click)      │        ┌───────────┐
  │ CLIP Text │  ├─► DINOv3  │        ▼              │        │ Sensor IO │
  └─────┬─────┘  │           │   ┌───────────┐       │        └─────┬─────┘
-       │        ├─► VGGT    │   │    SAM    │       │              │
+       │        ├─► VGGT    ├──►│ SAM & KLT │       │              │
        │        └─────┬─────┘   └─────┬─────┘       │              │
        │              │         ┌─────▼─────┐       │              │
        │              │         │ PointNeXt │◄──────┘              │
@@ -82,7 +82,7 @@ To build a generalist policy capable of zero-shot transfer, we leverage heteroge
 
 *   **A1: Language (CLIP Text)**: Focuses on task and semantic coaching. By embedding natural language descriptions (e.g., *"pinch the cube's corners"*) and general semantic categories, it conditions the flow-matching denoiser to align target behavior with the task goal.
 *   **A2: DINOv3 Full-Frame Vision**: Runs on *every single incoming image frame* (multi-view raw inputs) instead of static waypoints. DINOv3 serves as a self-supervised visual backbone that extracts dense semantic correspondences and spatial layouts across time. This acts as a continuous state-tracking reference for the JEPA world predictor.
-*   **A3: PointNeXt Egocentric Vision**: Focuses on millimeter-level 3D spatial alignment. During live execution, PointNeXt ingests raw 3D coordinate point sets $(X, Y, Z)$ directly from the robot's depth cameras (or MuJoCo simulation depth buffers). During 2D-only pre-training (Stage 1), PointNeXt is fed by running video frames through a monocular depth estimator (like *Depth Anything V2*) and back-projecting the depth values into a dense 3D point cloud.
+*   **A3: PointNeXt Egocentric Vision**: Focuses on millimeter-level 3D spatial alignment. During live execution, PointNeXt ingests raw 3D coordinate point sets $(X, Y, Z)$ directly from the robot's depth cameras. During 2D-only pre-training (Stage 1), PointNeXt is fed by running **EgoFlow point tracking**: we estimate depth maps (Depth Anything V2) and segmentation masks (SAM 2) only on the first frame ($t=0$) to select interest keypoints, and propagate these coordinates frame-by-frame instantly using Lucas-Kanade Optical Flow (`cv2.calcOpticalFlowPyrLK`) to construct the 3D point cloud sequence.
 *   **A4: VGGT Visual Geometry**: Infers dense 3D scene layouts, camera parameters (intrinsic/extrinsic matrices $R, T$), and 3D point tracks across frame sequences. It provides camera trajectories and tracks key coordinates $(X, Y, Z)$ over time, giving the model a temporal motion tracking prior.
 *   **A5: Tactile & Proprioceptive Streams**: Captures contact-rich physical feedback (finger forces, joint positions, velocities, and torques). This bridges the gap between vision and physical execution.
 
