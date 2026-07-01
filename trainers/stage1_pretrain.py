@@ -72,15 +72,15 @@ class JEPAStage1Module(pl.LightningModule):
 
         for t in range(horizon - 1):
             # 1. Project current modal states
-            vis_tok = self.vis_adapter(vision[:, t, :])
-            txt_tok = self.txt_adapter(text.squeeze(1))
-            pt_tok = self.pt_adapter(pointnext[:, t, :])
-            vggt_tok = self.vggt_adapter(vggt[:, t, :])
-            print("SHAPES", vis_tok.shape, txt_tok.shape, pt_tok.shape, vggt_tok.shape)
+            vis_tok = self.vis_adapter(vision[:, t, :])  # [B, 512]
+            txt_tok = self.txt_adapter(text.squeeze(1))  # [B, 512]
+            pt_tok = self.pt_adapter(pointnext[:, t, :])  # [B, 512]
+            vggt_tok = self.vggt_adapter(vggt[:, t, :])  # [B, 512]
 
             # Fused context s_t (Tactile is masked to zeroes during pretraining)
-            tactile_mask = torch.zeros(batch_size, self.latent_dim, device=self.device)
-            print("TACTILE MASK", tactile_mask.shape)
+            tactile_mask = torch.zeros(
+                batch_size, self.latent_dim, device=self.device
+            )  # [B, 512]
             modality_dict = {
                 "vision": vis_tok,
                 "text": txt_tok,
@@ -88,21 +88,13 @@ class JEPAStage1Module(pl.LightningModule):
                 "vggt": vggt_tok,
                 "tactile": tactile_mask,
             }
-            s_t = self.msat(modality_dict)
-            print("S_T", s_t.shape)
+            s_t = self.msat(modality_dict)  # [B, 512]
 
             # 2. Project target future state s_next
             # We keep gradients active for msat/adapters during target projection
-            vis_tok_next = self.vis_adapter(vision[:, t + 1, :])
-            pt_tok_next = self.pt_adapter(pointnext[:, t + 1, :])
-            vggt_tok_next = self.vggt_adapter(vggt[:, t + 1, :])
-            print(
-                "SHAPES NEXT",
-                vis_tok_next.shape,
-                txt_tok.shape,
-                pt_tok_next.shape,
-                vggt_tok_next.shape,
-            )
+            vis_tok_next = self.vis_adapter(vision[:, t + 1, :])  # [B, 512]
+            pt_tok_next = self.pt_adapter(pointnext[:, t + 1, :])  # [B, 512]
+            vggt_tok_next = self.vggt_adapter(vggt[:, t + 1, :])  # [B, 512]
 
             modality_dict_next = {
                 "vision": vis_tok_next,
@@ -111,13 +103,13 @@ class JEPAStage1Module(pl.LightningModule):
                 "vggt": vggt_tok_next,
                 "tactile": tactile_mask,
             }
-            s_next = self.msat(modality_dict_next)
+            s_next = self.msat(modality_dict_next)  # [B, 512]
 
             # 3. Extract latent action using training helper h_ψ
-            z_latent = self.latent_action_encoder(s_t, s_next)
+            z_latent = self.latent_action_encoder(s_t, s_next)  # [B, 512]
 
             # 4. Predict future state using dynamics predictor g_θ
-            s_next_pred = self.predictor(s_t, z_latent)
+            s_next_pred = self.predictor(s_t, z_latent)  # [B, 512]
 
             # 5. Compute predictive transition loss
             loss = self.criterion(s_next_pred, s_next)
@@ -154,72 +146,14 @@ class JEPAStage1Module(pl.LightningModule):
 
         return loss
 
-    def on_validation_epoch_start(self):
-        self._val_pred_losses = []
-        self._val_noop_losses = []
-        self._val_drifts = []
-
     def validation_step(self, batch, batch_idx):
-        # Unpack horizon manually to avoid nested ratio division
-        horizon = batch["vision"].shape[1] - 1
-        step_losses = []
-        no_op_losses = []
-        drifts = []
+        loss, noop, drift = self(batch)
 
-        for t in range(horizon):
-            modality_dict_t = {
-                "vision": batch["vision"][:, t],
-                "pointnext": batch["pointnext"][:, t],
-                "vggt": batch["vggt"][:, t],
-                "tactile": batch["tactile"][:, t] if "tactile" in batch else None,
-            }
-            s_t = self.msat(modality_dict_t)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=False)
+        self.log("val_noop_ratio", noop, on_epoch=True, prog_bar=False)
+        self.log("val_action_drift", drift, on_epoch=True, prog_bar=False)
 
-            modality_dict_next = {
-                "vision": batch["vision"][:, t + 1],
-                "pointnext": batch["pointnext"][:, t + 1],
-                "vggt": batch["vggt"][:, t + 1],
-                "tactile": batch["tactile"][:, t + 1] if "tactile" in batch else None,
-            }
-            s_next = self.msat(modality_dict_next)
-
-            z_latent = self.latent_action_encoder(s_t, s_next)
-            s_next_pred = self.predictor(s_t, z_latent)
-            loss = self.criterion(s_next_pred, s_next)
-            step_losses.append(loss)
-
-            with torch.no_grad():
-                no_op_loss = self.criterion(s_t, s_next)
-                no_op_losses.append(no_op_loss)
-                z_random = torch.randn_like(z_latent)
-                s_next_pred_rand = self.predictor(s_t, z_random)
-                drift = self.criterion(s_next_pred, s_next_pred_rand)
-                drifts.append(drift)
-
-        mean_step_loss = torch.stack(step_losses).mean()
-        mean_noop_loss = torch.stack(no_op_losses).mean()
-        mean_drift = torch.stack(drifts).mean()
-
-        self._val_pred_losses.append(mean_step_loss)
-        self._val_noop_losses.append(mean_noop_loss)
-        self._val_drifts.append(mean_drift)
-
-        return mean_step_loss
-
-    def on_validation_epoch_end(self):
-        if not hasattr(self, "_val_pred_losses") or not self._val_pred_losses:
-            return
-
-        avg_pred = torch.stack(self._val_pred_losses).mean()
-        avg_noop = torch.stack(self._val_noop_losses).mean()
-        avg_drift = torch.stack(self._val_drifts).mean()
-
-        # Compute ratio on aggregated epoch-level values to prevent small-batch division explosions
-        noop_ratio = avg_pred / torch.clamp(avg_noop, min=1e-6)
-
-        self.log("val_loss", avg_pred, on_epoch=True, prog_bar=False)
-        self.log("val_noop_ratio", noop_ratio, on_epoch=True, prog_bar=False)
-        self.log("val_action_drift", avg_drift, on_epoch=True, prog_bar=False)
+        return loss
 
     def configure_optimizers(self):
         # Group parameters across all sub-modules
