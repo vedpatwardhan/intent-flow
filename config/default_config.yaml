@@ -46,7 +46,7 @@ stage3:
 wandb:
   project: "latentflow-stage1"
   entity: "vedpat3-none"
-  log_model: "all"
+  log_model: false
 
 num_workers: 4
 

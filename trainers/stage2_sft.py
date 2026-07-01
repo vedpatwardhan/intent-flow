@@ -27,9 +27,9 @@ def train_stage2(config):
         map_location=device,
     )
 
-    vis_adapter = VisualAdapter().to(device)
-    txt_adapter = TextAdapter().to(device)
-    pt_adapter = PointNeXtAdapter().to(device)
+    vis_adapter = VisualAdapter(d_in=384).to(device)
+    txt_adapter = TextAdapter(d_in=512).to(device)
+    pt_adapter = PointNeXtAdapter(d_in=384).to(device)
     vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
     msat = MultiStreamActionTransformer().to(device)
     predictor = JepaPredictor(action_dim=512).to(

@@ -33,7 +33,7 @@ class JEPAStage1Module(pl.LightningModule):
         # Initialize network modules
         # DINOv3 output dimension is 384
         self.vis_adapter = VisualAdapter(d_in=384, d_out=self.latent_dim)
-        self.txt_adapter = TextAdapter(d_in=768, d_out=self.latent_dim)
+        self.txt_adapter = TextAdapter(d_in=512, d_out=self.latent_dim)
         self.pt_adapter = PointNeXtAdapter(d_in=384, d_out=self.latent_dim)
         self.vggt_adapter = VGGTAdapter(d_in=self.vggt_dim, d_out=self.latent_dim)
 
@@ -189,10 +189,17 @@ def train_stage1(config, use_subset=False):
 
     # 2. Setup W&B Logger
     wandb_config = config.get("wandb", {})
+    log_model_val = wandb_config.get("log_model", False)
+    if isinstance(log_model_val, str):
+        if log_model_val.lower() == "false":
+            log_model_val = False
+        elif log_model_val.lower() == "true":
+            log_model_val = True
+
     wandb_logger = WandbLogger(
         project=wandb_config.get("project", "latentflow-stage1"),
         entity=wandb_config.get("entity", None),
-        log_model=wandb_config.get("log_model", "all"),
+        log_model=log_model_val,
     )
 
     # 3. Setup Checkpoint Callbacks

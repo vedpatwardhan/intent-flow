@@ -51,9 +51,9 @@ def train_stage3(config):
     )
 
     # Initialize networks
-    vis_adapter = VisualAdapter().to(device)
-    txt_adapter = TextAdapter().to(device)
-    pt_adapter = PointNeXtAdapter().to(device)
+    vis_adapter = VisualAdapter(d_in=384).to(device)
+    txt_adapter = TextAdapter(d_in=512).to(device)
+    pt_adapter = PointNeXtAdapter(d_in=384).to(device)
     vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
     tactile_adapter = TactileAdapter().to(device)
     action_adapter = ActionAdapter(d_in=config["model"]["action_dim"], d_out=512).to(
