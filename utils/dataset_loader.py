@@ -1,6 +1,6 @@
 import os
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader, random_split
 
 
 class PretrainingDataset(Dataset):
@@ -112,15 +112,48 @@ class PretrainingDataset(Dataset):
         return sliced_data
 
 
-def get_dataloader(data_dir, seq_len=32, batch_size=32, use_subset=False):
+def get_dataloader(
+    data_dir, seq_len=32, batch_size=32, use_subset=False, validation_split=0.0
+):
     """
-    Initializes PretrainingDataset and returns a PyTorch DataLoader.
+    Initializes PretrainingDataset and returns a PyTorch DataLoader (or a tuple of train/val DataLoaders if validation_split > 0).
     """
-    from torch.utils.data import DataLoader
-
     dataset = PretrainingDataset(
         data_dir=data_dir, window_size=seq_len, mask_ratio=0.5, use_subset=use_subset
     )
-    return DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
-    )
+    if validation_split > 0.0:
+        train_size = int((1.0 - validation_split) * len(dataset))
+        val_size = len(dataset) - train_size
+        if train_size == 0:
+            train_size = len(dataset)
+            val_size = 0
+        if val_size > 0:
+            train_set, val_set = random_split(dataset, [train_size, val_size])
+            train_loader = DataLoader(
+                train_set,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=2,
+                pin_memory=True,
+            )
+            val_loader = DataLoader(
+                val_set,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=2,
+                pin_memory=True,
+            )
+            return train_loader, val_loader
+        else:
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=2,
+                pin_memory=True,
+            )
+            return loader, None
+    else:
+        return DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
+        )

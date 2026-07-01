@@ -176,51 +176,14 @@ def train_stage1(config, use_subset=False):
             f"[Trainer] Overriding dataset directory with local processed path: {data_dir}"
         )
 
-    # 1. Initialize PyTorch Dataloaders with random split
-    from utils.dataset_loader import PretrainingDataset
-    from torch.utils.data import DataLoader
-
-    dataset = PretrainingDataset(
+    # 1. Initialize PyTorch Dataloaders with centralized helper
+    train_loader, val_loader = get_dataloader(
         data_dir=data_dir,
-        window_size=config["model"]["horizon"],
-        mask_ratio=0.5,
+        seq_len=config["model"]["horizon"],
+        batch_size=config["stage1"]["batch_size"],
         use_subset=use_subset,
+        validation_split=0.1,
     )
-
-    train_size = int(0.9 * len(dataset))
-    val_size = len(dataset) - train_size
-
-    if train_size == 0:
-        train_size = len(dataset)
-        val_size = 0
-
-    if val_size > 0:
-        train_set, val_set = torch.utils.data.random_split(
-            dataset, [train_size, val_size]
-        )
-        train_loader = DataLoader(
-            train_set,
-            batch_size=config["stage1"]["batch_size"],
-            shuffle=True,
-            num_workers=2,
-            pin_memory=True,
-        )
-        val_loader = DataLoader(
-            val_set,
-            batch_size=config["stage1"]["batch_size"],
-            shuffle=False,
-            num_workers=2,
-            pin_memory=True,
-        )
-    else:
-        train_loader = DataLoader(
-            dataset,
-            batch_size=config["stage1"]["batch_size"],
-            shuffle=True,
-            num_workers=2,
-            pin_memory=True,
-        )
-        val_loader = None
 
     # 2. Setup W&B Logger
     wandb_logger = WandbLogger(project="latentflow-stage1", log_model="all")
