@@ -138,7 +138,9 @@ class JEPAStage1Module(pl.LightningModule):
         # Log training metrics to W&B / logs only (no CLI progress bar log to avoid wrapping, matching le-probe)
         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=False)
         self.log("train_noop_ratio", noop, on_step=False, on_epoch=True, prog_bar=False)
-        self.log("train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(
+            "train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False
+        )
 
         return loss
 
