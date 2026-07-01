@@ -167,6 +167,35 @@ class JEPAStage1Module(pl.LightningModule):
         return optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay)
 
 
+class EpochMetricsTableCallback(pl.Callback):
+    """Prints a beautiful table with training and validation metrics at the end of each epoch."""
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.sanity_checking:
+            return
+
+        epoch = trainer.current_epoch
+        metrics = trainer.callback_metrics
+
+        train_loss = metrics.get("train_loss") or metrics.get("train_loss_step")
+        train_noop = metrics.get("train_noop_ratio")
+        train_drift = metrics.get("train_action_drift")
+
+        val_loss = metrics.get("val_loss")
+        val_noop = metrics.get("val_noop_ratio")
+        val_drift = metrics.get("val_action_drift")
+
+        def fmt(val):
+            return f"{val.item():.5f}" if val is not None else "N/A"
+
+        print(f"\n================ EPOCH {epoch} METRICS SUMMARY ================")
+        print(f"  Metric              | Training    | Validation")
+        print(f"  --------------------+-------------+-------------")
+        print(f"  Loss                | {fmt(train_loss):<11} | {fmt(val_loss):<11}")
+        print(f"  No-Op Ratio         | {fmt(train_noop):<11} | {fmt(val_noop):<11}")
+        print(f"  Action Drift        | {fmt(train_drift):<11} | {fmt(val_drift):<11}")
+        print(f"===============================================================\n")
+
+
 def train_stage1(config, use_subset=False):
     print("--- STARTING STAGE 1: LATENT DYNAMICS PRE-TRAINING (PL & W&B) ---")
 
@@ -226,7 +255,7 @@ def train_stage1(config, use_subset=False):
         accelerator="auto",
         devices=1,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, EpochMetricsTableCallback()],
         log_every_n_steps=5,
     )
 
