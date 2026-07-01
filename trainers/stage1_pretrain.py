@@ -177,20 +177,32 @@ def train_stage1(config, use_subset=False):
         )
 
     # 1. Initialize PyTorch Dataloaders with centralized helper
+    num_workers = config.get("num_workers", 2)
     train_loader, val_loader = get_dataloader(
         data_dir=data_dir,
         seq_len=config["model"]["horizon"],
         batch_size=config["stage1"]["batch_size"],
         use_subset=use_subset,
         validation_split=0.1,
+        num_workers=num_workers,
     )
 
     # 2. Setup W&B Logger
-    wandb_logger = WandbLogger(project="latentflow-stage1", log_model="all")
+    wandb_config = config.get("wandb", {})
+    wandb_logger = WandbLogger(
+        project=wandb_config.get("project", "latentflow-stage1"),
+        entity=wandb_config.get("entity", None),
+        log_model=wandb_config.get("log_model", "all"),
+    )
 
     # 3. Setup Checkpoint Callbacks
+    checkpoint_dir = config["paths"]["checkpoint_dir"]
+    subdir = config["paths"].get("subdir", "")
+    if subdir:
+        checkpoint_dir = os.path.join(checkpoint_dir, subdir)
+
     checkpoint_callback = ModelCheckpoint(
-        dirpath=config["paths"]["checkpoint_dir"],
+        dirpath=checkpoint_dir,
         filename=(
             "stage1-{epoch:02d}-{val_loss:.5f}" if val_loader else "stage1-{epoch:02d}"
         ),

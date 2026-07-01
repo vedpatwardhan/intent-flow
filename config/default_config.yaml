@@ -40,8 +40,16 @@ stage3:
   distill_weight: 0.5
   auto_npo_interval: 1000  # Checkpoint evaluation interval (steps)
 
+wandb:
+  project: "latentflow-stage1"
+  entity: "vedpat3-none"
+  log_model: "all"
+
+num_workers: 4
+
 paths:
-  urdf_path: "/Users/vedpatwardhan/Desktop/cortex-os/repos/Wiki-GRx-Models/GRX/GR1/gr1t2/urdf/gr1t2_fourier_hand_6dof.urdf"
-  dataset_dir: "data"
-  checkpoint_dir: "checkpoints"
-  log_dir: "logs"
+  urdf_path: "repos/Wiki-GRx-Models/GRX/GR1/gr1t2/urdf/gr1t2_fourier_hand_6dof.urdf"
+  dataset_dir: "latent-flow/data/processed"
+  checkpoint_dir: "latent-flow/checkpoints"
+  log_dir: "latent-flow/logs"
+  subdir: ""

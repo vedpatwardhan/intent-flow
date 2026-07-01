@@ -113,7 +113,12 @@ class PretrainingDataset(Dataset):
 
 
 def get_dataloader(
-    data_dir, seq_len=32, batch_size=32, use_subset=False, validation_split=0.0
+    data_dir,
+    seq_len=32,
+    batch_size=32,
+    use_subset=False,
+    validation_split=0.0,
+    num_workers=2,
 ):
     """
     Initializes PretrainingDataset and returns a PyTorch DataLoader (or a tuple of train/val DataLoaders if validation_split > 0).
@@ -133,14 +138,14 @@ def get_dataloader(
                 train_set,
                 batch_size=batch_size,
                 shuffle=True,
-                num_workers=2,
+                num_workers=num_workers,
                 pin_memory=True,
             )
             val_loader = DataLoader(
                 val_set,
                 batch_size=batch_size,
                 shuffle=False,
-                num_workers=2,
+                num_workers=num_workers,
                 pin_memory=True,
             )
             return train_loader, val_loader
@@ -149,11 +154,15 @@ def get_dataloader(
                 dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                num_workers=2,
+                num_workers=num_workers,
                 pin_memory=True,
             )
             return loader, None
     else:
         return DataLoader(
-            dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
         )

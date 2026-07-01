@@ -11,6 +11,39 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def update_config(config, opts):
+    if not opts:
+        return
+    for i in range(0, len(opts), 2):
+        if i + 1 >= len(opts):
+            print(f"Warning: Option '{opts[i]}' is missing a value. Skipping.")
+            break
+        key = opts[i].lstrip("-")
+        val = opts[i + 1]
+
+        # Convert values to correct type
+        if val.lower() == "true":
+            val = True
+        elif val.lower() == "false":
+            val = False
+        else:
+            try:
+                if "." in val:
+                    val = float(val)
+                else:
+                    val = int(val)
+            except ValueError:
+                pass
+
+        # Traversal for nested dictionary update (e.g., stage1.lr)
+        parts = key.split(".")
+        d = config
+        for part in parts[:-1]:
+            d = d.setdefault(part, {})
+        d[parts[-1]] = val
+        print(f"[Config Override] Set {key} = {val}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="LatentFlow: Modular Humanoid Control Training Pipeline"
@@ -33,10 +66,18 @@ def main():
         action="store_true",
         help="Limit pre-training dataset to first 5 files for dry-run validation",
     )
+    parser.add_argument(
+        "opts",
+        nargs=argparse.REMAINDER,
+        help="Modify config options using list of key-value pairs (e.g., stage1.epochs 50 model.latent_dim 256)",
+    )
     args = parser.parse_args()
 
     # Load configuration
     config = load_config(args.config)
+
+    # Apply command line overrides
+    update_config(config, args.opts)
 
     # Resolve directories
     os.makedirs(config["paths"]["checkpoint_dir"], exist_ok=True)
