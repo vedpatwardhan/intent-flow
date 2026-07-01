@@ -62,22 +62,39 @@ class PretrainingDataset(Dataset):
                 f"[Dataset] Running in standard mode. Loaded {len(self.files)} files."
             )
 
+        # Build window maps using a sliding window with stride 1 (matching le-probe)
+        self.window_maps = []
+        stride = 1
+        for f_idx, fname in enumerate(self.files):
+            file_path = os.path.join(self.data_dir, fname)
+            # Load metadata (just checking sequence length)
+            data = torch.load(file_path, map_location="cpu")
+            total_len = data["vision"].shape[0]
+
+            start_indices = list(range(0, total_len - self.window_size + 1, stride))
+            if not start_indices:
+                start_indices = [0]  # At least one window (to be padded if too short)
+
+            for start_idx in start_indices:
+                self.window_maps.append((fname, start_idx))
+
+        print(
+            f"[Dataset] Created {len(self.window_maps)} sliding windows (horizon: {self.window_size}) across {len(self.files)} episodes."
+        )
+
     def __len__(self):
-        return len(self.files)
+        return len(self.window_maps)
 
     def __getitem__(self, idx):
-        file_path = os.path.join(self.data_dir, self.files[idx])
+        fname, start_idx = self.window_maps[idx]
+        file_path = os.path.join(self.data_dir, fname)
         data = torch.load(file_path, map_location="cpu")
 
-        # Determine sequence length
         total_len = data["vision"].shape[0]
+        end_idx = start_idx + self.window_size
 
-        # 1. Slice or pad to window_size
-        if total_len > self.window_size:
-            # Random starting index for window slicing
-            start_idx = torch.randint(0, total_len - self.window_size + 1, (1,)).item()
-            end_idx = start_idx + self.window_size
-
+        # Slice or pad to window_size
+        if total_len >= end_idx:
             sliced_data = {
                 "vision": data["vision"][start_idx:end_idx],
                 "vggt": data["vggt"][start_idx:end_idx],
@@ -85,12 +102,9 @@ class PretrainingDataset(Dataset):
                 "tactile": data["tactile"][start_idx:end_idx],
                 "proprioception": data["proprioception"][start_idx:end_idx],
                 "actions": data["actions"][start_idx:end_idx],
-                "text": data[
-                    "text"
-                ],  # text instruction is shape [1, 768] (sequence-independent)
+                "text": data["text"],
             }
         else:
-            # Pad sequences shorter than window_size
             padding_len = self.window_size - total_len
 
             def pad_tensor(t, pad_val=0.0):
@@ -108,8 +122,7 @@ class PretrainingDataset(Dataset):
                 "text": data["text"],
             }
 
-        # 2. Generate random masking indices
-        # Shape: [window_size], True means masked out, False means unmasked
+        # Generate random masking indices
         mask = torch.rand(self.window_size) < self.mask_ratio
         sliced_data["mask"] = mask
 
