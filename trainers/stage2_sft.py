@@ -2,6 +2,11 @@ import os
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+
 from models.adapters import (
     VisualAdapter,
     TextAdapter,
@@ -17,146 +22,220 @@ from utils.dataset_loader import get_dataloader
 from utils.safety_filter import SafetyFilter
 
 
-def train_stage2(config):
-    print("--- STARTING STAGE 2: SUPERVISED FINE-TUNING & ACTION GROUNDING ---")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class Stage2SFTSimplified(pl.LightningModule):
+    """
+    SFT training module incorporating:
+      - pl.LightningModule loop structure
+      - WandB logging
+      - InfoNCE CASA (Contrastive Action-State Alignment) Loss
+      - Multi-stream ComboStoc asynchronous masking
+    """
 
-    # 1. Load Stage 1 Pre-trained weights
-    checkpoint = torch.load(
-        os.path.join(config["paths"]["checkpoint_dir"], "stage1_pretrained.pt"),
-        map_location=device,
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.save_hyperparameters()
+
+        # 1. Initialize Adapters and MSAT
+        self.vis_adapter = VisualAdapter(d_in=384)
+        self.txt_adapter = TextAdapter(d_in=512)
+        self.pt_adapter = PointNeXtAdapter(d_in=384)
+        self.vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"])
+        self.tactile_adapter = TactileAdapter()
+        self.action_adapter = ActionAdapter(
+            d_in=config["model"]["action_dim"], d_out=512
+        )
+
+        self.msat = MultiStreamActionTransformer()
+        self.predictor = JepaPredictor(action_dim=512)
+        self.flow_matcher = CLAPFlowMatcher(action_dim=config["model"]["action_dim"])
+        self.safety_filter = SafetyFilter(urdf_path=config["paths"]["urdf_path"])
+
+    def forward(self, batch):
+        vision = batch["vision"]
+        text = batch["text"]
+        pointnext = batch["pointnext"]
+        vggt = batch["vggt"]
+        tactile = batch["tactile"]
+        proprioception = batch["proprioception"]
+        actions = batch["actions"]
+
+        batch_size = vision.size(0)
+        horizon = vision.size(1)
+
+        step_losses = []
+        casa_losses = []
+
+        # Iterate step-by-step to compute CFM + CASA alignment
+        for t in range(horizon - 1):
+            # ComboStoc: Asynchronous multi-stream masking
+            noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
+            mask_vis = (
+                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+            ).float()
+            mask_pt = (
+                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+            ).float()
+            mask_tac = (
+                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+            ).float()
+
+            vis_tok = self.vis_adapter(vision[:, t, :]) * mask_vis
+            txt_tok = self.txt_adapter(text.squeeze(1))
+            pt_tok = self.pt_adapter(pointnext[:, t, :]) * mask_pt
+            vggt_tok = self.vggt_adapter(vggt[:, t, :])
+            tactile_emb = self.tactile_adapter(tactile[:, t, :, :]) * mask_tac
+
+            modality_dict = {
+                "vision": vis_tok,
+                "text": txt_tok,
+                "pointnext": pt_tok,
+                "vggt": vggt_tok,
+                "tactile": tactile_emb,
+                "proprioception": proprioception[:, t, :],
+            }
+            s_t = self.msat(modality_dict)
+
+            # Ground truth joint target at step t
+            a_target = actions[:, t, :]
+
+            # CFM Loss
+            cfm_loss = self.flow_matcher.get_cfm_loss(a_target, s_t)
+
+            # CASA Contrastive Alignment (InfoNCE)
+            # Projects target action and state into unified latent alignment space
+            z_s = s_t / (s_t.norm(dim=-1, keepdim=True) + 1e-8)
+            z_a = self.action_adapter(a_target)
+            z_a = z_a / (z_a.norm(dim=-1, keepdim=True) + 1e-8)
+
+            # InfoNCE Similarity Matrix
+            sim_matrix = torch.matmul(z_s, z_a.T) / 0.07  # temperature=0.07
+            labels = torch.arange(batch_size, device=self.device)
+            casa_loss = F.cross_entropy(sim_matrix, labels)
+            casa_losses.append(casa_loss)
+
+            # Safety filter constraint loss evaluation
+            with torch.no_grad():
+                pred_action = self.flow_matcher.sample(s_t, num_steps=10)
+                filtered_action = self.safety_filter.filter_actions(pred_action)
+                constraint_loss = torch.mean((pred_action - filtered_action) ** 2)
+
+            total_loss = cfm_loss + 0.1 * constraint_loss
+            step_losses.append(total_loss)
+
+        mean_step_loss = torch.stack(step_losses).mean()
+        mean_casa_loss = torch.stack(casa_losses).mean()
+        return mean_step_loss, mean_casa_loss
+
+    def training_step(self, batch, batch_idx):
+        loss_cfm, loss_casa = self(batch)
+        total_loss = loss_cfm + 0.2 * loss_casa
+
+        self.log("train_cfm_loss", loss_cfm, on_step=True, on_epoch=True, prog_bar=True)
+        self.log(
+            "train_casa_loss", loss_casa, on_step=True, on_epoch=True, prog_bar=False
+        )
+        self.log(
+            "train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True
+        )
+        return total_loss
+
+    def validation_step(self, batch, batch_idx):
+        loss_cfm, loss_casa = self(batch)
+        total_loss = loss_cfm + 0.2 * loss_casa
+        self.log("val_cfm_loss", loss_cfm, on_epoch=True, prog_bar=True)
+        self.log("val_casa_loss", loss_casa, on_epoch=True, prog_bar=False)
+        self.log("val_total_loss", total_loss, on_epoch=True, prog_bar=True)
+        return total_loss
+
+    def configure_optimizers(self):
+        params = (
+            list(self.vis_adapter.parameters())
+            + list(self.txt_adapter.parameters())
+            + list(self.pt_adapter.parameters())
+            + list(self.vggt_adapter.parameters())
+            + list(self.tactile_adapter.parameters())
+            + list(self.action_adapter.parameters())
+            + list(self.msat.parameters())
+            + list(self.flow_matcher.parameters())
+            + list(self.predictor.parameters())
+        )
+        return optim.AdamW(params, lr=self.config["stage2"]["lr"])
+
+
+def train_stage2(config, use_subset=False):
+    print(
+        "--- STARTING STAGE 2: SUPERVISED FINE-TUNING & ACTION GROUNDING (PL & W&B) ---"
     )
 
-    vis_adapter = VisualAdapter(d_in=384).to(device)
-    txt_adapter = TextAdapter(d_in=512).to(device)
-    pt_adapter = PointNeXtAdapter(d_in=384).to(device)
-    vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
-    msat = MultiStreamActionTransformer().to(device)
-    predictor = JepaPredictor(action_dim=512).to(
-        device
-    )  # Now receives projected 512 action embeddings
+    # 1. Initialize SFT Module
+    model = Stage2SFTSimplified(config)
 
-    vis_adapter.load_state_dict(checkpoint["vis_adapter"])
-    txt_adapter.load_state_dict(checkpoint["txt_adapter"])
-    pt_adapter.load_state_dict(checkpoint["pt_adapter"])
-    vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
-    msat.load_state_dict(checkpoint["msat"])
+    # 2. Load Stage 1 Pre-trained weights if available
+    checkpoint_dir = config["paths"]["checkpoint_dir"]
+    stage1_ckpt_path = os.path.join(checkpoint_dir, "stage1_pretrained.pt")
+    if os.path.exists(stage1_ckpt_path):
+        print(f"[SFT] Loading Stage 1 Pretrained weights from: {stage1_ckpt_path}")
+        checkpoint = torch.load(stage1_ckpt_path, map_location="cpu")
 
-    # 2. Initialize Stage 2 Specific Networks
-    tactile_adapter = TactileAdapter().to(device)
-    action_adapter = ActionAdapter(d_in=config["model"]["action_dim"], d_out=512).to(
-        device
-    )
-    flow_matcher = CLAPFlowMatcher(action_dim=config["model"]["action_dim"]).to(device)
-    safety_filter = SafetyFilter(urdf_path=config["paths"]["urdf_path"])
+        # Load matched dictionary parameters
+        model.vis_adapter.load_state_dict(checkpoint["vis_adapter"])
+        model.txt_adapter.load_state_dict(checkpoint["txt_adapter"])
+        model.pt_adapter.load_state_dict(checkpoint["pt_adapter"])
+        model.vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
+        model.msat.load_state_dict(checkpoint["msat"])
 
-    optimizer = optim.AdamW(
-        list(vis_adapter.parameters())
-        + list(txt_adapter.parameters())
-        + list(pt_adapter.parameters())
-        + list(vggt_adapter.parameters())
-        + list(tactile_adapter.parameters())
-        + list(msat.parameters())
-        + list(action_adapter.parameters())
-        + list(flow_matcher.parameters())
-        + list(predictor.parameters()),
-        lr=config["stage2"]["lr"],
-    )
-
-    dataloader = get_dataloader(
-        data_dir=config["paths"]["dataset_dir"],
+    # 3. Setup dataloader (pulls from Aloha SFT split)
+    s2_data_dir = os.path.join(config["paths"]["dataset_dir"], "sft", "success")
+    train_loader, val_loader = get_dataloader(
+        data_dir=s2_data_dir,
         seq_len=config["model"]["horizon"],
         batch_size=config["stage2"]["batch_size"],
+        use_subset=use_subset,
+        validation_split=0.1,
     )
 
-    for epoch in range(config["stage2"]["epochs"]):
-        epoch_loss = 0.0
-        batches = 0
+    # 4. Setup W&B Logger
+    wandb_config = config.get("wandb", {})
+    wandb_logger = WandbLogger(
+        project=wandb_config.get("project", "latentflow-stage2"),
+        entity=wandb_config.get("entity", None),
+        log_model=False,
+    )
 
-        for batch in dataloader:
-            optimizer.zero_grad()
+    # 5. Checkpointing callbacks
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=checkpoint_dir,
+        filename="stage2-{epoch:02d}-{val_total_loss:.5f}",
+        save_top_k=3,
+        monitor="val_total_loss",
+        mode="min",
+    )
 
-            # Map inputs to device
-            vision = batch["vision"].to(device)
-            text = batch["text"].to(device)
-            pointnext = batch["pointnext"].to(device)
-            vggt = batch["vggt"].to(device)
-            tactile = batch["tactile"].to(device)
-            proprioception = batch["proprioception"].to(device)
-            actions = batch["actions"].to(device)
+    # 6. Trainer Execution
+    trainer = pl.Trainer(
+        max_epochs=config["stage2"]["epochs"],
+        accelerator="auto",
+        devices=1,
+        logger=wandb_logger,
+        callbacks=[checkpoint_callback],
+    )
+    trainer.fit(model, train_loader, val_loader)
 
-            batch_size = vision.size(0)
-            horizon = vision.size(1)
-
-            step_losses = []
-            for t in range(horizon - 1):
-                # ComboStoc: Asynchronous time-stepping regularizes cross-modal attention
-                # We inject random masking/noise independently across different streams
-                noise_mask = (
-                    torch.rand(batch_size, 1, device=device)
-                    > config["stage2"]["combostoc_noise_ratio"]
-                )
-
-                # Project current modalities
-                vis_tok = vis_adapter(vision[:, t, :])
-                txt_tok = txt_adapter(text.squeeze(1))
-                pt_tok = pt_adapter(pointnext[:, t, :])
-                vggt_tok = vggt_adapter(vggt[:, t, :])
-
-                # Tactile is now fully active
-                tactile_emb = tactile_adapter(tactile[:, t, :, :])
-                if not noise_mask.all():
-                    # ComboStoc: occasionally mask tactile input to train robustness to contact noise
-                    tactile_emb = tactile_emb * noise_mask.float()
-
-                modality_dict = {
-                    "vision": vis_tok,
-                    "text": txt_tok,
-                    "pointnext": pt_tok,
-                    "vggt": vggt_tok,
-                    "tactile": tactile_emb,
-                    "proprioception": proprioception[:, t, :],
-                }
-                s_t = msat(modality_dict)
-
-                # Ground truth joint torque target at step t
-                a_target = actions[:, t, :]
-
-                # Apply CFM Flow Matching Loss
-                cfm_loss = flow_matcher.get_cfm_loss(a_target, s_t)
-
-                # Apply pycapacity limit constraints to proposed actions during training evaluation
-                with torch.no_grad():
-                    pred_action = flow_matcher.sample(s_t, num_steps=10)
-                    filtered_action = safety_filter.filter_actions(pred_action)
-                    constraint_loss = torch.mean((pred_action - filtered_action) ** 2)
-
-                total_loss = cfm_loss + 0.1 * constraint_loss
-                step_losses.append(total_loss)
-
-            total_step_loss = torch.stack(step_losses).mean()
-            total_step_loss.backward()
-            optimizer.step()
-
-            epoch_loss += total_step_loss.item()
-            batches += 1
-
-        mean_loss = epoch_loss / batches
-        print(f"Epoch {epoch+1:03d} | SFT CFM Loss: {mean_loss:.5f}")
-
-    print("--- STAGE 2 SFT COMPLETE ---")
-    # Save SFT checkpoints
+    # Save final stage2 dict weights
+    final_path = os.path.join(checkpoint_dir, "stage2_sft.pt")
+    print(f"Saving final Stage 2 SFT weights to: {final_path}")
     torch.save(
         {
-            "vis_adapter": vis_adapter.state_dict(),
-            "txt_adapter": txt_adapter.state_dict(),
-            "pt_adapter": pt_adapter.state_dict(),
-            "vggt_adapter": vggt_adapter.state_dict(),
-            "tactile_adapter": tactile_adapter.state_dict(),
-            "msat": msat.state_dict(),
-            "action_adapter": action_adapter.state_dict(),
-            "predictor": predictor.state_dict(),
-            "flow_matcher": flow_matcher.state_dict(),
+            "vis_adapter": model.vis_adapter.state_dict(),
+            "txt_adapter": model.txt_adapter.state_dict(),
+            "pt_adapter": model.pt_adapter.state_dict(),
+            "vggt_adapter": model.vggt_adapter.state_dict(),
+            "tactile_adapter": model.tactile_adapter.state_dict(),
+            "msat": model.msat.state_dict(),
+            "action_adapter": model.action_adapter.state_dict(),
+            "predictor": model.predictor.state_dict(),
+            "flow_matcher": model.flow_matcher.state_dict(),
         },
-        os.path.join(config["paths"]["checkpoint_dir"], "stage2_sft.pt"),
+        final_path,
     )

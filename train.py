@@ -24,9 +24,9 @@ def main(cfg):
     if stage == 1:
         train_stage1(config, use_subset=use_subset)
     elif stage == 2:
-        train_stage2(config)
+        train_stage2(config, use_subset=use_subset)
     elif stage == 3:
-        train_stage3(config)
+        train_stage3(config, use_subset=use_subset)
 
 
 if __name__ == "__main__":
