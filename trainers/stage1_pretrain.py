@@ -169,6 +169,7 @@ class JEPAStage1Module(pl.LightningModule):
 
 class EpochMetricsTableCallback(pl.Callback):
     """Prints a beautiful table with training and validation metrics at the end of each epoch."""
+
     def on_validation_epoch_end(self, trainer, pl_module):
         if trainer.sanity_checking:
             return
@@ -187,13 +188,15 @@ class EpochMetricsTableCallback(pl.Callback):
         def fmt(val):
             return f"{val.item():.5f}" if val is not None else "N/A"
 
-        print(f"\n================ EPOCH {epoch} METRICS SUMMARY ================")
-        print(f"  Metric              | Training    | Validation")
-        print(f"  --------------------+-------------+-------------")
-        print(f"  Loss                | {fmt(train_loss):<11} | {fmt(val_loss):<11}")
-        print(f"  No-Op Ratio         | {fmt(train_noop):<11} | {fmt(val_noop):<11}")
-        print(f"  Action Drift        | {fmt(train_drift):<11} | {fmt(val_drift):<11}")
-        print(f"===============================================================\n")
+        print(
+            f"\n================ EPOCH {epoch} METRICS SUMMARY ================"
+            f"\n  Metric              | Training    | Validation"
+            "\n  --------------------+-------------+-------------"
+            f"\n  Loss                | {fmt(train_loss):<11} | {fmt(val_loss):<11}"
+            f"\n  No-Op Ratio         | {fmt(train_noop):<11} | {fmt(val_noop):<11}"
+            f"\n  Action Drift        | {fmt(train_drift):<11} | {fmt(val_drift):<11}"
+            f"\n===============================================================\n"
+        )
 
 
 def train_stage1(config, use_subset=False):
