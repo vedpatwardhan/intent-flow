@@ -135,19 +135,17 @@ class JEPAStage1Module(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         loss, noop, drift = self(batch)
 
-        # Log training metrics: only step loss goes to the progress bar to avoid wrapping
-        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        # Log training metrics to W&B / logs only (no CLI progress bar log to avoid wrapping, matching le-probe)
+        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=False)
         self.log("train_noop_ratio", noop, on_step=False, on_epoch=True, prog_bar=False)
-        self.log(
-            "train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False
-        )
+        self.log("train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, noop, drift = self(batch)
 
-        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=False)
         self.log("val_noop_ratio", noop, on_epoch=True, prog_bar=False)
         self.log("val_action_drift", drift, on_epoch=True, prog_bar=False)
 
