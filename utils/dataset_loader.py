@@ -11,6 +11,10 @@ class PretrainingDataset(Dataset):
     """
 
     def __init__(self, data_dir, window_size=32, mask_ratio=0.5, use_subset=False):
+        # Auto-resolve "processed" subdirectory if it exists
+        if os.path.exists(os.path.join(data_dir, "processed")):
+            data_dir = os.path.join(data_dir, "processed")
+
         self.data_dir = data_dir
         self.window_size = window_size
         self.mask_ratio = mask_ratio
