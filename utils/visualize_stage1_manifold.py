@@ -3,7 +3,8 @@ import sys
 import argparse
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
@@ -17,7 +18,7 @@ from utils.dataset_loader import PretrainingDataset
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Stage 1 Latent Manifold Harvesting and Visualization"
+        description="Stage 1 Latent Manifold Harvesting and Visualization via Plotly"
     )
     parser.add_argument(
         "--checkpoint",
@@ -34,8 +35,8 @@ def parse_args():
     parser.add_argument(
         "--output_path",
         type=str,
-        default="latent-flow/data/stage1_manifold_analysis.png",
-        help="Path to save output plot",
+        default="latent-flow/data/stage1_manifold_analysis.html",
+        help="Path to save output HTML report",
     )
     return parser.parse_args()
 
@@ -113,7 +114,6 @@ def main():
 
     # Load model configuration & weights
     print(f"Loading checkpoint from: {args.checkpoint}")
-    # Load default Hydra-style parameters
     config = {
         "model": {
             "latent_dim": 512,
@@ -145,27 +145,45 @@ def main():
     print("Harvesting latent trajectories from preprocessed files...")
     sampled_data = collect_latent_trajectories(model, args.data_dir)
 
-    # Initialize plotting layout (9 plots: 3 rows for datasets, 3 columns for PCA, t-SNE, UMAP)
-    fig, axes = plt.subplots(3, 3, figsize=(15, 15))
-    fig.suptitle(
-        "Stage 1 Latent Manifold Projection Analysis", fontsize=18, fontweight="bold"
+    # Initialize Plotly Grid (3x3 Subplots)
+    print("Initializing interactive Plotly canvas...")
+    fig = make_subplots(
+        rows=3,
+        cols=3,
+        subplot_titles=[
+            "Droid - PCA",
+            "Droid - t-SNE",
+            "Droid - UMAP",
+            "CMU - PCA",
+            "CMU - t-SNE",
+            "CMU - UMAP",
+            "PointOdyssey - PCA",
+            "PointOdyssey - t-SNE",
+            "PointOdyssey - UMAP",
+        ],
+        horizontal_spacing=0.07,
+        vertical_spacing=0.08,
     )
 
-    row_mapping = {"Droid (Robot)": 0, "CMU (Human)": 1, "PointOdyssey (Geometry)": 2}
+    row_mapping = {
+        "Droid (Robot)": 1,
+        "CMU (Human)": 2,
+        "PointOdyssey (Geometry)": 3,
+    }
 
     for dataset_name, episodes in sampled_data.items():
         row_idx = row_mapping[dataset_name]
 
-        # Flatten all points in these episodes to run dimension reduction together
-        flat_latents = np.concatenate(episodes, axis=0)  # [TotalPoints, 512]
+        flat_latents = np.concatenate(episodes, axis=0)
 
-        # Track index bounds for color gradient representation
         flat_frame_indices = []
-        for ep in episodes:
-            flat_frame_indices.extend(list(range(ep.shape[0])))
+        hover_labels = []
+        for ep_idx, ep in enumerate(episodes):
+            for f_idx in range(ep.shape[0]):
+                flat_frame_indices.append(f_idx)
+                hover_labels.append(f"Episode {ep_idx} | Frame {f_idx}")
         flat_frame_indices = np.array(flat_frame_indices)
 
-        # Run dimension reductions
         print(f"Running dimension reductions for {dataset_name}...")
         pca_proj = PCA(n_components=2).fit_transform(flat_latents)
         tsne_proj = TSNE(n_components=2, perplexity=15, random_state=42).fit_transform(
@@ -175,58 +193,68 @@ def main():
             n_components=2, n_neighbors=15, min_dist=0.1, random_state=42
         ).fit_transform(flat_latents)
 
-        # Plots for PCA (Col 0)
-        ax_pca = axes[row_idx, 0]
-        sc_pca = ax_pca.scatter(
-            pca_proj[:, 0],
-            pca_proj[:, 1],
-            c=flat_frame_indices,
-            cmap="plasma",
-            edgecolors="none",
-            alpha=0.8,
-            s=15,
+        # Plot PCA
+        fig.add_trace(
+            go.Scatter(
+                x=pca_proj[:, 0],
+                y=pca_proj[:, 1],
+                mode="markers",
+                marker=dict(
+                    size=6,
+                    color=flat_frame_indices,
+                    colorscale="Plasma",
+                    showscale=(row_idx == 1),
+                ),
+                text=hover_labels,
+                hoverinfo="text",
+                name=f"{dataset_name} PCA",
+            ),
+            row=row_idx,
+            col=1,
         )
-        ax_pca.set_title(f"{dataset_name} - PCA")
-        ax_pca.set_xlabel("PC 1")
-        ax_pca.set_ylabel("PC 2")
-        fig.colorbar(sc_pca, ax=ax_pca, label="Frame Index")
 
-        # Plots for t-SNE (Col 1)
-        ax_tsne = axes[row_idx, 1]
-        sc_tsne = ax_tsne.scatter(
-            tsne_proj[:, 0],
-            tsne_proj[:, 1],
-            c=flat_frame_indices,
-            cmap="plasma",
-            edgecolors="none",
-            alpha=0.8,
-            s=15,
+        # Plot t-SNE
+        fig.add_trace(
+            go.Scatter(
+                x=tsne_proj[:, 0],
+                y=tsne_proj[:, 1],
+                mode="markers",
+                marker=dict(size=6, color=flat_frame_indices, colorscale="Plasma"),
+                text=hover_labels,
+                hoverinfo="text",
+                name=f"{dataset_name} t-SNE",
+            ),
+            row=row_idx,
+            col=2,
         )
-        ax_tsne.set_title(f"{dataset_name} - t-SNE")
-        ax_tsne.set_xlabel("Dimension 1")
-        ax_tsne.set_ylabel("Dimension 2")
-        fig.colorbar(sc_tsne, ax=ax_tsne, label="Frame Index")
 
-        # Plots for UMAP (Col 2)
-        ax_umap = axes[row_idx, 2]
-        sc_umap = ax_umap.scatter(
-            umap_proj[:, 0],
-            umap_proj[:, 1],
-            c=flat_frame_indices,
-            cmap="plasma",
-            edgecolors="none",
-            alpha=0.8,
-            s=15,
+        # Plot UMAP
+        fig.add_trace(
+            go.Scatter(
+                x=umap_proj[:, 0],
+                y=umap_proj[:, 1],
+                mode="markers",
+                marker=dict(size=6, color=flat_frame_indices, colorscale="Plasma"),
+                text=hover_labels,
+                hoverinfo="text",
+                name=f"{dataset_name} UMAP",
+            ),
+            row=row_idx,
+            col=3,
         )
-        ax_umap.set_title(f"{dataset_name} - UMAP")
-        ax_umap.set_xlabel("Dimension 1")
-        ax_umap.set_ylabel("Dimension 2")
-        fig.colorbar(sc_umap, ax=ax_umap, label="Frame Index")
 
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.update_layout(
+        title="Stage 1 Latent Manifold Projection Analysis",
+        title_x=0.5,
+        width=1200,
+        height=1200,
+        showlegend=False,
+        template="plotly_dark",
+    )
+
     os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-    plt.savefig(args.output_path, dpi=150)
-    print(f"Saved manifold projection plot successfully to: {args.output_path}")
+    fig.write_html(args.output_path)
+    print(f"Saved interactive Plotly manifold analysis to: {args.output_path}")
 
 
 if __name__ == "__main__":
