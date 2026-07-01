@@ -1,5 +1,8 @@
 # LatentFlow Global Configuration
 
+stage: null
+use_subset: false
+
 model:
   latent_dim: 512
   num_heads: 8
