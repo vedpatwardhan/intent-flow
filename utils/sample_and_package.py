@@ -100,7 +100,7 @@ def sample_and_package(
                 data = torch.load(target_pt, map_location="cpu")
                 expected_keys = {
                     "vision": 384,
-                    "text": 768,
+                    "text": 512,
                     "pointnext": 384,
                     "vggt": 768,
                     "tactile": (4, 4),
@@ -118,7 +118,7 @@ def sample_and_package(
                     seq_len = data["vision"].shape[0]
 
                     if key == "text":
-                        expected_shape = [1, 768]
+                        expected_shape = [1, 512]
                     elif key == "tactile":
                         expected_shape = [seq_len, 4, 4]
                     else:

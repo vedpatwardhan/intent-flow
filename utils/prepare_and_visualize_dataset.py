@@ -259,7 +259,7 @@ def prepare_stream_b_cmu(raw_data_dir):
 
 
 def prepare_stream_c_pointodyssey(raw_data_dir):
-    """Downloads the PointOdyssey sample zip, extracts the frames + true 3D point tracks (10% of mix)."""
+    """Downloads the PointOdyssey sample zip, extracts, and slices it into 300-frame sub-episodes (10% of mix)."""
     print(f"\n--- Loading Stream C: PointOdyssey ---")
 
     # Audit existing geometry folders
@@ -313,17 +313,13 @@ def prepare_stream_c_pointodyssey(raw_data_dir):
                 "[PointOdyssey] Extraction succeeded, but no anno.npz files were found."
             )
 
-        num_geom_episodes = len(annos)
         print(
-            f"[PointOdyssey] Found {num_geom_episodes} sequences. Restructuring all..."
+            f"[PointOdyssey] Found {len(annos)} sequences. Chunking into 300-frame sub-episodes..."
         )
 
-        # Step 4: Map coordinates and extract RGB frames
+        # Step 4: Map coordinates and extract RGB frames in 300-frame chunks
         for ep_idx, anno_path in enumerate(annos):
             ep_dir = os.path.dirname(anno_path)
-            target_ep_dir = os.path.join(raw_data_dir, f"geometry_ep{ep_idx:02d}")
-            target_frame_dir = os.path.join(target_ep_dir, "frames")
-            os.makedirs(target_frame_dir, exist_ok=True)
 
             # Load true 3D point cloud tracks
             anno_data = np.load(anno_path)
@@ -332,21 +328,11 @@ def prepare_stream_c_pointodyssey(raw_data_dir):
                     f"[PointOdyssey] Annotation missing 'trajs_3d' key. Found: {list(anno_data.keys())}"
                 )
 
-            trajs_3d = anno_data["trajs_3d"]  # Shape: [Frames, NumPoints, 3]
+            trajs_3d = anno_data["trajs_3d"]  # Shape: [TotalFrames, NumPoints, 3]
             num_frames = trajs_3d.shape[0]
             num_pts_source = trajs_3d.shape[1]
 
-            # Subsample 100 points and pad with 1.0 intensity channel to match PointNeXt
-            sampled_indices = np.random.choice(
-                num_pts_source, min(100, num_pts_source), replace=False
-            )
-            trajs_sampled = trajs_3d[:, sampled_indices, :]
-            intensity = np.ones((num_frames, 100, 1), dtype=np.float32)
-            pts3d_padded = np.concatenate([trajs_sampled, intensity], axis=2)
-
-            np.save(os.path.join(target_ep_dir, "point_clouds.npy"), pts3d_padded)
-
-            # Find and copy RGB frame images case-insensitively
+            # Find RGB frame images case-insensitively
             rgb_files = sorted(
                 [
                     f
@@ -355,33 +341,70 @@ def prepare_stream_c_pointodyssey(raw_data_dir):
                 ]
             )
 
-            for i, img_path in enumerate(rgb_files):
-                img = Image.open(img_path).convert("RGB").resize((224, 224))
-                img.save(os.path.join(target_frame_dir, f"frame_{i:04d}.png"))
+            # Chunk into segments of 250 frames
+            chunk_len = 250
+            num_chunks = int(np.ceil(num_frames / chunk_len))
 
-            # Write zero-masked action, state, and tactile files
-            np.save(
-                os.path.join(target_ep_dir, "actions.npy"),
-                np.zeros((num_frames, 12), dtype=np.float32),
-            )
-            np.save(
-                os.path.join(target_ep_dir, "states.npy"),
-                np.zeros((num_frames, 24), dtype=np.float32),
-            )
-            np.save(
-                os.path.join(target_ep_dir, "tactile.npy"),
-                np.zeros((num_frames, 4, 4), dtype=np.float32),
-            )
+            for chunk_idx in range(num_chunks):
+                start_f = chunk_idx * chunk_len
+                end_f = min(start_f + chunk_len, num_frames)
+                curr_chunk_len = end_f - start_f
+
+                # Sub-episode raw folder naming
+                target_ep_dir = os.path.join(
+                    raw_data_dir, f"geometry_ep{ep_idx:02d}_chunk{chunk_idx:02d}"
+                )
+                target_frame_dir = os.path.join(target_ep_dir, "frames")
+                os.makedirs(target_frame_dir, exist_ok=True)
+
+                # Slice coordinates and sub-sample 100 points
+                trajs_chunk = trajs_3d[start_f:end_f]
+                sampled_indices = np.random.choice(
+                    num_pts_source, min(100, num_pts_source), replace=False
+                )
+                trajs_sampled = trajs_chunk[:, sampled_indices, :]
+                intensity = np.ones((curr_chunk_len, 100, 1), dtype=np.float32)
+                pts3d_padded = np.concatenate([trajs_sampled, intensity], axis=2)
+
+                np.save(os.path.join(target_ep_dir, "point_clouds.npy"), pts3d_padded)
+
+                # Copy frame images for this sub-episode chunk
+                chunk_rgb_files = rgb_files[start_f:end_f]
+                for i, img_path in enumerate(chunk_rgb_files):
+                    img = Image.open(img_path).convert("RGB").resize((224, 224))
+                    img.save(os.path.join(target_frame_dir, f"frame_{i:04d}.png"))
+
+                # Write zero-masked action, state, and tactile files
+                np.save(
+                    os.path.join(target_ep_dir, "actions.npy"),
+                    np.zeros((curr_chunk_len, 12), dtype=np.float32),
+                )
+                np.save(
+                    os.path.join(target_ep_dir, "states.npy"),
+                    np.zeros((curr_chunk_len, 24), dtype=np.float32),
+                )
+                np.save(
+                    os.path.join(target_ep_dir, "tactile.npy"),
+                    np.zeros((curr_chunk_len, 4, 4), dtype=np.float32),
+                )
 
         # Step 5: Clean up temp extraction folder
         print("[PointOdyssey] Cleaning up raw unpacked sample folder...")
         shutil.rmtree("latent-flow/data/sample", ignore_errors=True)
-    else:
-        num_geom_episodes = len(geometry_ep_dirs)
+
+    # Re-evaluate geometry directory list for validation
+    geometry_ep_dirs = sorted(
+        [
+            d
+            for d in os.listdir(raw_data_dir)
+            if d.startswith("geometry_ep")
+            and os.path.isdir(os.path.join(raw_data_dir, d))
+        ]
+    )
 
     # Validate output folder contents
-    for ep_idx in range(num_geom_episodes):
-        geometry_raw_dir = os.path.join(raw_data_dir, f"geometry_ep{ep_idx:02d}")
+    for ep_name in geometry_ep_dirs:
+        geometry_raw_dir = os.path.join(raw_data_dir, ep_name)
         frame_dir_geom = os.path.join(geometry_raw_dir, "frames")
 
         actions_file = os.path.join(geometry_raw_dir, "actions.npy")
@@ -407,7 +430,7 @@ def prepare_stream_c_pointodyssey(raw_data_dir):
             )
 
     print(
-        f"[PointOdyssey] Structured PointOdyssey stream ({num_geom_episodes} episodes)."
+        f"[PointOdyssey] Structured PointOdyssey stream ({len(geometry_ep_dirs)} episodes)."
     )
 
 

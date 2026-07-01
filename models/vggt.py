@@ -68,12 +68,19 @@ class VGGTEncoder(nn.Module):
 
         # Flatten time and batch dimensions to run visual feature extraction
         x_flat = x.view(batch_size * seq_len, c, h, w)
-        features = self.patch_embed(x_flat)  # [Batch*SeqLen, 256, 8, 8]
-        features = features.flatten(2).transpose(1, 2)  # [Batch*SeqLen, 64, 256]
-        features = self.proj(features)  # [Batch*SeqLen, 64, FeatureDim]
 
-        # Average pool spatial tokens to get sequence representation per frame
-        features = features.mean(dim=1)  # [Batch*SeqLen, FeatureDim]
+        # Batch spatial visual feature extraction to avoid CUDA OOM on long sequences
+        chunk_size = 64
+        all_features = []
+        for i in range(0, x_flat.size(0), chunk_size):
+            x_chunk = x_flat[i : i + chunk_size]
+            feat_chunk = self.patch_embed(x_chunk)  # [Chunk, 256, 8, 8]
+            feat_chunk = feat_chunk.flatten(2).transpose(1, 2)  # [Chunk, 64, 256]
+            feat_chunk = self.proj(feat_chunk)  # [Chunk, 64, FeatureDim]
+            feat_chunk = feat_chunk.mean(dim=1)  # [Chunk, FeatureDim]
+            all_features.append(feat_chunk)
+
+        features = torch.cat(all_features, dim=0)  # [Batch*SeqLen, FeatureDim]
         features = features.view(batch_size, seq_len, -1)  # [Batch, SeqLen, FeatureDim]
 
         # Apply spatio-temporal self-attention across frames
