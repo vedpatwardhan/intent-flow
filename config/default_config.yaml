@@ -32,6 +32,10 @@ stage2:
   epochs: 50
   flow_steps: 100
   combostoc_noise_ratio: 0.2
+  dit_hidden_dim_1: 128
+  dit_hidden_dim_2: 256
+  dit_hidden_dim_3: 512
+
 
 stage3:
   lr: 0.0001

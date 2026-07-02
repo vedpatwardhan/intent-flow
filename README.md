@@ -8,34 +8,34 @@ The diagram below highlights the main architectural components and their core re
 
 ```
                                [ USER INPUT ]
-       ┌──────────────┬──────────────┬──────────────┬──────────────┐
-       │ (Text Inst)  │ (2D Frames)  │ (3D Cloud)   │ (Tactile/Prop)
-       ▼              ▼              │              ▼              ▼
- ┌───────────┐  ┌───────────┐        │ (Click)      │        ┌───────────┐
- │ CLIP Text │  ├─► DINOv3  │        ▼              │        │ Sensor IO │
- └─────┬─────┘  │           │   ┌───────────┐       │        └─────┬─────┘
+       ┌──────────────┬───────────────┬─────────────┬──────────────┐
+       │(Text Inst)   │(2D Frames)    │(3D Cloud)   │(Tactile/Prop)│
+       │              │               │             │              │
+ ┌─────▼─────┐  ┌─────▼─────┐         │ (Click)     ▼        ┌─────▼─────┐
+ │ CLIP Text │  ├─► DINOv3  │         │             │        │ Sensor IO │
+ └─────┬─────┘  │           │   ┌─────▼─────┐       │        └─────┬─────┘
        │        ├─► VGGT    ├──►│ SAM & KLT │       │              │
        │        └─────┬─────┘   └─────┬─────┘       │              │
        │              │         ┌─────▼─────┐       │              │
        │              │         │ PointNeXt │◄──────┘              │
        │              │         └─────┬─────┘                      │
-       ▼              ▼               ▼                            ▼
- ┌──────────────────────────────────────────────────────────────────┐
+       │              │               │                            │
+ ┌─────▼──────────────▼───────────────▼────────────────────────────▼┐
  │ 2. TRAINABLE MLP ADAPTERS (Text, DINO, VGGT, PointNeXt, Tactile) │
  └───────────────────────────────┬──────────────────────────────────┘
-                                 ▼ (Shared 512-dim tokens)
- ┌──────────────────────────────────────────────────────────────────┐
+                                 │ (Shared 512-dim tokens)
+ ┌───────────────────────────────▼──────────────────────────────────┐
  │ 3. MSAT CROSS-ATTENTION FUSION LAYER                             │
  └───────────────────────────────┬──────────────────────────────────┘
-                                 ▼ (Unified State s_t)
- ┌──────────────────────────────────────────────────────────────────┐
+                                 │ (Unified State s_t)
+ ┌───────────────────────────────▼──────────────────────────────────┐
  │ 4. CORE LATENT MODELS (Learnable Dynamics & Policy)              │
  │    ┌────────────────────────────────────────────────────────┐    │
  │    │              JEPA World Predictor (EBM)                │    │
  │    └───────────────────────────▲───┬────────────────────────┘    │
  │                                │   │ (DAWN Reciprocity Loop)     │
  │                   [ Action Adapter (f_action) ]                  │
- │                                ▲   │                             │
+ │                                │   │                             │
  │    ┌───────────────────────────┴───▼────────────────────────┐    │
  │    │        Flow-Matching Action Denoiser (CLAP-RF)         │    │
  │    └───────────────────────────▲───┬────────────────────────┘    │
@@ -286,7 +286,7 @@ The following blueprint details the sequence of training stages, mapping the arc
 | Stage & Active Components | Inputs / Outputs | Objectives & Losses | Outcomes | Validation Checks (Gatekeepers) |
 | :--- | :--- | :--- | :--- | :--- |
 | **Stage 1: Pre-training** *(Zero-Shot prior)*<br><br>**Active Components**:<br>• Frozen Encoders (DINOv3, CLIP, PointNeXt, VGGT)<br>• JEPA Latent Predictor | **Inputs**: Raw video streams (human + robot), multi-view static frames, point clouds.<br>**Outputs**: Target and predicted latent states ($z_t, \hat{z}_{t+1:t+H}$). | • **Zero-Shot Encoders**: Weights loaded from public pre-trained checkpoints (DINOv3, CLIP, VGGT).<br>• **JEPA Latent Predictor Loss**: Minimizes next-step latent transition error $D(\hat{s}_y, s_y)$ over the frozen representation space. | • Builds a structured latent dynamics manifold ("directional highway").<br>• Establishes zero-shot priors for spatial waypoints, visual object interaction, and language instruction grounding. | • **"No-Op" Loss Ratio** $< 0.2$ (verifies the dynamics model isn't copy-pasting).<br>• **Action Perturbation Drift** $> \delta$ (verifies predictor is sensitive to action inputs).<br>• **Multi-Step Rollout MSE** remains stable up to $H=10$. |
-| **Stage 2: SFT / Mid-training** *(Action Grounding)*<br><br>**Active Components**:<br>• Flow-Matching Action Denoiser (CLAP-RF)<br>• Trainable MLP Adapters<br>• Tactile/Proprioceptive stream<br>• `pycapacity` Task-Space filter | **Inputs**: Latent states ($z_t$), target spatial waypoints, joint angles/torques, tactile arrays.<br>**Outputs**: Generated multi-step joint trajectory ($a_{t:t+H}$). | • **Conditional Flow Matching (CFM) Loss**: Regresses predicted velocity fields $v_\theta$ to match target trajectories.<br>• **Adapter Mapping Loss**: Trains lightweight MLPs to map DINO/CLIP features into robot dynamics space. | • Binds the abstract world model dynamics to the concrete physical embodiment.<br>• Instructs the model how to propose kinematically feasible trajectories within workspace polytope boundaries. | • **CFM Val Loss** converges below target threshold.<br>• **Workspace Polytope Violation Rate** $= 0\%$ (using the `pycapacity` filter).<br>• **Basic Reaching Success** $\ge 80\%$ (open-loop in sim). |
+| **Stage 2: SFT / Mid-training** *(Action Grounding)*<br><br>**Active Components**:<br>• Hierarchical Block DiT Flow Matcher<br>• Trainable MLP Adapters<br>• Tactile/Proprioceptive stream<br>• `pycapacity` Task-Space filter | **Inputs**: Latent states ($s_t$), target state ($s_{\text{target}}$), joint angles/torques, tactile arrays.<br>**Outputs**: Generated multi-step joint trajectory ($a_{t:t+H}$). | • **Conditional Flow Matching (CFM) Loss**: Regresses predicted velocity fields $v_\theta(x_t, t, s_t, s_{\text{target}})$ to match target trajectories.<br>• **CASA Loss**: Contrastive InfoNCE alignment between states and actions. | • Binds the abstract world model dynamics to the concrete physical embodiment.<br>• Instructs the model how to propose kinematically feasible trajectories within workspace polytope boundaries. | • **CFM Val Loss** converges below target threshold.<br>• **Workspace Polytope Violation Rate** $= 0\%$ (using the `pycapacity` filter).<br>• **Basic Reaching Success** $\ge 80\%$ (open-loop in sim). |
 | **Stage 3: RL & Exploration** *(Behavior Tuning)*<br><br>**Active Components**:<br>• RAM (Reinforce Adjoint Matching)<br>• Discriminator ($D_\psi$)<br>• d-OPSD / PF-OPSD<br>• EBT-Policy (MCMC / Langevin)<br>• RATs Task Proposer | **Inputs**: On-policy simulator states, dense progress rewards, adversarial perturbations.<br>**Outputs**: Fine-tuned flow fields, programmatic skills in library. | • **RAM Velocity Correction Loss**: Direct regression weighting of flow based on scalar rewards.<br>• **Contrastive Energy Loss**: Minimizes prediction error for successes; maximizes ($E \to \infty$) for failures. | • Aligns policies to perform high-precision grasp, pinch, and lift operations.<br>• Develops robust recovery skills from catastrophic failures through self-distillation.<br>• Populates the latent skill library autonomously. | • **Custom Task Success Rate** $\ge 90\%$ (grasp, lift, place success).<br>• **Energy Delta** (Clear separation: $E_{\text{fail}} \gg E_{\text{success}}$).<br>• **d-OPSD Recovery Rate** $\ge 90\%$ under active physical perturbations. |
 
 ---
@@ -307,7 +307,7 @@ For human videos or diverse robot trajectories lacking joint positions, we emplo
 Once the world model understands latent transitions, we introduce the embodiment-specific joint command dataset.
 
 * **Expert Dataset Grounding**: We introduce embodiment-specific teleoperated datasets containing paired camera frames and joint commands. (See Section 8 for specific dataset details).
-* **Action Adapter Mapping**: The **CLAP-RF Flow Matching model** is trained to map these latent transitions ($z_t \rightarrow z_{t+1}$) to the specific joint values (actions/torques) of the target humanoid embodiment via the Action Adapter ($f_{\text{action}}$).
+* **Hierarchical Block DiT Flow Matching**: The flow-matching model uses a **3-block Hierarchical Diffusion Transformer (DiT)** with **autoregressive block dependencies** (Block 1 macro anchors constrain Block 2 motion primitives, which in turn constrain Block 3 joint trajectories). It is trained using dual-state conditioning (current state $s_t$ and target state $s_{\text{target}}$) to map target transitions to concrete execution coordinates.
 * **Unified Limits**: For transferability across different robot setups in `datasets.bot`, we map joint spaces into a unified **Task-Space Polytope representation** (via `pycapacity` Cartesian 6DoF limits) during pre-training, only mapping to low-level actuator torques during final post-training.
 * **ComboStoc Asynchronous Training**: During CFM training, instead of adding synchronous noise to all attributes of a sample, we utilize the **ComboStoc (arXiv:2405.13729)** paradigm by vectorizing flow steps asynchronously across different input dimensions (e.g. vision, text, joints, tactile). This trains the model to perform highly robust conditional flow generation, enabling it to clean up noisy modal inputs (like occluded vision or unstable touch feedback) by conditioning on the cleaner, aligned dimensions.
 
@@ -643,6 +643,14 @@ The table below highlights what modalities are present in each dataset stream, a
     *   *Role*: Trains the Flow-Matching action head and Action Adapter to command coordinated joint trajectories.
 *   **UT Austin Sort & NYU Door/Drawer Opening (OXE)**:
     *   Provides specific demonstration trajectories for target pick-and-place and sliding-door operations.
+*   **T-REX Contact-Rich Tactile Dataset (`zekaiwang/trex_dataset`)**:
+    *   Provides high-frequency tactile arrays (4x4 fingertip contact pressure vectors).
+    *   *Role*: Trains the tactile adapter to align touch sensor forces with visual-motor trajectories during contact events.
+*   **Fourier ActionNet Humanoid Dataset (`lerobot/fourier_actionnet`)**:
+    *   Provides paired vision-motor demonstration trajectories collected directly on Fourier GR-1 hardware.
+    *   *Role*: Directly grounds control policy in the humanoid joint limits, morphology, and dynamics.
+
+
 
 ### C. Stage 3: RL & Tactile Alignment
 *   **Genesis/MuJoCo Simulation Rollouts**:
@@ -676,11 +684,34 @@ python latent-flow/utils/sample_and_package.py --raw_dir latent-flow/data/raw --
 Optimizes transition predictive dynamics inside the V-JEPA transformer core, logging checkpoints and curves to PyTorch Lightning and W&B.
 * **Diagnostic Check (Subset of 5 episodes, fast verification)**:
   ```bash
-  python latent-flow/train.py --stage 1 --use_subset --config latent-flow/config/default_config.yaml
+  python latent-flow/train.py stage=1 use_subset=true
   ```
-* **Full Pre-training Run**:
+* **Full Pre-training Run (Colab GPU Only)**:
   ```bash
-  python latent-flow/train.py --stage 1 --config latent-flow/config/default_config.yaml
+  python latent-flow/train.py stage=1
   ```
+
+### 4. Stage 2 Dataset Preparation
+Downloads/streams and preprocesses the ALOHA and T-REX datasets.
+* **CPU / Mock Mode Run (Dry-run)**:
+  ```bash
+  PYTHONPATH=latent-flow python latent-flow/utils/prepare_stage2_dataset.py
+  ```
+* **GPU Run (Extracts real foundation features on CUDA)**:
+  ```bash
+  PYTHONPATH=latent-flow python latent-flow/utils/prepare_stage2_dataset.py --enable_encoders
+  ```
+
+### 5. Stage 2 SFT & Action Grounding
+Joint SFT fine-tuning of adapters, MSAT, Predictor, and the dual-state Hierarchical DiT Flow Matcher.
+* **Diagnostic Check (Subset, fast verification)**:
+  ```bash
+  python latent-flow/train.py stage=2 use_subset=true
+  ```
+* **Full SFT Run (Colab GPU Only)**:
+  ```bash
+  python latent-flow/train.py stage=2
+  ```
+
 
 

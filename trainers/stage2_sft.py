@@ -48,7 +48,9 @@ class Stage2SFTSimplified(pl.LightningModule):
 
         self.msat = MultiStreamActionTransformer()
         self.predictor = JepaPredictor(action_dim=512)
-        self.flow_matcher = CLAPFlowMatcher(action_dim=config["model"]["action_dim"])
+        self.flow_matcher = CLAPFlowMatcher(
+            action_dim=config["model"]["action_dim"], config=config
+        )
         self.safety_filter = SafetyFilter(urdf_path=config["paths"]["urdf_path"])
 
     def forward(self, batch):
@@ -65,6 +67,24 @@ class Stage2SFTSimplified(pl.LightningModule):
 
         step_losses = []
         casa_losses = []
+
+        # Compute s_target (goal configuration state) at the end of the window (horizon - 1)
+        t_target = horizon - 1
+        vis_tok_tgt = self.vis_adapter(vision[:, t_target, :])
+        txt_tok_tgt = self.txt_adapter(text.squeeze(1))
+        pt_tok_tgt = self.pt_adapter(pointnext[:, t_target, :])
+        vggt_tok_tgt = self.vggt_adapter(vggt[:, t_target, :])
+        tactile_emb_tgt = self.tactile_adapter(tactile[:, t_target, :, :])
+
+        modality_dict_tgt = {
+            "vision": vis_tok_tgt,
+            "text": txt_tok_tgt,
+            "pointnext": pt_tok_tgt,
+            "vggt": vggt_tok_tgt,
+            "tactile": tactile_emb_tgt,
+            "proprioception": proprioception[:, t_target, :],
+        }
+        s_target = self.msat(modality_dict_tgt)
 
         # Iterate step-by-step to compute CFM + CASA alignment
         for t in range(horizon - 1):
@@ -99,8 +119,8 @@ class Stage2SFTSimplified(pl.LightningModule):
             # Ground truth joint target at step t
             a_target = actions[:, t, :]
 
-            # CFM Loss
-            cfm_loss = self.flow_matcher.get_cfm_loss(a_target, s_t)
+            # CFM Loss with dual-state conditioning
+            cfm_loss = self.flow_matcher.get_cfm_loss(a_target, s_t, s_target)
 
             # CASA Contrastive Alignment (InfoNCE)
             # Projects target action and state into unified latent alignment space
@@ -116,7 +136,7 @@ class Stage2SFTSimplified(pl.LightningModule):
 
             # Safety filter constraint loss evaluation
             with torch.no_grad():
-                pred_action = self.flow_matcher.sample(s_t, num_steps=10)
+                pred_action = self.flow_matcher.sample(s_t, s_target, num_steps=10)
                 filtered_action = self.safety_filter.filter_actions(pred_action)
                 constraint_loss = torch.mean((pred_action - filtered_action) ** 2)
 
