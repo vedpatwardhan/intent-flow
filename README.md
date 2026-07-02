@@ -39,31 +39,16 @@ The diagram below highlights the main architectural components and their core re
  │    ┌───────────────────────────┴───▼────────────────────────┐    │
  │    │        Flow-Matching Action Denoiser (CLAP-RF)         │    │
  │    └───────────────────────────▲───┬────────────────────────┘    │
- └────────────────────────────────║───║──────────────────────────────┘
+ └────────────────────────────────║───║─────────────────────────────┘
                                   ║   ║ (Proposed Actions)
                                   ║   ▼
- ┌────────────────────────────────║───║──────────────────────────────┐
+ ┌────────────────────────────────║───║─────────────────────────────┐
  │ 5. SAFETY & FEASIBILITY REGULATORS                               │
  │    pycapacity Workspace Polytope ──► EBT Safeguards (Langevin)   │
  └──────────────────────────────────────────────────────────────────┘
-```��──────────────────────────┘    │
- │                                   │   │ (DAWN Reciprocity Loop)          │
- │                      [ Action Adapter (f_action) ]                       │
- │                                   ▲   │                                  │
- │    ┌──────────────────────────────┴───▼─────────────────────────────┐    │
- │    │           Flow-Matching Action Denoiser (CLAP-RF)              │    │
- │    └──────────────────────────────▲───┬─────────────────────────────┘    │
- └───────────────────────────────────║───║──────────────────────────────────┘
-                                     ║   ║
-                   (Refined Actions) ║   ║ (Proposed Actions)
-                                     ║   ▼
- ┌───────────────────────────────────╩───╩──────────────────────────────────┐
- │ 4. SAFETY & FEASIBILITY REGULATORS                                       │
- │    pycapacity Workspace Polytope ──► EBT Safeguards (Langevin / MCMC)    │
- └──────────────────────────────────────────────────────────────────────────┘
 
  ┌────────────────────────────────────────┐ ┌───────────────────────────────┐
- │ 5. HYBRID MEMORY TRIAD                 │ │ 6. MODULAR SKILL CHAINING     │
+ │ 6. HYBRID MEMORY TRIAD                 │ │ 7. MODULAR SKILL CHAINING     │
  │  - Short-Term Context (Sliding Window) │ │  - d-OPSD Self-Distillation   │
  │  - Event Boundary (Full Latents)       │ │  - RATs Task Proposer         │
  │  - Long-Range Gist (HyDRA Tokens)      │ │  - PSN Skill Library          │
