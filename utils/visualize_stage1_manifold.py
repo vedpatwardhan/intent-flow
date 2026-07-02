@@ -1,4 +1,5 @@
 import os
+from tqdm import tqdm
 import sys
 import argparse
 import torch
@@ -12,7 +13,7 @@ import umap
 # Path stabilization
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from trainers.stage1_pretrain import Stage1PretrainModule
+from trainers.stage1_pretrain import JEPAStage1Module
 from utils.dataset_loader import PretrainingDataset
 
 
@@ -51,7 +52,7 @@ def collect_latent_trajectories(model, data_dir):
     categories = {"Droid (Robot)": [], "CMU (Human)": [], "PointOdyssey (Geometry)": []}
 
     # Track which file belongs to which category
-    for fname in sorted(os.listdir(dataset.data_dir)):
+    for fname in tqdm(sorted(os.listdir(dataset.data_dir))):
         if not fname.endswith(".pt"):
             continue
         try:
@@ -133,7 +134,7 @@ def main():
         },
     }
 
-    model = Stage1PretrainModule(config).to(device)
+    model = JEPAStage1Module(config).to(device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     if "state_dict" in checkpoint:
         model.load_state_dict(checkpoint["state_dict"])
@@ -179,9 +180,12 @@ def main():
         flat_frame_indices = []
         hover_labels = []
         for ep_idx, ep in enumerate(episodes):
-            for f_idx in range(ep.shape[0]):
-                flat_frame_indices.append(f_idx)
-                hover_labels.append(f"Episode {ep_idx} | Frame {f_idx}")
+            ep_len = ep.shape[0]
+            for f_idx in range(ep_len):
+                # Calculate relative color completion percentage [0.0, 1.0] for this episode
+                rel_val = f_idx / (ep_len - 1) if ep_len > 1 else 0.0
+                flat_frame_indices.append(rel_val)
+                hover_labels.append(f"Episode {ep_idx} | Frame {f_idx}/{ep_len}")
         flat_frame_indices = np.array(flat_frame_indices)
 
         print(f"Running dimension reductions for {dataset_name}...")
