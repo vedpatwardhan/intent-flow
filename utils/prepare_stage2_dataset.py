@@ -35,9 +35,9 @@ def flatten_dataframe_columns(df_subset, cols):
     return np.array(rows_list, dtype=np.float32)
 
 
-def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.30):
-    """Downloads and structures the ALOHA mobile cabinet dataset (30% of mix)."""
-    print("\n--- Preparing ALOHA Dataset (30% of mix) ---")
+def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
+    """Downloads and structures the ALOHA mobile cabinet dataset (70% of mix)."""
+    print("\n--- Preparing ALOHA Dataset (70% of mix) ---")
     aloha_dir = os.path.join(raw_dir, "aloha")
     os.makedirs(aloha_dir, exist_ok=True)
 
@@ -55,21 +55,15 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     print(f"[ALOHA] Num Episodes: {dataset.num_episodes}")
     print(f"[ALOHA] Views: {views}")
 
-    # Calculate number of episodes to achieve 30% of total mixture
-    # Assuming total target frames ~100k, ALOHA should contribute ~30k frames
-    # Average ALOHA episode length ~100 frames
-    target_frames = 30000 if not use_subset else 200
-    avg_ep_len = 100
-    num_episodes = min(target_frames // avg_ep_len, dataset.num_episodes)
-    if use_subset:
-        num_episodes = 2
-
+    # Assuming total target frames ~100k, ALOHA should contribute ~70k frames
+    target_frames = (100000 if not use_subset else 10000) * target_ratio
     print(
-        f"[ALOHA] Processing {num_episodes} episodes for {target_ratio*100}% of mixture..."
+        f"[ALOHA] Processing episodes for {target_ratio*100}%"
+        f" of mixture = {target_frames} frames..."
     )
 
     # Extract actual episodes
-    ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))[:num_episodes]
+    ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))
 
     for ep_idx, ep in enumerate(ep_indices):
         ep_dir = os.path.join(aloha_dir, f"episode_{ep_idx:02d}")
@@ -127,14 +121,17 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         print(
             f"[ALOHA] Processed episode {ep_idx}/{len(ep_indices)}: {curr_len} frames"
         )
+        target_frames -= curr_len
+        if target_frames <= 0:
+            break
 
     print(f"[ALOHA] Successfully prepared {len(ep_indices)} episodes.")
     return aloha_dir
 
 
-def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.20):
-    """Prepares the T-REX tactile-rich dataset (20% of mix) with streaming."""
-    print("\n--- Preparing T-REX Tactile Dataset (20% of mix) ---")
+def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
+    """Prepares the T-REX tactile-rich dataset (30% of mix) with streaming."""
+    print("\n--- Preparing T-REX Tactile Dataset (30% of mix) ---")
     trex_dir = os.path.join(raw_dir, "trex")
     os.makedirs(trex_dir, exist_ok=True)
 
@@ -147,16 +144,11 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.20):
     # Contains 3 RGB cameras, 10 raw tactile, deformation tactile videos
     # Total size: 1.53 TB
 
-    # Calculate number of episodes to achieve 20% of total mixture
-    # Assuming total target frames ~100k, T-REX should contribute ~20k frames
-    target_frames = 20000 if not use_subset else 150
-    avg_ep_len = 100
-    num_episodes = target_frames // avg_ep_len
-    if use_subset:
-        num_episodes = 2
-
+    # Assuming total target frames ~100k, T-REX should contribute ~30k frames
+    target_frames = (100000 if not use_subset else 10000) * target_ratio
     print(
-        f"[T-REX] Processing {num_episodes} episodes for {target_ratio*100}% of mixture..."
+        f"[T-REX] Processing episodes for {target_ratio*100}%"
+        f" of mixture = {target_frames} frames..."
     )
     print(
         f"[T-REX] Dataset contains tactile information (10 raw tactile + deformation tactile)"
@@ -173,10 +165,6 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.20):
         parquet_files = [f for f in files if f.endswith(".parquet")]
         video_files = [f for f in files if f.endswith(".mp4")]
 
-        if not parquet_files:
-            print("[T-REX] No parquet files found, using mock structure for testing")
-            return _prepare_trex_mock(trex_dir, num_episodes)
-
         # Load first parquet shard for metadata
         parquet_path = parquet_files[0]
         print(f"[T-REX] Downloading parquet metadata: {parquet_path}")
@@ -190,7 +178,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.20):
             if "episode_index" in df.columns
             else range(len(df) // 100)
         )
-        unique_episodes = sorted(list(unique_episodes))[:num_episodes]
+        unique_episodes = sorted(list(unique_episodes))
 
         print(f"[T-REX] Processing {len(unique_episodes)} episodes...")
 
@@ -242,73 +230,31 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.20):
 
             # Save frames (use first available image key)
             img_key = next((k for k in df_ep.columns if "image" in k.lower()), None)
-            if img_key:
-                for step_idx in range(
-                    min(ep_len, 100)
-                ):  # Limit to 100 frames per episode
-                    img_data = df_ep.iloc[step_idx][img_key]
-                    if isinstance(img_data, (np.ndarray, list)):
-                        img_np = np.array(img_data)
-                        if img_np.dtype == np.float32:
-                            img_np = (img_np * 255).astype(np.uint8)
-                        Image.fromarray(img_np).save(
-                            os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
-                        )
-            else:
-                # No image data, save dummy frames
-                for step_idx in range(min(ep_len, 100)):
-                    img = Image.fromarray(
-                        np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+            for step_idx in range(ep_len):
+                img_data = df_ep.iloc[step_idx][img_key]
+                if isinstance(img_data, (np.ndarray, list)):
+                    img_np = np.array(img_data)
+                    if img_np.dtype == np.float32:
+                        img_np = (img_np * 255).astype(np.uint8)
+                    Image.fromarray(img_np).save(
+                        os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
                     )
-                    img.save(os.path.join(frame_dir, f"frame_{step_idx:04d}.png"))
 
-            np.save(os.path.join(ep_dir, "actions.npy"), actions[: min(ep_len, 100)])
-            np.save(os.path.join(ep_dir, "states.npy"), states[: min(ep_len, 100)])
-            np.save(os.path.join(ep_dir, "tactile.npy"), tactile[: min(ep_len, 100)])
+            np.save(os.path.join(ep_dir, "actions.npy"), actions)
+            np.save(os.path.join(ep_dir, "states.npy"), states)
+            np.save(os.path.join(ep_dir, "tactile.npy"), tactile)
 
             print(
-                f"[T-REX] Processed episode {ep_idx}/{len(unique_episodes)}: {min(ep_len, 100)} frames"
+                f"[T-REX] Processed episode {ep_idx}/{len(unique_episodes)}: {ep_len} frames"
             )
-
+            target_frames -= ep_len
+            if target_frames <= 0:
+                break
     except Exception as e:
         print(f"[T-REX] Error streaming from HF Hub: {e}")
-        print("[T-REX] Falling back to mock structure for testing")
-        return _prepare_trex_mock(trex_dir, num_episodes)
+        raise e
 
     print(f"[T-REX] Successfully prepared {len(unique_episodes)} episodes.")
-    return trex_dir
-
-
-def _prepare_trex_mock(trex_dir, num_episodes):
-    """Mock T-REX preparation for testing when streaming fails."""
-    print(f"[T-REX] Creating mock structure with {num_episodes} episodes...")
-    seq_len = 100
-
-    for ep in range(num_episodes):
-        ep_dir = os.path.join(trex_dir, f"episode_{ep:02d}")
-        frame_dir = os.path.join(ep_dir, "frames")
-        os.makedirs(frame_dir, exist_ok=True)
-
-        for step in range(seq_len):
-            img = Image.fromarray(
-                np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-            )
-            img.save(os.path.join(frame_dir, f"frame_{step:04d}.png"))
-
-        np.save(
-            os.path.join(ep_dir, "actions.npy"),
-            np.random.randn(seq_len, 12).astype(np.float32),
-        )
-        np.save(
-            os.path.join(ep_dir, "states.npy"),
-            np.random.randn(seq_len, 24).astype(np.float32),
-        )
-
-        # Simulate active contact tactile forces (4x4 matrix)
-        tactile_force = np.random.uniform(0.0, 5.0, (seq_len, 4, 4)).astype(np.float32)
-        tactile_force[tactile_force < 1.0] = 0.0  # Threshold to mimic noise filtering
-        np.save(os.path.join(ep_dir, "tactile.npy"), tactile_force)
-
     return trex_dir
 
 
@@ -329,14 +275,10 @@ def prepare_fourier_dataset(raw_dir, use_subset=False, target_ratio=0.50):
 
     # Calculate number of episodes to achieve 50% of total mixture
     # Assuming total target frames ~100k, ActionNet should contribute ~50k frames
-    target_frames = 50000 if not use_subset else 250
-    avg_ep_len = 100
-    num_episodes = target_frames // avg_ep_len
-    if use_subset:
-        num_episodes = 2
-
+    target_frames = 50000 if not use_subset else 5000
     print(
-        f"[Fourier] Processing {num_episodes} episodes for {target_ratio*100}% of mixture..."
+        f"[Fourier] Processing frames for {target_ratio*100}%"
+        f" of mixture = {target_frames} frames"
     )
     print(
         f"[Fourier] Dataset uses HDF5 for robot data + episode folders for camera data"
@@ -350,10 +292,6 @@ def prepare_fourier_dataset(raw_dir, use_subset=False, target_ratio=0.50):
 
         # Find HDF5 files and episode folders
         h5_files = [f for f in files if f.endswith(".h5") or f.endswith(".hdf5")]
-
-        if not h5_files:
-            print("[Fourier] No HDF5 files found, using mock structure for testing")
-            return _prepare_fourier_mock(fourier_dir, num_episodes)
 
         # Process HDF5 files
         for ep_idx in range(min(num_episodes, len(h5_files))):
@@ -443,7 +381,6 @@ def prepare_fourier_dataset(raw_dir, use_subset=False, target_ratio=0.50):
     except Exception as e:
         print(f"[Fourier] Error loading from HF Hub: {e}")
         print("[Fourier] Falling back to mock structure for testing")
-        return _prepare_fourier_mock(fourier_dir, num_episodes)
 
     print(
         f"[Fourier] Successfully prepared {min(num_episodes, len(h5_files))} episodes."
@@ -451,58 +388,21 @@ def prepare_fourier_dataset(raw_dir, use_subset=False, target_ratio=0.50):
     return fourier_dir
 
 
-def _prepare_fourier_mock(fourier_dir, num_episodes):
-    """Mock Fourier ActionNet preparation for testing when loading fails."""
-    print(f"[Fourier] Creating mock structure with {num_episodes} episodes...")
-    seq_len = 100
-
-    for ep in range(num_episodes):
-        ep_dir = os.path.join(fourier_dir, f"episode_{ep:02d}")
-        frame_dir = os.path.join(ep_dir, "frames")
-        os.makedirs(frame_dir, exist_ok=True)
-
-        for step in range(seq_len):
-            img = Image.fromarray(
-                np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
-            )
-            img.save(os.path.join(frame_dir, f"frame_{step:04d}.png"))
-
-        np.save(
-            os.path.join(ep_dir, "actions.npy"),
-            np.random.randn(seq_len, 12).astype(np.float32),
-        )
-        np.save(
-            os.path.join(ep_dir, "states.npy"),
-            np.random.randn(seq_len, 24).astype(np.float32),
-        )
-        np.save(
-            os.path.join(ep_dir, "tactile.npy"),
-            np.zeros((seq_len, 4, 4), dtype=np.float32),
-        )
-
-    return fourier_dir
-
-
 def prepare_stage2_dataset(
     raw_dir, processed_dir, use_subset=False, disable_encoders=True
 ):
-    """Prepares Stage 2 SFT dataset mixture: ALOHA (30%), T-REX (20%), ActionNet (50%)."""
+    """Prepares Stage 2 SFT dataset mixture: ALOHA (70%), T-REX (30%)."""
     os.makedirs(raw_dir, exist_ok=True)
     os.makedirs(processed_dir, exist_ok=True)
 
     print("=== Stage 2 SFT Dataset Mixture Builder ===")
-    print("Target mixture: ALOHA (30%), T-REX (20%), ActionNet (50%)")
+    print("Target mixture: ALOHA (70%), T-REX (30%)")
 
-    # 1. Prepare ALOHA (30% of mix)
-    aloha_raw = prepare_aloha_dataset(raw_dir, use_subset=use_subset, target_ratio=0.30)
+    # 1. Prepare ALOHA (70% of mix)
+    aloha_raw = prepare_aloha_dataset(raw_dir, use_subset=use_subset, target_ratio=0.70)
 
-    # 2. Prepare T-REX (20% of mix)
-    trex_raw = prepare_trex_dataset(raw_dir, use_subset=use_subset, target_ratio=0.20)
-
-    # 3. Prepare Fourier ActionNet (50% of mix)
-    fourier_raw = prepare_fourier_dataset(
-        raw_dir, use_subset=use_subset, target_ratio=0.50
-    )
+    # 2. Prepare T-REX (30% of mix)
+    trex_raw = prepare_trex_dataset(raw_dir, use_subset=use_subset, target_ratio=0.30)
 
     # 4. Preprocess all directories
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -511,7 +411,7 @@ def prepare_stage2_dataset(
     # Process ALOHA, T-REX, and Fourier ActionNet into the processed directory
     all_episodes = []
 
-    for root_dir in [aloha_raw, trex_raw, fourier_raw]:
+    for root_dir in [aloha_raw, trex_raw]:
         episodes = sorted(
             [
                 os.path.join(root_dir, d)
@@ -544,7 +444,7 @@ def prepare_stage2_dataset(
 
     print("\n[Dataset Prep] Stage 2 Data Preparation Complete.")
     print(f"[Dataset Prep] Processed {len(all_episodes)} episodes from 3 datasets.")
-    print(f"[Dataset Prep] Mixture: ALOHA (30%), T-REX (20%), ActionNet (50%)")
+    print(f"[Dataset Prep] Mixture: ALOHA (70%), T-REX (30%)")
 
 
 if __name__ == "__main__":
