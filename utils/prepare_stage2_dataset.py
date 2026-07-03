@@ -11,6 +11,68 @@ from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
 from utils.preprocess_dataset import DatasetPreprocessor
+from concurrent.futures import ThreadPoolExecutor
+
+
+def process_single_aloha_episode(idx, dataset, views, aloha_dir):
+    """Helper to process a single ALOHA episode in parallel."""
+    episode_meta = dataset.meta.episodes[idx]
+    episode_idx = episode_meta["episode_index"]
+
+    # Support resume check
+    episode_dir = os.path.join(aloha_dir, f"episode_{episode_idx:02d}")
+    if os.path.exists(os.path.join(episode_dir, "actions.npy")):
+        return 0
+    frame_dir = os.path.join(episode_dir, "frames")
+    os.makedirs(frame_dir, exist_ok=True)
+
+    # Pre-create view directories to avoid filesystem check overhead
+    for view in views:
+        os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
+
+    episode_data = Subset(
+        dataset,
+        range(episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]),
+    )
+    curr_len = len(episode_data)
+
+    actions = []
+    states = []
+    for frame_idx, frame in enumerate(episode_data):
+        # Save frames as PNG with fast compression using cv2 (faster than PIL)
+        for view in views:
+            view_dir = os.path.join(frame_dir, view)
+            img_t = frame[view]
+            img_np = (
+                (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                if img_t.dtype == torch.float32
+                else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+            )
+            # cv2.imwrite is heavily optimized in C++ and releases the GIL
+            cv2.imwrite(
+                os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
+                cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
+                [cv2.IMWRITE_PNG_COMPRESSION, 1],
+            )
+
+        actions.append(frame["action"].numpy())
+        states.append(frame["observation.state"].numpy())
+
+    # Save arrays
+    np.save(
+        os.path.join(episode_dir, "actions.npy"),
+        np.stack(actions).astype(np.float32),
+    )
+    np.save(
+        os.path.join(episode_dir, "states.npy"),
+        np.stack(states).astype(np.float32),
+    )
+    np.save(
+        os.path.join(episode_dir, "tactile.npy"),
+        np.zeros((curr_len, 4, 4), dtype=np.float32),
+    )
+
+    return curr_len
 
 
 def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
@@ -41,66 +103,26 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
         f" of mixture = {target_frames} frames..."
     )
 
-    # Extract actual episodes
-    for idx in tqdm(range(dataset.num_episodes), desc="ALOHA Episodes"):
-        episode_meta = dataset.meta.episodes[idx]
-        episode_idx = episode_meta["episode_index"]
+    # Select subsets of episodes to process
+    num_episodes_to_run = dataset.num_episodes
+    if use_subset:
+        num_episodes_to_run = min(5, dataset.num_episodes)
 
-        episode_dir = os.path.join(aloha_dir, f"episode_{episode_idx:02d}")
-        frame_dir = os.path.join(episode_dir, "frames")
-        os.makedirs(frame_dir, exist_ok=True)
+    # Process episodes in parallel
+    print(f"[ALOHA] Running parallel extraction with 4 threads...")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(
+                process_single_aloha_episode, idx, dataset, views, aloha_dir
+            )
+            for idx in range(num_episodes_to_run)
+        ]
 
-        # Support resume check
-        if os.path.exists(os.path.join(episode_dir, "actions.npy")):
-            continue
-
-        # Pre-create view directories outside the frame loop to avoid filesystem check overhead
-        for view in views:
-            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
-
-        episode_data = Subset(
-            dataset,
-            range(episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]),
-        )
-        curr_len = len(episode_data)
-
-        actions = []
-        states = []
-        for frame_idx, frame in enumerate(episode_data):
-            for view in views:
-                view_dir = os.path.join(frame_dir, view)
-                img_t = frame[view]
-                img_np = (
-                    (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-                    if img_t.dtype == torch.float32
-                    else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
-                )
-                cv2.imwrite(
-                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
-                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
-                )
-
-            actions.append(frame["action"].numpy())
-            states.append(frame["observation.state"].numpy())
-
-        # Save arrays
-        np.save(
-            os.path.join(episode_dir, "actions.npy"),
-            np.stack(actions).astype(np.float32),
-        )
-        np.save(
-            os.path.join(episode_dir, "states.npy"),
-            np.stack(states).astype(np.float32),
-        )
-        # ALOHA does not have tactile data, set to zeros
-        np.save(
-            os.path.join(episode_dir, "tactile.npy"),
-            np.zeros((curr_len, 4, 4), dtype=np.float32),
-        )
-
-        target_frames -= curr_len
-        if target_frames <= 0:
-            break
+        # Display progress bar over completed futures
+        for future in tqdm(futures, desc="ALOHA Episodes"):
+            target_frames -= future.result()
+            if target_frames <= 0:
+                break
 
     print(f"[ALOHA] Successfully prepared episodes.")
     return aloha_dir
