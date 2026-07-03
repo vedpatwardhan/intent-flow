@@ -1,38 +1,13 @@
 from pathlib import Path
 import os
+import traceback
 import argparse
 import numpy as np
 import torch
-import h5py
-import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from huggingface_hub import hf_hub_download, list_repo_files
-from torchcodec.decoders import VideoDecoder
-from concurrent.futures import ThreadPoolExecutor
 from utils.preprocess_dataset import DatasetPreprocessor
-
-
-def save_image_worker(frame_np, target_path):
-    """Saves a frame to disk."""
-    Image.fromarray(frame_np).save(target_path)
-
-
-def flatten_dataframe_columns(df_subset, cols):
-    """Flattens nested list/array values in dataframe columns into a single numpy float32 matrix."""
-    rows_list = []
-    for _, row in df_subset[cols].iterrows():
-        flat_vals = []
-        for val in row:
-            if isinstance(val, (list, np.ndarray)):
-                flat_vals.extend(val)
-            elif isinstance(val, (int, float, np.floating, np.integer)):
-                flat_vals.append(val)
-            else:
-                flat_vals.append(0.0)
-        rows_list.append(flat_vals)
-    return np.array(rows_list, dtype=np.float32)
 
 
 def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
@@ -140,121 +115,85 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         print("[T-REX] Already prepared.")
         return trex_dir
 
-    # T-REX dataset info: https://huggingface.co/datasets/zekaiwang/trex_dataset
-    # Contains 3 RGB cameras, 10 raw tactile, deformation tactile videos
-    # Total size: 1.53 TB
-
-    # Assuming total target frames ~100k, T-REX should contribute ~30k frames
     target_frames = int((100000 if not use_subset else 10000) * target_ratio)
     print(
-        f"[T-REX] Processing episodes for {target_ratio*100}%"
-        f" of mixture = {target_frames} frames..."
-    )
-    print(
-        f"[T-REX] Dataset contains tactile information (10 raw tactile + deformation tactile)"
+        f"[T-REX] Processing episodes for {target_ratio*100}% of mixture = {target_frames} frames..."
     )
 
-    # Since T-REX is massive (1.53 TB), we stream from HF Hub
-    trex_repo = "zekaiwang/trex_dataset"
+    # Use LeRobotDataset directly (like ALOHA)
+    dataset = LeRobotDataset("zekaiwang/trex_dataset")
+    print(f"[T-REX] Features: {list(dataset.features.keys())}")
+    print(f"[T-REX] Num Episodes: {dataset.num_episodes}")
 
-    try:
-        files = list_repo_files(trex_repo, repo_type="dataset")
-        print(f"[T-REX] Found {len(files)} files in repository")
+    ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))
 
-        # Find parquet and video files
-        parquet_files = [f for f in files if f.endswith(".parquet")]
-        video_files = [f for f in files if f.endswith(".mp4")]
+    for ep_idx, ep in enumerate(ep_indices):
+        if target_frames <= 0:
+            break
 
-        # Load first parquet shard for metadata
-        parquet_path = parquet_files[0]
-        print(f"[T-REX] Downloading parquet metadata: {parquet_path}")
-        local_parquet = hf_hub_download(
-            trex_repo, filename=parquet_path, repo_type="dataset"
-        )
-        df = pd.read_parquet(local_parquet)
+        ep_dir = os.path.join(trex_dir, f"episode_{ep_idx:02d}")
+        frame_dir = os.path.join(ep_dir, "frames")
+        os.makedirs(frame_dir, exist_ok=True)
 
-        unique_episodes = (
-            df["episode_index"].unique()
-            if "episode_index" in df.columns
-            else range(len(df) // 100)
-        )
-        unique_episodes = sorted(list(unique_episodes))
+        # Support resume check
+        if os.path.exists(os.path.join(ep_dir, "actions.npy")):
+            print(f"[T-REX] Episode {ep_idx} already processed, skipping...")
+            continue
 
-        print(f"[T-REX] Processing {len(unique_episodes)} episodes...")
+        ep_data = dataset.hf_dataset.filter(lambda x: x["episode_index"] == ep)
+        curr_len = len(ep_data)
 
-        for ep_idx in range(len(unique_episodes)):
-            ep_dir = os.path.join(trex_dir, f"episode_{ep_idx:02d}")
-            frame_dir = os.path.join(ep_dir, "frames")
-            os.makedirs(frame_dir, exist_ok=True)
+        actions = []
+        states = []
+        tactile = []
 
-            # Support resume check
-            if os.path.exists(os.path.join(ep_dir, "actions.npy")):
-                print(f"[T-REX] Episode {ep_idx} already processed, skipping...")
-                continue
+        # Get image and tactile keys
+        img_keys = [k for k in ep_data[0].keys() if "image" in k]
+        tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
-            ep_id = unique_episodes[ep_idx]
-            df_ep = (
-                df[df["episode_index"] == ep_id]
-                if "episode_index" in df.columns
-                else df.iloc[ep_idx * 100 : (ep_idx + 1) * 100]
-            )
-            ep_len = len(df_ep)
+        for step_idx in range(curr_len):
+            row = ep_data[step_idx]
 
-            # Extract actions and states
-            action_cols = [c for c in df_ep.columns if c.startswith("action")]
-            state_cols = [c for c in df_ep.columns if c.startswith("observation.state")]
-            tactile_cols = [c for c in df_ep.columns if "tactile" in c.lower()]
+            # Extract images
+            if img_keys:
+                img_t = row[img_keys[0]]
+                img_np = (
+                    (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                    if img_t.dtype == torch.float32
+                    else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+                )
+                Image.fromarray(img_np).save(
+                    os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
+                )
 
-            actions = (
-                flatten_dataframe_columns(df_ep, action_cols)
-                if action_cols
-                else np.zeros((ep_len, 12), dtype=np.float32)
-            )
-            states = (
-                flatten_dataframe_columns(df_ep, state_cols)
-                if state_cols
-                else np.zeros((ep_len, 24), dtype=np.float32)
-            )
+            actions.append(row["action"].numpy())
+            states.append(row["observation.state"].numpy())
 
-            # Extract tactile data if available
-            if tactile_cols:
-                tactile_data = flatten_dataframe_columns(df_ep, tactile_cols)
-                # Reshape to 4x4 if possible, otherwise pad
-                if tactile_data.shape[1] >= 16:
-                    tactile = tactile_data[:, :16].reshape(ep_len, 4, 4)
+            # Extract tactile if available
+            if tactile_keys:
+                tactile_data = row[tactile_keys[0]].numpy()
+                # Reshape to 4x4 if needed
+                if tactile_data.shape[-1] == 16:
+                    tactile.append(tactile_data.reshape(4, 4))
+                elif tactile_data.size >= 16:
+                    tactile.append(tactile_data.flatten()[:16].reshape(4, 4))
                 else:
-                    tactile = np.zeros((ep_len, 4, 4), dtype=np.float32)
-                    tactile[:, : tactile_data.shape[1], 0] = tactile_data
+                    tactile.append(np.zeros((4, 4), dtype=np.float32))
             else:
-                tactile = np.zeros((ep_len, 4, 4), dtype=np.float32)
+                tactile.append(np.zeros((4, 4), dtype=np.float32))
 
-            # Save frames (use first available image key)
-            img_key = next((k for k in df_ep.columns if "image" in k.lower()), None)
-            for step_idx in range(ep_len):
-                img_data = df_ep.iloc[step_idx][img_key]
-                if isinstance(img_data, (np.ndarray, list)):
-                    img_np = np.array(img_data)
-                    if img_np.dtype == np.float32:
-                        img_np = (img_np * 255).astype(np.uint8)
-                    Image.fromarray(img_np).save(
-                        os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
-                    )
+        np.save(
+            os.path.join(ep_dir, "actions.npy"), np.stack(actions).astype(np.float32)
+        )
+        np.save(os.path.join(ep_dir, "states.npy"), np.stack(states).astype(np.float32))
+        np.save(
+            os.path.join(ep_dir, "tactile.npy"), np.stack(tactile).astype(np.float32)
+        )
 
-            np.save(os.path.join(ep_dir, "actions.npy"), actions)
-            np.save(os.path.join(ep_dir, "states.npy"), states)
-            np.save(os.path.join(ep_dir, "tactile.npy"), tactile)
+        target_frames -= curr_len
+        print(f"[T-REX] Processed episode {ep_idx}: {curr_len} frames")
 
-            print(
-                f"[T-REX] Processed episode {ep_idx}/{len(unique_episodes)}: {ep_len} frames"
-            )
-            target_frames -= ep_len
-            if target_frames <= 0:
-                break
-    except Exception as e:
-        print(f"[T-REX] Error streaming from HF Hub: {e}")
-        raise e
-
-    print(f"[T-REX] Successfully prepared {len(unique_episodes)} episodes.")
+    print(f"[T-REX] Successfully prepared episodes.")
     return trex_dir
 
 
