@@ -34,8 +34,8 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
     print(f"[ALOHA] Views: {views}")
     print(f"[ALOHA] Meta: {dataset.meta}")
 
-    # Assuming total target frames ~100k, ALOHA should contribute ~70k frames
-    target_frames = int((100000 if not use_subset else 10000) * target_ratio)
+    # Assuming total target frames ~20k, ALOHA should contribute ~70k frames
+    target_frames = int((20000 if not use_subset else 2000) * target_ratio)
     print(
         f"[ALOHA] Processing episodes for {target_ratio*100}%"
         f" of mixture = {target_frames} frames..."
@@ -117,7 +117,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         print("[T-REX] Already prepared.")
         return trex_dir
 
-    target_frames = int((100000 if not use_subset else 10000) * target_ratio)
+    target_frames = int((20000 if not use_subset else 2000) * target_ratio)
     print(
         f"[T-REX] Processing episodes for {target_ratio*100}% of mixture = {target_frames} frames..."
     )
