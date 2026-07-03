@@ -124,38 +124,26 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     # Use StreamingLeRobotDataset to avoid downloading terabyte-scale dataset
     dataset = StreamingLeRobotDataset("zekaiwang/trex_dataset")
     print(f"[T-REX] Features: {list(dataset.meta.features.keys())}")
-    print(f"[T-REX] Num Episodes: {dataset.num_episodes}")
+    print(f"[T-REX] Streaming from: {dataset.repo_id}")
 
-    ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))
-
-    for ep_idx, ep in enumerate(ep_indices):
-        if target_frames <= 0:
-            break
-
+    def save_episode(ep_data, ep_idx):
+        """Helper function to save episode data."""
         ep_dir = os.path.join(trex_dir, f"episode_{ep_idx:02d}")
         frame_dir = os.path.join(ep_dir, "frames")
         os.makedirs(frame_dir, exist_ok=True)
 
-        # Support resume check
         if os.path.exists(os.path.join(ep_dir, "actions.npy")):
-            print(f"[T-REX] Episode {ep_idx} already processed, skipping...")
-            continue
+            return 0
 
-        ep_data = dataset.hf_dataset.filter(lambda x: x["episode_index"] == ep)
         curr_len = len(ep_data)
-
         actions = []
         states = []
         tactile = []
 
-        # Get image and tactile keys
         img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
-        for step_idx in range(curr_len):
-            row = ep_data[step_idx]
-
-            # Extract images
+        for step_idx, row in enumerate(ep_data):
             if img_keys:
                 img_t = row[img_keys[0]]
                 img_np = (
@@ -170,10 +158,8 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             actions.append(row["action"].numpy())
             states.append(row["observation.state"].numpy())
 
-            # Extract tactile if available
             if tactile_keys:
                 tactile_data = row[tactile_keys[0]].numpy()
-                # Reshape to 4x4 if needed
                 if tactile_data.shape[-1] == 16:
                     tactile.append(tactile_data.reshape(4, 4))
                 elif tactile_data.size >= 16:
@@ -191,10 +177,43 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             os.path.join(ep_dir, "tactile.npy"), np.stack(tactile).astype(np.float32)
         )
 
-        target_frames -= curr_len
         print(f"[T-REX] Processed episode {ep_idx}: {curr_len} frames")
+        return curr_len
 
-    print(f"[T-REX] Successfully prepared episodes.")
+    # Iterate directly through streaming dataset without pre-fetching all indices
+    ep_idx = 0
+    current_ep_data = []
+    current_ep_index = None
+
+    for item in dataset:
+        if target_frames <= 0:
+            break
+
+        item_ep_index = item.get("episode_index", current_ep_index)
+
+        # Start new episode if episode index changes
+        if current_ep_index is None or item_ep_index != current_ep_index:
+            # Save previous episode if exists
+            if current_ep_data and current_ep_index is not None:
+                curr_len = save_episode(current_ep_data, ep_idx)
+                target_frames -= curr_len
+                ep_idx += 1
+
+            # Start new episode
+            current_ep_index = item_ep_index
+            current_ep_data = [item]
+
+        else:
+            # Add to current episode
+            current_ep_data.append(item)
+
+    # Save last episode
+    if current_ep_data and target_frames > 0:
+        curr_len = save_episode(current_ep_data, ep_idx)
+        target_frames -= curr_len
+        ep_idx += 1
+
+    print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
     return trex_dir
 
 
