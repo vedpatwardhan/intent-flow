@@ -4,6 +4,7 @@ import traceback
 import argparse
 import numpy as np
 import torch
+from torch.utils.data import Subset
 from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -30,6 +31,7 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
     print(f"[ALOHA] Features: {list(dataset.features.keys())}")
     print(f"[ALOHA] Num Episodes: {dataset.num_episodes}")
     print(f"[ALOHA] Views: {views}")
+    print(f"[ALOHA] Meta: {dataset.meta}")
 
     # Assuming total target frames ~100k, ALOHA should contribute ~70k frames
     target_frames = int((100000 if not use_subset else 10000) * target_ratio)
@@ -39,69 +41,69 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
     )
 
     # Extract actual episodes
-    ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))
+    for idx in range(dataset.num_episodes):
+        episode_meta = dataset.meta.episodes[idx]
+        episode_idx = episode_meta["episode_index"]
 
-    for ep_idx, ep in enumerate(ep_indices):
-        ep_dir = os.path.join(aloha_dir, f"episode_{ep_idx:02d}")
-        frame_dir = os.path.join(ep_dir, "frames")
+        episode_dir = os.path.join(aloha_dir, f"episode_{episode_idx:02d}")
+        frame_dir = os.path.join(episode_dir, "frames")
         os.makedirs(frame_dir, exist_ok=True)
 
         # Support resume check
-        if os.path.exists(os.path.join(ep_dir, "actions.npy")):
-            print(f"[ALOHA] Episode {ep_idx} already processed, skipping...")
+        if os.path.exists(os.path.join(episode_dir, "actions.npy")):
+            print(f"[ALOHA] Episode {episode_idx} already processed, skipping...")
             continue
 
-        ep_data = dataset.hf_dataset.filter(lambda x: x["episode_index"] == ep)
-        curr_len = len(ep_data)
+        episode_data = Subset(
+            dataset,
+            range(episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]),
+        )
+        curr_len = len(episode_data)
 
         actions = []
         states = []
-
-        # Get image keys (ALOHA has multiple views)
-        img_keys = [k for k in ep_data[0].keys() if "image" in k]
-        primary_img_key = img_keys[0] if img_keys else None
-
-        for step_idx in range(curr_len):
-            row = ep_data[step_idx]
-
-            # Extract primary view image
-            if primary_img_key:
-                img_t = row[primary_img_key]
+        for frame_idx, frame in enumerate(episode_data):
+            # Extract all view images using pre-computed views
+            for view in views:
+                view_dir = os.path.join(frame_dir, view)
+                os.makedirs(view_dir, exist_ok=True)
+                img_t = frame[view]
                 img_np = (
                     (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
                     if img_t.dtype == torch.float32
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
                 Image.fromarray(img_np).save(
-                    os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
+                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png")
                 )
 
-            actions.append(row["action"].numpy())
-            states.append(row["observation.state"].numpy())
+            actions.append(frame["action"].numpy())
+            states.append(frame["observation.state"].numpy())
 
         # Save arrays
         np.save(
-            os.path.join(ep_dir, "actions.npy"),
+            os.path.join(episode_dir, "actions.npy"),
             np.stack(actions).astype(np.float32),
         )
         np.save(
-            os.path.join(ep_dir, "states.npy"),
+            os.path.join(episode_dir, "states.npy"),
             np.stack(states).astype(np.float32),
         )
         # ALOHA does not have tactile data, set to zeros
         np.save(
-            os.path.join(ep_dir, "tactile.npy"),
+            os.path.join(episode_dir, "tactile.npy"),
             np.zeros((curr_len, 4, 4), dtype=np.float32),
         )
 
         print(
-            f"[ALOHA] Processed episode {ep_idx}/{len(ep_indices)}: {curr_len} frames"
+            f"[ALOHA] Processed episode {episode_idx}/{dataset.num_episodes}"
+            f": {curr_len} frames"
         )
         target_frames -= curr_len
         if target_frames <= 0:
             break
 
-    print(f"[ALOHA] Successfully prepared {len(ep_indices)} episodes.")
+    print(f"[ALOHA] Successfully prepared {idx + 1} episodes.")
     return aloha_dir
 
 
@@ -122,9 +124,14 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     )
 
     # Use StreamingLeRobotDataset to avoid downloading terabyte-scale dataset
-    dataset = StreamingLeRobotDataset("zekaiwang/trex_dataset")
+    dataset = StreamingLeRobotDataset(
+        "zekaiwang/trex_dataset",
+        streaming=True,
+        buffer_size=1000,
+    )
     print(f"[T-REX] Features: {list(dataset.meta.features.keys())}")
     print(f"[T-REX] Streaming from: {dataset.repo_id}")
+    print(f"[T-REX] Streaming enabled: {dataset.streaming}")
 
     def save_episode(ep_data, ep_idx):
         """Helper function to save episode data."""
@@ -186,13 +193,17 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     current_ep_index = None
 
     for item in dataset:
+        print("Processing item")
         if target_frames <= 0:
             break
 
         item_ep_index = item.get("episode_index", current_ep_index)
+        print(f"item_ep_index: {item_ep_index}")
+        print(f"current_ep_index: {current_ep_index}")
 
         # Start new episode if episode index changes
         if current_ep_index is None or item_ep_index != current_ep_index:
+            print(f"new episode: {item_ep_index}")
             # Save previous episode if exists
             if current_ep_data and current_ep_index is not None:
                 curr_len = save_episode(current_ep_data, ep_idx)
@@ -205,6 +216,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
 
         else:
             # Add to current episode
+            print(f"added to current episode: {current_ep_index}")
             current_ep_data.append(item)
 
     # Save last episode

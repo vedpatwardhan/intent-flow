@@ -638,7 +638,7 @@ The table below highlights what modalities are present in each dataset stream, a
 | **3D Generation Method** | **Calculated** (SAM + Depth + KLT tracking) | **Calculated** (SAM + Depth + KLT tracking) | **Direct Load** (Loaded directly from `point_clouds.npy`) |
 
 ### B. Stage 2: Supervised Fine-Tuning (SFT) & Action Grounding
-*   **Bimanual ALOHA Tabletop (`lerobot/aloha_mobile_cabinet`)**:
+*   **Bimanual ALOHA Tabletop (`lerobot/aloha_static_coffee`)**:
     *   Provides paired camera frames and joint torque/velocity commands.
     *   *Role*: Trains the Flow-Matching action head and Action Adapter to command coordinated joint trajectories.
 *   **UT Austin Sort & NYU Door/Drawer Opening (OXE)**:
