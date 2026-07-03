@@ -53,6 +53,10 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
         if os.path.exists(os.path.join(episode_dir, "actions.npy")):
             continue
 
+        # Pre-create view directories outside the frame loop to avoid filesystem check overhead
+        for view in views:
+            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
+
         episode_data = Subset(
             dataset,
             range(episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]),
@@ -64,10 +68,8 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
         for frame_idx, frame in enumerate(
             tqdm(episode_data, desc=f"Ep {episode_idx} Frames", leave=False)
         ):
-            # Extract all view images using pre-computed views
             for view in views:
                 view_dir = os.path.join(frame_dir, view)
-                os.makedirs(view_dir, exist_ok=True)
                 img_t = frame[view]
                 img_np = (
                     (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
@@ -75,7 +77,8 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
                 Image.fromarray(img_np).save(
-                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png")
+                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
+                    compress_level=1,
                 )
 
             actions.append(frame["action"].numpy())
@@ -158,7 +161,8 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
                 Image.fromarray(img_np).save(
-                    os.path.join(frame_dir, f"frame_{step_idx:04d}.png")
+                    os.path.join(frame_dir, f"frame_{step_idx:04d}.png"),
+                    compress_level=1,
                 )
 
             actions.append(row["action"].numpy())
