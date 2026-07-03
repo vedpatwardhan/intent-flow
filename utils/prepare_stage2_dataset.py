@@ -41,7 +41,7 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
     )
 
     # Extract actual episodes
-    for idx in range(dataset.num_episodes):
+    for idx in tqdm(range(dataset.num_episodes), desc="ALOHA Episodes"):
         episode_meta = dataset.meta.episodes[idx]
         episode_idx = episode_meta["episode_index"]
 
@@ -51,7 +51,6 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
 
         # Support resume check
         if os.path.exists(os.path.join(episode_dir, "actions.npy")):
-            print(f"[ALOHA] Episode {episode_idx} already processed, skipping...")
             continue
 
         episode_data = Subset(
@@ -62,7 +61,9 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
 
         actions = []
         states = []
-        for frame_idx, frame in enumerate(episode_data):
+        for frame_idx, frame in enumerate(
+            tqdm(episode_data, desc=f"Ep {episode_idx} Frames", leave=False)
+        ):
             # Extract all view images using pre-computed views
             for view in views:
                 view_dir = os.path.join(frame_dir, view)
@@ -95,15 +96,11 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
             np.zeros((curr_len, 4, 4), dtype=np.float32),
         )
 
-        print(
-            f"[ALOHA] Processed episode {episode_idx}/{dataset.num_episodes}"
-            f": {curr_len} frames"
-        )
         target_frames -= curr_len
         if target_frames <= 0:
             break
 
-    print(f"[ALOHA] Successfully prepared {idx + 1} episodes.")
+    print(f"[ALOHA] Successfully prepared episodes.")
     return aloha_dir
 
 
@@ -150,7 +147,9 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
-        for step_idx, row in enumerate(ep_data):
+        for step_idx, row in enumerate(
+            tqdm(ep_data, desc=f"Saving Ep {ep_idx}", leave=False)
+        ):
             if img_keys:
                 img_t = row[img_keys[0]]
                 img_np = (
@@ -192,18 +191,14 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     current_ep_data = []
     current_ep_index = None
 
-    for item in dataset:
-        print("Processing item")
+    for item in tqdm(dataset, desc="Streaming T-REX"):
         if target_frames <= 0:
             break
 
         item_ep_index = item.get("episode_index", current_ep_index)
-        print(f"item_ep_index: {item_ep_index}")
-        print(f"current_ep_index: {current_ep_index}")
 
         # Start new episode if episode index changes
         if current_ep_index is None or item_ep_index != current_ep_index:
-            print(f"new episode: {item_ep_index}")
             # Save previous episode if exists
             if current_ep_data and current_ep_index is not None:
                 curr_len = save_episode(current_ep_data, ep_idx)
@@ -216,7 +211,6 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
 
         else:
             # Add to current episode
-            print(f"added to current episode: {current_ep_index}")
             current_ep_data.append(item)
 
     # Save last episode
