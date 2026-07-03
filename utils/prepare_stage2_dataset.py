@@ -7,6 +7,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
 from utils.preprocess_dataset import DatasetPreprocessor
 
 
@@ -120,9 +121,9 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         f"[T-REX] Processing episodes for {target_ratio*100}% of mixture = {target_frames} frames..."
     )
 
-    # Use LeRobotDataset directly (like ALOHA)
-    dataset = LeRobotDataset("zekaiwang/trex_dataset")
-    print(f"[T-REX] Features: {list(dataset.features.keys())}")
+    # Use StreamingLeRobotDataset to avoid downloading terabyte-scale dataset
+    dataset = StreamingLeRobotDataset("zekaiwang/trex_dataset")
+    print(f"[T-REX] Features: {list(dataset.meta.features.keys())}")
     print(f"[T-REX] Num Episodes: {dataset.num_episodes}")
 
     ep_indices = sorted(list(set(dataset.hf_dataset["episode_index"])))
