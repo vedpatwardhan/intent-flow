@@ -23,8 +23,8 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
         print("[ALOHA] Already prepared.")
         return aloha_dir
 
-    print("[ALOHA] Loading from lerobot/aloha_mobile_cabinet...")
-    dataset = LeRobotDataset("lerobot/aloha_mobile_cabinet")
+    print("[ALOHA] Loading from lerobot/aloha_static_coffee_new...")
+    dataset = LeRobotDataset("lerobot/aloha_static_coffee_new")
     views = [
         key for key in dataset.features.keys() if key.startswith("observation.images")
     ]
