@@ -3,6 +3,7 @@ import os
 import traceback
 import argparse
 import numpy as np
+import cv2
 import torch
 from torch.utils.data import Subset
 from PIL import Image
@@ -65,9 +66,7 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
 
         actions = []
         states = []
-        for frame_idx, frame in enumerate(
-            tqdm(episode_data, desc=f"Ep {episode_idx} Frames", leave=False)
-        ):
+        for frame_idx, frame in enumerate(episode_data):
             for view in views:
                 view_dir = os.path.join(frame_dir, view)
                 img_t = frame[view]
@@ -76,9 +75,9 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
                     if img_t.dtype == torch.float32
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
-                Image.fromarray(img_np).save(
+                cv2.imwrite(
                     os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
-                    compress_level=1,
+                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
                 )
 
             actions.append(frame["action"].numpy())
@@ -160,9 +159,9 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                     if img_t.dtype == torch.float32
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
-                Image.fromarray(img_np).save(
+                cv2.imwrite(
                     os.path.join(frame_dir, f"frame_{step_idx:04d}.png"),
-                    compress_level=1,
+                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
                 )
 
             actions.append(row["action"].numpy())
