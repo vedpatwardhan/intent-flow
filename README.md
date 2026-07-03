@@ -658,8 +658,19 @@ The table below highlights what modalities are present in each dataset stream, a
 *   **Tactile-Dexterous Real Touch Datasets**:
     *   *Role*: Aligns tactile pressure maps with visual contact boundaries via InfoNCE.
 
+## 9. Advanced Paper Grounding & Research Alignment
+
+To contextualize LatentFlow within the state-of-the-art robotic learning literature, our architecture maps directly to several key paradigms:
+
+*   **ACoT-VLA (2601.11404) & Hierarchical Action Generation**: Our 3-block Hierarchical DiT structure mirrors the division between Explicit Action Reasoning (EAR) and Implicit Action Reasoning (IAR). Block 1 outputs high-level macro anchors (EAR), while Blocks 2 & 3 resolve local primitives and joint-level details (IAR) conditioned on the higher-level targets.
+*   **FlowBender (2606.20404) & Two-Pass Feedback**: In Stage 3, we plan to implement a FlowBender-style rollout refinement. The flow matcher proposes actions (unguided look-ahead), the JEPA predictor rolls out the imagined state to calculate the deviation from the goal state (error measurement), and the vector field is iteratively updated using the energy gradient (refinement with simulated feedback).
+*   **CoBA-RL (2602.03048) & Evolving Rollout Budgets**: To optimize simulation throughput on limited compute, we will integrate CoBA-RL's dynamic resource allocation. The RL scheduler evaluates the agent's capability per task, allocating larger rollout horizons to complex/unsolved tasks and skipping redundant steps on mastered actions.
+*   **FRAPPE (2602.17259) & Error Minimization**: During multi-step rollout planning in Stage 3, we minimize error accumulation by introducing a FRAPPE-style representation alignment loss, forcing predicted future latent states to remain aligned with the frozen target encoder representation manifold.
+*   **UNIC (2601.04356) & Extrinsic Contact Estimation**: When tactile skin sensors are zero-masked (such as during transition from pre-training), the tactile adapter extracts proxy contact signals by estimating extrinsic contact states directly from DINOv3 vision transitions and proprioceptive joint torque spikes.
+
 
 ## Execution Quickstart Reference
+
 
 Here are the standard commands to run the data preparation, sampling, and training modules.
 
