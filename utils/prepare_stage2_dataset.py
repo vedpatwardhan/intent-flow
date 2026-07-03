@@ -6,15 +6,13 @@ import numpy as np
 import cv2
 import torch
 from torch.utils.data import Subset
+from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
 from utils.preprocess_dataset import DatasetPreprocessor
 from concurrent.futures import ThreadPoolExecutor
-import threading
 
-# Global lock to prevent concurrent OpenCV malloc calls across threads
-write_lock = threading.Lock()
 
 def process_single_aloha_episode(idx, dataset, views, aloha_dir):
     """Helper to process a single ALOHA episode in parallel."""
@@ -41,6 +39,7 @@ def process_single_aloha_episode(idx, dataset, views, aloha_dir):
     actions = []
     states = []
     for frame_idx, frame in enumerate(episode_data):
+        # Save frames as PNG with fast compression using cv2 (faster than PIL)
         for view in views:
             view_dir = os.path.join(frame_dir, view)
             img_t = frame[view]
@@ -49,11 +48,12 @@ def process_single_aloha_episode(idx, dataset, views, aloha_dir):
                 if img_t.dtype == torch.float32
                 else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
             )
-            with write_lock:
-                cv2.imwrite(
-                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
-                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
-                )
+            # cv2.imwrite is heavily optimized in C++ and releases the GIL
+            cv2.imwrite(
+                os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
+                cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
+                [cv2.IMWRITE_PNG_COMPRESSION, 1],
+            )
 
         actions.append(frame["action"].numpy())
         states.append(frame["observation.state"].numpy())
