@@ -252,7 +252,7 @@ def prepare_stage2_dataset(
     print("Target mixture: ALOHA (70%), T-REX (30%)")
 
     # 1. Prepare ALOHA (70% of mix)
-    # aloha_raw = prepare_aloha_dataset(raw_dir, use_subset=use_subset, target_ratio=0.70)
+    aloha_raw = prepare_aloha_dataset(raw_dir, use_subset=use_subset, target_ratio=0.70)
 
     # 2. Prepare T-REX (30% of mix)
     trex_raw = prepare_trex_dataset(raw_dir, use_subset=use_subset, target_ratio=0.30)
@@ -264,8 +264,7 @@ def prepare_stage2_dataset(
     # Process ALOHA, T-REX, and Fourier ActionNet into the processed directory
     all_episodes = []
 
-    # for root_dir in [aloha_raw, trex_raw]:
-    for root_dir in [trex_raw]:
+    for root_dir in [aloha_raw, trex_raw]:
         episodes = sorted(
             [
                 os.path.join(root_dir, d)

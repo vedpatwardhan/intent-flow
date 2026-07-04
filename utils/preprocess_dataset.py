@@ -399,23 +399,56 @@ class DatasetPreprocessor:
                 " before running the preprocessor."
             )
 
-        image_paths = sorted(
+        # Check if frame_dir contains subdirectories (multi-view) or files (single-view)
+        subdirs = sorted(
             [
-                os.path.join(frame_dir, f)
-                for f in os.listdir(frame_dir)
-                if f.endswith(".png")
+                d
+                for d in os.listdir(frame_dir)
+                if os.path.isdir(os.path.join(frame_dir, d))
             ]
         )
-        seq_len = len(image_paths)
 
-        # 1. DINOv3 visual features
-        vision_tokens = self.extract_dino_tokens(image_paths)
+        if subdirs:
+            # Multi-view setup: Extract DINO tokens per view and stack
+            view_tokens = []
+            primary_image_paths = []
+            for s_idx, subdir in enumerate(subdirs):
+                view_dir = os.path.join(frame_dir, subdir)
+                image_paths = sorted(
+                    [
+                        os.path.join(view_dir, f)
+                        for f in os.listdir(view_dir)
+                        if f.endswith(".png")
+                    ]
+                )
+                if image_paths:
+                    seq_len = len(image_paths)
+                    tokens = self.extract_dino_tokens(image_paths)
+                    view_tokens.append(tokens)
+                    if s_idx == 0:
+                        primary_image_paths = image_paths
+            vision_tokens = torch.stack(view_tokens, dim=1)
+            image_paths_for_vggt = primary_image_paths
+        else:
+            # Single-view setup: Keep shape consistent [seq_len, 1, 384]
+            image_paths = sorted(
+                [
+                    os.path.join(frame_dir, f)
+                    for f in os.listdir(frame_dir)
+                    if f.endswith(".png")
+                ]
+            )
+            seq_len = len(image_paths)
+            vision_tokens = self.extract_dino_tokens(image_paths).unsqueeze(1)
+            image_paths_for_vggt = image_paths
+
+        # 1. DINOv3 visual features are already computed above as vision_tokens
 
         # 2. CLIP Text
         text_token = self.extract_clip_tokens(text_prompt)
 
-        # 3. VGGT
-        vggt_tokens = self.extract_vggt_tokens(image_paths)
+        # 3. VGGT (computed on primary camera trajectory)
+        vggt_tokens = self.extract_vggt_tokens(image_paths_for_vggt)
 
         # Read joint states/actions (mocked if missing)
         actions_path = os.path.join(raw_episode_dir, "actions.npy")
@@ -439,7 +472,7 @@ class DatasetPreprocessor:
         else:
             # Back-project 2D video frames into 3D Point Clouds
             reconstructed_pcs = self.convert_video_to_pointclouds(
-                image_paths, click_coords=[112, 112]
+                image_paths_for_vggt, click_coords=[112, 112]
             )
             pointnext_tokens = self.extract_pointnext_tokens(reconstructed_pcs)
 
