@@ -126,7 +126,18 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     dataset = StreamingLeRobotDataset(
         "zekaiwang/trex_dataset",
         streaming=True,
-        buffer_size=1000,
+        buffer_size=100,
+        delta_timestamps={
+            "observation.state": [0.0],
+            "action": [0.0],
+            "observation.tactile_force": [0.0],
+            "timestamp": [0.0],
+            "frame_index": [0.0],
+            "episode_index": [0.0],
+            "index": [0.0],
+            "task_index": [0.0],
+            "observation.images.head_left": [0.0],
+        },
     )
     print(f"[T-REX] Features: {list(dataset.meta.features.keys())}")
     print(f"[T-REX] Streaming from: {dataset.repo_id}")
@@ -146,6 +157,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         states = []
         tactile = []
 
+        print(f"[T-REX] Episode Keys: {ep_data[0].keys()}")
         img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
