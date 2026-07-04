@@ -9,7 +9,7 @@ from torch.utils.data import Subset
 from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from datasets import load_dataset
+from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
 from utils.preprocess_dataset import DatasetPreprocessor
 
 
@@ -122,25 +122,15 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         f"[T-REX] Processing episodes for {target_ratio*100}% of mixture = {target_frames} frames..."
     )
 
-    # Load dataset directly via HF datasets streaming (extremely robust, no LeRobot video decoder overhead)
-    print("[T-REX] Initializing Hugging Face datasets stream...")
-    dataset = load_dataset("zekaiwang/trex_dataset", split="train", streaming=True)
-
-    # Filter out massive raw and deformation tactile images to save bandwidth and memory
-    all_features = list(dataset.features.keys())
-    columns_to_remove = [
-        col
-        for col in all_features
-        if (
-            "tactile" in col.lower()
-            and ("raw" in col.lower() or "deform" in col.lower())
-        )
-        or col in ["observation.images.left_wrist", "observation.images.right_wrist"]
-    ]
-    print(f"[T-REX] Removing {len(columns_to_remove)} heavy unused image columns.")
-    dataset = dataset.remove_columns(columns_to_remove)
-
-    print(f"[T-REX] Features remaining: {list(dataset.features.keys())}")
+    # Use StreamingLeRobotDataset to avoid downloading terabyte-scale dataset
+    dataset = StreamingLeRobotDataset(
+        "zekaiwang/trex_dataset",
+        streaming=True,
+        buffer_size=1000,
+    )
+    print(f"[T-REX] Features: {list(dataset.meta.features.keys())}")
+    print(f"[T-REX] Streaming from: {dataset.repo_id}")
+    print(f"[T-REX] Streaming enabled: {dataset.streaming}")
 
     def save_episode(ep_data, ep_idx):
         """Helper function to save episode data."""
@@ -156,29 +146,29 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         states = []
         tactile = []
 
-        # Find the remaining head camera key
-        img_keys = [k for k in ep_data[0].keys() if "images" in k]
+        img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
         for step_idx, row in enumerate(
             tqdm(ep_data, desc=f"Saving Ep {ep_idx}", leave=False)
         ):
             if img_keys:
-                # HF Image feature returns a PIL Image directly
-                img = row[img_keys[0]]
-                # Resize if image is not 224x224 to keep consistency
-                if img.size != (224, 224):
-                    img = img.resize((224, 224), Image.Resampling.BILINEAR)
-                img.save(
+                img_t = row[img_keys[0]]
+                img_np = (
+                    (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                    if img_t.dtype == torch.float32
+                    else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+                )
+                cv2.imwrite(
                     os.path.join(frame_dir, f"frame_{step_idx:04d}.png"),
-                    compress_level=1,
+                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
                 )
 
-            actions.append(np.array(row["action"]))
-            states.append(np.array(row["observation.state"]))
+            actions.append(row["action"].numpy())
+            states.append(row["observation.state"].numpy())
 
             if tactile_keys:
-                tactile_data = np.array(row[tactile_keys[0]])
+                tactile_data = row[tactile_keys[0]].numpy()
                 if tactile_data.shape[-1] == 16:
                     tactile.append(tactile_data.reshape(4, 4))
                 elif tactile_data.size >= 16:
@@ -199,7 +189,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         print(f"[T-REX] Processed episode {ep_idx}: {curr_len} frames")
         return curr_len
 
-    # Iterate directly through streaming dataset
+    # Iterate directly through streaming dataset without pre-fetching all indices
     ep_idx = 0
     current_ep_data = []
     current_ep_index = None
@@ -221,7 +211,9 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             # Start new episode
             current_ep_index = item_ep_index
             current_ep_data = [item]
+
         else:
+            # Add to current episode
             current_ep_data.append(item)
 
     # Save last episode
