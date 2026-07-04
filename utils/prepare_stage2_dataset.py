@@ -150,7 +150,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
-        for step_idx, row in ep_data:
+        for step_idx, row in enumerate(ep_data):
             if img_keys:
                 img_t = row[img_keys[0]]
                 img_np = (
@@ -185,7 +185,6 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             os.path.join(ep_dir, "tactile.npy"), np.stack(tactile).astype(np.float32)
         )
 
-        print(f"[T-REX] Processed episode {ep_idx}: {curr_len} frames")
         return curr_len
 
     # Iterate directly through streaming dataset without pre-fetching all indices
@@ -193,15 +192,14 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     current_ep_data = []
     current_ep_index = None
 
-    with tqdm(total=target_frames, desc="Processing T-REX", unit="frame") as pbar:
+    with tqdm(total=target_frames, desc="Processing T-REX") as pbar:
         for item in dataset:
             if target_frames <= 0:
                 break
 
             item_ep_index = item.get("episode_index", current_ep_index)
-            print(
-                f"Item: Episode {item.get('episode_index')}, "
-                f"Frame {item.get('frame_index')}"
+            pbar.set_postfix_str(
+                f"Ep {item.get('episode_index')}, Frame {item.get('frame_index')}"
             )
 
             # Start new episode if episode index changes
