@@ -650,10 +650,9 @@ The table below highlights what modalities are present in each dataset stream, a
     *   Provides paired vision-motor demonstration trajectories collected directly on Fourier GR-1 hardware.
     *   *Role*: Directly grounds control policy in the humanoid joint limits, morphology, and dynamics.
 
-#### Stage 2 Dataset Mixture Ratio (50:30:20)
-*   **Fourier ActionNet (50%)**: Direct embodiment data to ground the policy securely in the Fourier GR-1's kinematic limits and morphology.
-*   **ALOHA Tabletop (30%)**: High-quality dual-arm demonstrations to teach bimanual coordination and general tabletop task semantics.
-*   **T-REX (20%)**: Specialized tactile/force feedback signals to train contact-rich interactions without biasing the baseline joint command distributions.
+#### Stage 2 Dataset Mixture Ratio (70:30)
+*   **ALOHA Tabletop (70%)**: High-quality dual-arm demonstrations to teach bimanual coordination and general tabletop task semantics.
+*   **T-REX (30%)**: Specialized tactile/force feedback signals to train contact-rich interactions without biasing the baseline joint command distributions.
 
 
 ### C. Stage 3: RL & Tactile Alignment
