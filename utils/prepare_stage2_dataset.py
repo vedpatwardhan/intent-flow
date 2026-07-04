@@ -217,7 +217,6 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                 # Save previous episode if exists
                 if current_ep_data and current_ep_index is not None:
                     curr_len = save_episode(current_ep_data, ep_idx)
-                    target_frames -= curr_len
                     ep_idx += 1
 
                 # Start new episode
@@ -227,6 +226,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                     item.pop(view)
                 current_ep_data = [item]
                 pbar.update(1)
+                target_frames -= 1
 
             else:
                 # Add to current episode
@@ -235,6 +235,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                     item.pop(view)
                 current_ep_data.append(item)
                 pbar.update(1)
+                target_frames -= 1
 
     print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
     return trex_dir
