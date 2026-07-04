@@ -131,11 +131,6 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             "observation.state": [0.0],
             "action": [0.0],
             "observation.tactile_force": [0.0],
-            "timestamp": [0.0],
-            "frame_index": [0.0],
-            "episode_index": [0.0],
-            "index": [0.0],
-            "task_index": [0.0],
             "observation.images.head_left": [0.0],
         },
     )
