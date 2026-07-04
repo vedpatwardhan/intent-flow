@@ -217,17 +217,18 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                     curr_len = save_episode(current_ep_data, ep_idx)
                     target_frames -= curr_len
                     ep_idx += 1
-                    pbar.update(curr_len)
 
                 # Start new episode
                 current_ep_index = item_ep_index
                 current_ep_data = [item]
                 save_frames(item, len(current_ep_data) - 1, ep_idx)
+                pbar.update(1)
 
             else:
                 # Add to current episode
                 current_ep_data.append(item)
                 save_frames(item, len(current_ep_data) - 1, ep_idx)
+                pbar.update(1)
 
     print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
     return trex_dir
