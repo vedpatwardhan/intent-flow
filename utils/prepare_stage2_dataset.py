@@ -180,7 +180,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
             os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
 
         if os.path.exists(os.path.join(ep_dir, "actions.npy")):
-            return 0
+            return views
 
         for view in views[:3]:
             view_dir = os.path.join(frame_dir, view)
