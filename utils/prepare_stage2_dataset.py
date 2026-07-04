@@ -147,25 +147,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         actions = []
         states = []
         tactile = []
-
-        views = [k for k in ep_data[0].keys() if "image" in k]
-        for view in views:
-            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
-
         for step_idx, row in enumerate(ep_data):
-            for view in views[:3]:
-                view_dir = os.path.join(frame_dir, view)
-                img_t = row[view]
-                img_np = (
-                    (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-                    if img_t.dtype == torch.float32
-                    else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
-                )
-                cv2.imwrite(
-                    os.path.join(view_dir, f"frame_{step_idx:04d}.png"),
-                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
-                )
-
             actions.append(row["action"].numpy())
             states.append(row["observation.state"].numpy())
 
@@ -186,6 +168,32 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         )
 
         return curr_len
+
+    def save_frames(ep_item, item_idx, ep_idx):
+        """Helper function to save frames of an episode."""
+        ep_dir = os.path.join(trex_dir, f"episode_{ep_idx:02d}")
+        frame_dir = os.path.join(ep_dir, "frames")
+        os.makedirs(frame_dir, exist_ok=True)
+
+        if os.path.exists(os.path.join(ep_dir, "actions.npy")):
+            return 0
+
+        views = [k for k in ep_item.keys() if "image" in k]
+        for view in views:
+            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
+
+        for view in views[:3]:
+            view_dir = os.path.join(frame_dir, view)
+            img_t = ep_item[view]
+            img_np = (
+                (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                if img_t.dtype == torch.float32
+                else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+            )
+            cv2.imwrite(
+                os.path.join(view_dir, f"frame_{item_idx:04d}.png"),
+                cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
+            )
 
     # Iterate directly through streaming dataset without pre-fetching all indices
     ep_idx = 0
@@ -214,10 +222,12 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                 # Start new episode
                 current_ep_index = item_ep_index
                 current_ep_data = [item]
+                save_frames(item, len(current_ep_data) - 1, ep_idx)
 
             else:
                 # Add to current episode
                 current_ep_data.append(item)
+                save_frames(item, len(current_ep_data) - 1, ep_idx)
 
     print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
     return trex_dir
