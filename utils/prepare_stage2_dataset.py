@@ -195,6 +195,8 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
                 cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
             )
 
+        return views
+
     # Iterate directly through streaming dataset without pre-fetching all indices
     ep_idx = 0
     current_ep_data = []
@@ -220,14 +222,18 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
 
                 # Start new episode
                 current_ep_index = item_ep_index
+                views = save_frames(item, len(current_ep_data) - 1, ep_idx)
+                for view in views:
+                    item.pop(view)
                 current_ep_data = [item]
-                save_frames(item, len(current_ep_data) - 1, ep_idx)
                 pbar.update(1)
 
             else:
                 # Add to current episode
+                views = save_frames(item, len(current_ep_data) - 1, ep_idx)
+                for view in views:
+                    item.pop(view)
                 current_ep_data.append(item)
-                save_frames(item, len(current_ep_data) - 1, ep_idx)
                 pbar.update(1)
 
     print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
