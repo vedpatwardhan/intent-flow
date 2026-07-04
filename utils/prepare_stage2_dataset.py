@@ -120,7 +120,8 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
 
     target_frames = int((20000 if not use_subset else 2000) * target_ratio)
     print(
-        f"[T-REX] Processing episodes for {target_ratio*100}% of mixture = {target_frames} frames..."
+        f"[T-REX] Processing episodes for {target_ratio * 100}% of "
+        f"mixture = {target_frames} frames..."
     )
 
     # Use StreamingLeRobotDataset to avoid downloading terabyte-scale dataset
@@ -147,33 +148,32 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         states = []
         tactile = []
 
-        img_keys = [k for k in ep_data[0].keys() if "image" in k]
-        tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
+        views = [k for k in ep_data[0].keys() if "image" in k]
+        for view in views:
+            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
 
         for step_idx, row in enumerate(ep_data):
-            if img_keys:
-                img_t = row[img_keys[0]]
+            for view in views[:3]:
+                view_dir = os.path.join(frame_dir, view)
+                img_t = row[view]
                 img_np = (
                     (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
                     if img_t.dtype == torch.float32
                     else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
                 )
                 cv2.imwrite(
-                    os.path.join(frame_dir, f"frame_{step_idx:04d}.png"),
+                    os.path.join(view_dir, f"frame_{step_idx:04d}.png"),
                     cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
                 )
 
             actions.append(row["action"].numpy())
             states.append(row["observation.state"].numpy())
 
-            if tactile_keys:
-                tactile_data = row[tactile_keys[0]].numpy()
-                if tactile_data.shape[-1] == 16:
-                    tactile.append(tactile_data.reshape(4, 4))
-                elif tactile_data.size >= 16:
-                    tactile.append(tactile_data.flatten()[:16].reshape(4, 4))
-                else:
-                    tactile.append(np.zeros((4, 4), dtype=np.float32))
+            tactile_data = row["observation.tactile_force"].numpy()
+            if tactile_data.shape[-1] == 16:
+                tactile.append(tactile_data.reshape(4, 4))
+            elif tactile_data.size >= 16:
+                tactile.append(tactile_data.flatten()[:16].reshape(4, 4))
             else:
                 tactile.append(np.zeros((4, 4), dtype=np.float32))
 
