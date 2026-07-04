@@ -1,12 +1,9 @@
-from pathlib import Path
 import os
-import traceback
 import argparse
 import numpy as np
 import cv2
 import torch
 from torch.utils.data import Subset
-from PIL import Image
 from tqdm import tqdm
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
@@ -42,67 +39,71 @@ def prepare_aloha_dataset(raw_dir, use_subset=False, target_ratio=0.70):
     )
 
     # Extract actual episodes
-    for idx in tqdm(range(dataset.num_episodes), desc="ALOHA Episodes"):
-        episode_meta = dataset.meta.episodes[idx]
-        episode_idx = episode_meta["episode_index"]
+    with tqdm(total=target_frames, desc="Processing ALOHA", unit="frame") as pbar:
+        for ep_idx in range(dataset.num_episodes):
+            episode_meta = dataset.meta.episodes[ep_idx]
+            episode_idx = episode_meta["episode_index"]
 
-        episode_dir = os.path.join(aloha_dir, f"episode_{episode_idx:02d}")
-        frame_dir = os.path.join(episode_dir, "frames")
-        os.makedirs(frame_dir, exist_ok=True)
+            episode_dir = os.path.join(aloha_dir, f"episode_{episode_idx:02d}")
+            frame_dir = os.path.join(episode_dir, "frames")
+            os.makedirs(frame_dir, exist_ok=True)
 
-        # Support resume check
-        if os.path.exists(os.path.join(episode_dir, "actions.npy")):
-            continue
+            # Support resume check
+            if os.path.exists(os.path.join(episode_dir, "actions.npy")):
+                continue
 
-        # Pre-create view directories outside the frame loop to avoid filesystem check overhead
-        for view in views:
-            os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
-
-        episode_data = Subset(
-            dataset,
-            range(episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]),
-        )
-        curr_len = len(episode_data)
-
-        actions = []
-        states = []
-        for frame_idx, frame in enumerate(episode_data):
+            # Pre-create view directories outside the frame loop to avoid filesystem check overhead
             for view in views:
-                view_dir = os.path.join(frame_dir, view)
-                img_t = frame[view]
-                img_np = (
-                    (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-                    if img_t.dtype == torch.float32
-                    else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
-                )
-                cv2.imwrite(
-                    os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
-                    cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
-                )
+                os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
 
-            actions.append(frame["action"].numpy())
-            states.append(frame["observation.state"].numpy())
+            episode_data = Subset(
+                dataset,
+                range(
+                    episode_meta["dataset_from_index"], episode_meta["dataset_to_index"]
+                ),
+            )
+            curr_len = len(episode_data)
 
-        # Save arrays
-        np.save(
-            os.path.join(episode_dir, "actions.npy"),
-            np.stack(actions).astype(np.float32),
-        )
-        np.save(
-            os.path.join(episode_dir, "states.npy"),
-            np.stack(states).astype(np.float32),
-        )
-        # ALOHA does not have tactile data, set to zeros
-        np.save(
-            os.path.join(episode_dir, "tactile.npy"),
-            np.zeros((curr_len, 4, 4), dtype=np.float32),
-        )
+            actions = []
+            states = []
+            for frame_idx, frame in enumerate(episode_data):
+                for view in views:
+                    view_dir = os.path.join(frame_dir, view)
+                    img_t = frame[view]
+                    img_np = (
+                        (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                        if img_t.dtype == torch.float32
+                        else img_t.permute(1, 2, 0).numpy().astype(np.uint8)
+                    )
+                    cv2.imwrite(
+                        os.path.join(view_dir, f"frame_{frame_idx:04d}.png"),
+                        cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR),
+                    )
 
-        target_frames -= curr_len
-        if target_frames <= 0:
-            break
+                actions.append(frame["action"].numpy())
+                states.append(frame["observation.state"].numpy())
 
-    print(f"[ALOHA] Successfully prepared episodes.")
+            # Save arrays
+            np.save(
+                os.path.join(episode_dir, "actions.npy"),
+                np.stack(actions).astype(np.float32),
+            )
+            np.save(
+                os.path.join(episode_dir, "states.npy"),
+                np.stack(states).astype(np.float32),
+            )
+            # ALOHA does not have tactile data, set to zeros
+            np.save(
+                os.path.join(episode_dir, "tactile.npy"),
+                np.zeros((curr_len, 4, 4), dtype=np.float32),
+            )
+
+            target_frames -= curr_len
+            pbar.update(curr_len)
+            if target_frames <= 0:
+                break
+
+    print(f"[ALOHA] Successfully prepared {ep_idx} episodes.")
     return aloha_dir
 
 
@@ -149,9 +150,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         img_keys = [k for k in ep_data[0].keys() if "image" in k]
         tactile_keys = [k for k in ep_data[0].keys() if "tactile" in k.lower()]
 
-        for step_idx, row in enumerate(
-            tqdm(ep_data, desc=f"Saving Ep {ep_idx}", leave=False)
-        ):
+        for step_idx, row in ep_data:
             if img_keys:
                 img_t = row[img_keys[0]]
                 img_np = (
@@ -194,34 +193,33 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
     current_ep_data = []
     current_ep_index = None
 
-    for item in dataset:
-        print(f"Item Keys: {item.keys()}")
-        if target_frames <= 0:
-            break
+    with tqdm(total=target_frames, desc="Processing T-REX", unit="frame") as pbar:
+        for item in dataset:
+            if target_frames <= 0:
+                break
 
-        item_ep_index = item.get("episode_index", current_ep_index)
+            item_ep_index = item.get("episode_index", current_ep_index)
+            print(
+                f"Item: Episode {item.get('episode_index')}, "
+                f"Frame {item.get('frame_index')}"
+            )
 
-        # Start new episode if episode index changes
-        if current_ep_index is None or item_ep_index != current_ep_index:
-            # Save previous episode if exists
-            if current_ep_data and current_ep_index is not None:
-                curr_len = save_episode(current_ep_data, ep_idx)
-                target_frames -= curr_len
-                ep_idx += 1
+            # Start new episode if episode index changes
+            if current_ep_index is None or item_ep_index != current_ep_index:
+                # Save previous episode if exists
+                if current_ep_data and current_ep_index is not None:
+                    curr_len = save_episode(current_ep_data, ep_idx)
+                    target_frames -= curr_len
+                    ep_idx += 1
+                    pbar.update(curr_len)
 
-            # Start new episode
-            current_ep_index = item_ep_index
-            current_ep_data = [item]
+                # Start new episode
+                current_ep_index = item_ep_index
+                current_ep_data = [item]
 
-        else:
-            # Add to current episode
-            current_ep_data.append(item)
-
-    # Save last episode
-    if current_ep_data and target_frames > 0:
-        curr_len = save_episode(current_ep_data, ep_idx)
-        target_frames -= curr_len
-        ep_idx += 1
+            else:
+                # Add to current episode
+                current_ep_data.append(item)
 
     print(f"[T-REX] Successfully prepared {ep_idx} episodes.")
     return trex_dir
