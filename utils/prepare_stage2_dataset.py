@@ -176,7 +176,7 @@ def prepare_trex_dataset(raw_dir, use_subset=False, target_ratio=0.30):
         os.makedirs(frame_dir, exist_ok=True)
 
         views = [k for k in ep_item.keys() if "image" in k]
-        for view in views:
+        for view in views[:3]:
             os.makedirs(os.path.join(frame_dir, view), exist_ok=True)
 
         if os.path.exists(os.path.join(ep_dir, "actions.npy")):
