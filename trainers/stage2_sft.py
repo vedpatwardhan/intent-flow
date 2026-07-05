@@ -50,7 +50,6 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.flow_matcher = CLAPFlowMatcher(
             action_dim=config["model"]["action_dim"], config=config
         )
-        self.safety_filter = SafetyFilter(urdf_path=config["paths"]["urdf_path"])
 
     def forward(self, batch):
         vision = batch["vision"]
@@ -139,14 +138,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             casa_loss = F.cross_entropy(sim_matrix, labels)
             casa_losses.append(casa_loss)
 
-            # Safety filter constraint loss evaluation
-            with torch.no_grad():
-                pred_action = self.flow_matcher.sample(s_t, s_target, num_steps=10)
-                filtered_action = self.safety_filter.filter_actions(pred_action)
-                constraint_loss = torch.mean((pred_action - filtered_action) ** 2)
-
-            total_loss = cfm_loss + 0.1 * constraint_loss
-            step_losses.append(total_loss)
+            step_losses.append(cfm_loss)
 
             # --- STAGE 2 DYNAMICS DIAGNOSTICS ---
             with torch.no_grad():
