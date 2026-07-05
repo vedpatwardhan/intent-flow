@@ -42,9 +42,8 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.pt_adapter = PointNeXtAdapter(d_in=384)
         self.vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"])
         self.tactile_adapter = TactileAdapter()
-        self.action_adapter = ActionAdapter(
-            d_in=config["model"]["action_dim"], d_out=512
-        )
+        self.action_adapter = ActionAdapter(d_in=config["model"]["action_dim"])
+        self.state_adapter = ActionAdapter(d_in=config["model"]["state_dim"])
 
         self.msat = MultiStreamActionTransformer()
         self.predictor = JepaPredictor(action_dim=512)
@@ -75,6 +74,7 @@ class Stage2SFTSimplified(pl.LightningModule):
         pt_tok_tgt = self.pt_adapter(pointnext[:, t_target, :])
         vggt_tok_tgt = self.vggt_adapter(vggt[:, t_target, :])
         tactile_emb_tgt = self.tactile_adapter(tactile[:, t_target, :, :])
+        proprio_tok_tgt = self.state_adapter(proprioception[:, t_target, :])
 
         modality_dict_tgt = {
             "vision": vis_tok_tgt,
@@ -82,7 +82,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             "pointnext": pt_tok_tgt,
             "vggt": vggt_tok_tgt,
             "tactile": tactile_emb_tgt,
-            "proprioception": proprioception[:, t_target, :],
+            "proprioception": proprio_tok_tgt,
         }
         s_target = self.msat(modality_dict_tgt)
 
@@ -91,13 +91,13 @@ class Stage2SFTSimplified(pl.LightningModule):
             # ComboStoc: Asynchronous multi-stream masking
             noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
             mask_vis = (
-                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
             ).float()
             mask_pt = (
-                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
             ).float()
             mask_tac = (
-                torch.rand(batch_size, 1, device=self.device) > noise_ratio
+                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
             ).float()
 
             vis_tok = self.vis_adapter(vision[:, t, :]) * mask_vis
@@ -105,6 +105,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             pt_tok = self.pt_adapter(pointnext[:, t, :]) * mask_pt
             vggt_tok = self.vggt_adapter(vggt[:, t, :])
             tactile_emb = self.tactile_adapter(tactile[:, t, :, :]) * mask_tac
+            proprio_tok = self.state_adapter(proprioception[:, t, :])
 
             modality_dict = {
                 "vision": vis_tok,
@@ -112,7 +113,7 @@ class Stage2SFTSimplified(pl.LightningModule):
                 "pointnext": pt_tok,
                 "vggt": vggt_tok,
                 "tactile": tactile_emb,
-                "proprioception": proprioception[:, t, :],
+                "proprioception": proprio_tok,
             }
             s_t = self.msat(modality_dict)
 
@@ -151,21 +152,23 @@ class Stage2SFTSimplified(pl.LightningModule):
         loss_cfm, loss_casa = self(batch)
         total_loss = loss_cfm + 0.2 * loss_casa
 
-        self.log("train_cfm_loss", loss_cfm, on_step=True, on_epoch=True, prog_bar=True)
         self.log(
-            "train_casa_loss", loss_casa, on_step=True, on_epoch=True, prog_bar=False
+            "train_cfm_loss", loss_cfm, on_step=True, on_epoch=False, prog_bar=False
         )
         self.log(
-            "train_total_loss", total_loss, on_step=True, on_epoch=True, prog_bar=True
+            "train_casa_loss", loss_casa, on_step=False, on_epoch=True, prog_bar=False
+        )
+        self.log(
+            "train_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=False
         )
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         loss_cfm, loss_casa = self(batch)
         total_loss = loss_cfm + 0.2 * loss_casa
-        self.log("val_cfm_loss", loss_cfm, on_epoch=True, prog_bar=True)
+        self.log("val_cfm_loss", loss_cfm, on_epoch=True, prog_bar=False)
         self.log("val_casa_loss", loss_casa, on_epoch=True, prog_bar=False)
-        self.log("val_total_loss", total_loss, on_epoch=True, prog_bar=True)
+        self.log("val_total_loss", total_loss, on_epoch=True, prog_bar=False)
         return total_loss
 
     def configure_optimizers(self):
@@ -175,12 +178,45 @@ class Stage2SFTSimplified(pl.LightningModule):
             + list(self.pt_adapter.parameters())
             + list(self.vggt_adapter.parameters())
             + list(self.tactile_adapter.parameters())
+            + list(self.state_adapter.parameters())
             + list(self.action_adapter.parameters())
             + list(self.msat.parameters())
             + list(self.flow_matcher.parameters())
             + list(self.predictor.parameters())
         )
         return optim.AdamW(params, lr=self.config["stage2"]["lr"])
+
+
+class EpochMetricsTableCallback(pl.Callback):
+    """Prints a beautiful table with training and validation metrics at the end of each epoch."""
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if trainer.sanity_checking:
+            return
+
+        epoch = trainer.current_epoch
+        metrics = trainer.callback_metrics
+
+        train_cfm = metrics.get("train_cfm_loss") or metrics.get("train_cfm_loss_step")
+        train_casa = metrics.get("train_casa_loss")
+        train_total = metrics.get("train_total_loss")
+
+        val_cfm = metrics.get("val_cfm_loss")
+        val_casa = metrics.get("val_casa_loss")
+        val_total = metrics.get("val_total_loss")
+
+        def fmt(val):
+            return f"{val.item():.5f}" if val is not None else "N/A"
+
+        print(
+            f"\n================ EPOCH {epoch} METRICS SUMMARY ================"
+            f"\n  Metric              | Training    | Validation"
+            "\n  --------------------+-------------+-------------"
+            f"\n  CFM Loss            | {fmt(train_cfm):<11} | {fmt(val_cfm):<11}"
+            f"\n  CASA Loss           | {fmt(train_casa):<11} | {fmt(val_casa):<11}"
+            f"\n  Total Loss          | {fmt(train_total):<11} | {fmt(val_total):<11}"
+            f"\n===============================================================\n"
+        )
 
 
 def train_stage2(config, use_subset=False):
@@ -206,7 +242,7 @@ def train_stage2(config, use_subset=False):
         model.msat.load_state_dict(checkpoint["msat"])
 
     # 3. Setup dataloader (pulls from Aloha SFT split)
-    s2_data_dir = os.path.join(config["paths"]["dataset_dir"], "sft", "success")
+    s2_data_dir = os.path.join(config["paths"]["dataset_dir"], "sft")
     train_loader, val_loader = get_dataloader(
         data_dir=s2_data_dir,
         seq_len=config["model"]["horizon"],
@@ -238,7 +274,7 @@ def train_stage2(config, use_subset=False):
         accelerator="auto",
         devices=1,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, EpochMetricsTableCallback()],
     )
     trainer.fit(model, train_loader, val_loader)
 
@@ -252,6 +288,7 @@ def train_stage2(config, use_subset=False):
             "pt_adapter": model.pt_adapter.state_dict(),
             "vggt_adapter": model.vggt_adapter.state_dict(),
             "tactile_adapter": model.tactile_adapter.state_dict(),
+            "state_adapter": model.state_adapter.state_dict(),
             "msat": model.msat.state_dict(),
             "action_adapter": model.action_adapter.state_dict(),
             "predictor": model.predictor.state_dict(),

@@ -147,7 +147,13 @@ class SafetyFilter:
                     pass
 
             # Fallback clipping to ensure physical bounds are never violated
-            action_clipped = np.clip(action, -self.torque_max, self.torque_max)
+            torque_max = self.torque_max
+            if len(action) > len(torque_max):
+                pad_len = len(action) - len(torque_max)
+                torque_max = np.concatenate(
+                    [torque_max, np.full(pad_len, 1000.0, dtype=np.float32)]
+                )
+            action_clipped = np.clip(action, -torque_max, torque_max)
             filtered.append(action_clipped)
 
         filtered_np = np.stack(filtered, axis=0)

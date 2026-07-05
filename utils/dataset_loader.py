@@ -93,6 +93,18 @@ class PretrainingDataset(Dataset):
         total_len = data["vision"].shape[0]
         end_idx = start_idx + self.window_size
 
+        # Pad proprioception and actions along their last dimension to 58
+        def pad_last_dim(t, target_dim=58):
+            curr_dim = t.shape[-1]
+            if curr_dim < target_dim:
+                pad_shape = list(t.shape[:-1]) + [target_dim - curr_dim]
+                pad = torch.zeros(pad_shape, dtype=t.dtype)
+                return torch.cat([t, pad], dim=-1)
+            return t
+
+        proprio_padded = pad_last_dim(data["proprioception"])
+        actions_padded = pad_last_dim(data["actions"])
+
         # Slice or pad to window_size
         if total_len >= end_idx:
             sliced_data = {
@@ -100,8 +112,8 @@ class PretrainingDataset(Dataset):
                 "vggt": data["vggt"][start_idx:end_idx],
                 "pointnext": data["pointnext"][start_idx:end_idx],
                 "tactile": data["tactile"][start_idx:end_idx],
-                "proprioception": data["proprioception"][start_idx:end_idx],
-                "actions": data["actions"][start_idx:end_idx],
+                "proprioception": proprio_padded[start_idx:end_idx],
+                "actions": actions_padded[start_idx:end_idx],
                 "text": data["text"],
             }
         else:
@@ -117,8 +129,8 @@ class PretrainingDataset(Dataset):
                 "vggt": pad_tensor(data["vggt"]),
                 "pointnext": pad_tensor(data["pointnext"]),
                 "tactile": pad_tensor(data["tactile"]),
-                "proprioception": pad_tensor(data["proprioception"]),
-                "actions": pad_tensor(data["actions"]),
+                "proprioception": pad_tensor(proprio_padded),
+                "actions": pad_tensor(actions_padded),
                 "text": data["text"],
             }
 

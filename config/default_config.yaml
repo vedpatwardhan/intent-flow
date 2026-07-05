@@ -10,9 +10,9 @@ model:
   mlp_ratio: 4.0
   dropout: 0.1
 
-  # Joint limits and dimensions for Fourier GR-1 Hand 6DoF
-  action_dim: 12  # Hand joints torque/velocity output dimensions
-  state_dim: 24   # Proprioceptive state dimensions (joint angles, velocities)
+  # Joint limits and dimensions for Fourier GR-1 Hand 6DoF (padded to maximum size 58)
+  action_dim: 58  # Hand joints torque/velocity output dimensions
+  state_dim: 58   # Proprioceptive state dimensions (joint angles, velocities)
 
   # Predictor configuration
   horizon: 8
