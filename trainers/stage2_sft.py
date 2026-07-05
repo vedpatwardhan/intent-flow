@@ -295,29 +295,36 @@ def train_stage2(config, use_subset=False):
     if os.path.exists(stage1_ckpt_path):
         print(f"[SFT] Loading Stage 1 Pretrained weights from: {stage1_ckpt_path}")
         checkpoint = torch.load(stage1_ckpt_path, map_location="cpu")
+        state_dict = checkpoint["state_dict"]
 
-        # Load matched dictionary parameters
-        model.vis_adapter.load_state_dict(checkpoint["vis_adapter"])
-        model.txt_adapter.load_state_dict(checkpoint["txt_adapter"])
-        model.pt_adapter.load_state_dict(checkpoint["pt_adapter"])
-        model.vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
-        model.msat.load_state_dict(checkpoint["msat"])
+        def extract_sub_dict(prefix):
+            sub_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith(prefix + "."):
+                    sub_dict[k[len(prefix) + 1 :]] = v
+            return sub_dict
 
-        # Load pre-trained dynamics predictor and action encoder if available
-        if "predictor" in checkpoint:
+        model.vis_adapter.load_state_dict(extract_sub_dict("vis_adapter"))
+        model.txt_adapter.load_state_dict(extract_sub_dict("txt_adapter"))
+        model.pt_adapter.load_state_dict(extract_sub_dict("pt_adapter"))
+        model.vggt_adapter.load_state_dict(extract_sub_dict("vggt_adapter"))
+        model.msat.load_state_dict(extract_sub_dict("msat"))
+
+        pred_dict = extract_sub_dict("predictor")
+        if pred_dict:
             print("[SFT] Loading Pretrained dynamics predictor from Stage 1")
-            model.predictor.load_state_dict(checkpoint["predictor"])
+            model.predictor.load_state_dict(pred_dict)
 
-        action_enc_key = (
-            "action_adapter"
-            if "action_adapter" in checkpoint
-            else "latent_action_encoder"
+        action_enc_dict = extract_sub_dict("action_adapter") or extract_sub_dict(
+            "latent_action_encoder"
         )
-        if action_enc_key in checkpoint:
-            print(
-                f"[SFT] Loading Pretrained action encoder ({action_enc_key}) from Stage 1"
-            )
-            model.action_adapter.load_state_dict(checkpoint[action_enc_key])
+        if action_enc_dict:
+            print("[SFT] Loading Pretrained action encoder from Stage 1")
+            model.action_adapter.load_state_dict(action_enc_dict)
+    else:
+        print(
+            "[SFT] No Stage 1 pretrained weights found at {}".format(stage1_ckpt_path)
+        )
 
     # 3. Setup dataloader (pulls from Aloha SFT split)
     s2_data_dir = os.path.join(config["paths"]["dataset_dir"], "sft")
