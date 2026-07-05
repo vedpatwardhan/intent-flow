@@ -202,17 +202,17 @@ class Stage2SFTSimplified(pl.LightningModule):
             "train_cfm_loss", loss_cfm, on_step=True, on_epoch=False, prog_bar=False
         )
         self.log(
-            "train_casa_loss", loss_casa, on_step=False, on_epoch=True, prog_bar=False
+            "train_casa_loss", loss_casa, on_step=True, on_epoch=False, prog_bar=False
         )
         self.log(
-            "train_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=False
+            "train_total_loss", total_loss, on_step=True, on_epoch=False, prog_bar=False
         )
         self.log(
-            "train_dyn_loss", loss_dyn, on_step=False, on_epoch=True, prog_bar=False
+            "train_dyn_loss", loss_dyn, on_step=True, on_epoch=False, prog_bar=False
         )
-        self.log("train_noop_ratio", noop, on_step=False, on_epoch=True, prog_bar=False)
+        self.log("train_noop_ratio", noop, on_step=True, on_epoch=False, prog_bar=False)
         self.log(
-            "train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False
+            "train_action_drift", drift, on_step=True, on_epoch=False, prog_bar=False
         )
         return total_loss
 
@@ -254,10 +254,18 @@ class EpochMetricsTableCallback(pl.Callback):
         metrics = trainer.callback_metrics
 
         train_cfm = metrics.get("train_cfm_loss") or metrics.get("train_cfm_loss_step")
-        train_casa = metrics.get("train_casa_loss")
-        train_total = metrics.get("train_total_loss")
-        train_noop = metrics.get("train_noop_ratio")
-        train_drift = metrics.get("train_action_drift")
+        train_casa = metrics.get("train_casa_loss") or metrics.get(
+            "train_casa_loss_step"
+        )
+        train_total = metrics.get("train_total_loss") or metrics.get(
+            "train_total_loss_step"
+        )
+        train_noop = metrics.get("train_noop_ratio") or metrics.get(
+            "train_noop_ratio_step"
+        )
+        train_drift = metrics.get("train_action_drift") or metrics.get(
+            "train_action_drift_step"
+        )
 
         val_cfm = metrics.get("val_cfm_loss")
         val_casa = metrics.get("val_casa_loss")
@@ -302,6 +310,22 @@ def train_stage2(config, use_subset=False):
         model.pt_adapter.load_state_dict(checkpoint["pt_adapter"])
         model.vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
         model.msat.load_state_dict(checkpoint["msat"])
+
+        # Load pre-trained dynamics predictor and action encoder if available
+        if "predictor" in checkpoint:
+            print("[SFT] Loading Pretrained dynamics predictor from Stage 1")
+            model.predictor.load_state_dict(checkpoint["predictor"])
+
+        action_enc_key = (
+            "action_adapter"
+            if "action_adapter" in checkpoint
+            else "latent_action_encoder"
+        )
+        if action_enc_key in checkpoint:
+            print(
+                f"[SFT] Loading Pretrained action encoder ({action_enc_key}) from Stage 1"
+            )
+            model.action_adapter.load_state_dict(checkpoint[action_enc_key])
 
     # 3. Setup dataloader (pulls from Aloha SFT split)
     s2_data_dir = os.path.join(config["paths"]["dataset_dir"], "sft")
