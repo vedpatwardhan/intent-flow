@@ -46,7 +46,8 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.state_adapter = ActionAdapter(d_in=config["model"]["state_dim"])
 
         self.msat = MultiStreamActionTransformer()
-        self.predictor = JepaPredictor(action_dim=512)
+        self.predictor = JepaPredictor(action_dim=16)
+        self.action_down_proj = nn.Linear(512, 16)
         self.flow_matcher = CLAPFlowMatcher(
             action_dim=config["model"]["action_dim"], config=config
         )
@@ -162,7 +163,8 @@ class Stage2SFTSimplified(pl.LightningModule):
 
                 # Predict future state
                 z_latent = self.action_adapter(a_target)
-                s_next_pred = self.predictor(s_t, z_latent)
+                z_latent_16 = self.action_down_proj(z_latent)
+                s_next_pred = self.predictor(s_t, z_latent_16)
 
                 # Transition MSE loss
                 dyn_loss = F.mse_loss(s_next_pred, s_next).item()
@@ -173,7 +175,7 @@ class Stage2SFTSimplified(pl.LightningModule):
                 no_op_ratios.append(dyn_loss / max(no_op_loss, 1e-6))
 
                 # Action Perturbation Drift
-                z_random = torch.randn_like(z_latent)
+                z_random = torch.randn_like(z_latent_16)
                 s_next_pred_rand = self.predictor(s_t, z_random)
                 drift = F.mse_loss(s_next_pred, s_next_pred_rand).item()
                 drifts.append(drift)
@@ -228,6 +230,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             + list(self.tactile_adapter.parameters())
             + list(self.state_adapter.parameters())
             + list(self.action_adapter.parameters())
+            + list(self.action_down_proj.parameters())
             + list(self.msat.parameters())
             + list(self.flow_matcher.parameters())
             + list(self.predictor.parameters())
@@ -376,6 +379,7 @@ def train_stage2(config, use_subset=False):
             "state_adapter": model.state_adapter.state_dict(),
             "msat": model.msat.state_dict(),
             "action_adapter": model.action_adapter.state_dict(),
+            "action_down_proj": model.action_down_proj.state_dict(),
             "predictor": model.predictor.state_dict(),
             "flow_matcher": model.flow_matcher.state_dict(),
         },
