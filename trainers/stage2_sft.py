@@ -317,13 +317,6 @@ def train_stage2(config, use_subset=False):
         if pred_dict:
             print("[SFT] Loading Pretrained dynamics predictor from Stage 1")
             model.predictor.load_state_dict(pred_dict)
-
-        action_enc_dict = extract_sub_dict("action_adapter") or extract_sub_dict(
-            "latent_action_encoder"
-        )
-        if action_enc_dict:
-            print("[SFT] Loading Pretrained action encoder from Stage 1")
-            model.action_adapter.load_state_dict(action_enc_dict)
     else:
         print(
             "[SFT] No Stage 1 pretrained weights found at {}".format(stage1_ckpt_path)
