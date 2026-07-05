@@ -102,13 +102,23 @@ class PretrainingDataset(Dataset):
                 return torch.cat([t, pad], dim=-1)
             return t
 
+        # Pad vision along the views dimension (dim 1) to 4 views
+        def pad_views(t, target_views=4):
+            curr_views = t.shape[1]
+            if curr_views < target_views:
+                pad_shape = [t.shape[0], target_views - curr_views, t.shape[2]]
+                pad = torch.zeros(pad_shape, dtype=t.dtype)
+                return torch.cat([t, pad], dim=1)
+            return t
+
+        vision_padded = pad_views(data["vision"])
         proprio_padded = pad_last_dim(data["proprioception"])
         actions_padded = pad_last_dim(data["actions"])
 
         # Slice or pad to window_size
         if total_len >= end_idx:
             sliced_data = {
-                "vision": data["vision"][start_idx:end_idx],
+                "vision": vision_padded[start_idx:end_idx],
                 "vggt": data["vggt"][start_idx:end_idx],
                 "pointnext": data["pointnext"][start_idx:end_idx],
                 "tactile": data["tactile"][start_idx:end_idx],
@@ -125,7 +135,7 @@ class PretrainingDataset(Dataset):
                 return torch.cat([t, pad], dim=0)
 
             sliced_data = {
-                "vision": pad_tensor(data["vision"]),
+                "vision": pad_tensor(vision_padded),
                 "vggt": pad_tensor(data["vggt"]),
                 "pointnext": pad_tensor(data["pointnext"]),
                 "tactile": pad_tensor(data["tactile"]),
