@@ -66,6 +66,9 @@ class Stage2SFTSimplified(pl.LightningModule):
 
         step_losses = []
         casa_losses = []
+        dyn_losses = []
+        no_op_ratios = []
+        drifts = []
 
         # Compute s_target (goal configuration state) at the end of the window (horizon - 1)
         t_target = horizon - 1
@@ -88,7 +91,8 @@ class Stage2SFTSimplified(pl.LightningModule):
 
         # Iterate step-by-step to compute CFM + CASA alignment
         for t in range(horizon - 1):
-            # ComboStoc: Asynchronous multi-stream masking
+            # ComboStoc: Asynchronous multi-stream masking so we're can deal with
+            # sensor failures, occlusions and lazy modality dominance.
             noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
             mask_vis = (
                 torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
@@ -144,12 +148,54 @@ class Stage2SFTSimplified(pl.LightningModule):
             total_loss = cfm_loss + 0.1 * constraint_loss
             step_losses.append(total_loss)
 
+            # --- STAGE 2 DYNAMICS DIAGNOSTICS ---
+            with torch.no_grad():
+                # Get next ground-truth state embedding without masking
+                vis_tok_next = self.vis_adapter(vision[:, t + 1, :])
+                txt_tok_next = self.txt_adapter(text.squeeze(1))
+                pt_tok_next = self.pt_adapter(pointnext[:, t + 1, :])
+                vggt_tok_next = self.vggt_adapter(vggt[:, t + 1, :])
+                tactile_emb_next = self.tactile_adapter(tactile[:, t + 1, :, :])
+                proprio_tok_next = self.state_adapter(proprioception[:, t + 1, :])
+
+                modality_dict_next = {
+                    "vision": vis_tok_next,
+                    "text": txt_tok_next,
+                    "pointnext": pt_tok_next,
+                    "vggt": vggt_tok_next,
+                    "tactile": tactile_emb_next,
+                    "proprioception": proprio_tok_next,
+                }
+                s_next = self.msat(modality_dict_next)
+
+                # Predict future state
+                z_latent = self.action_adapter(a_target)
+                s_next_pred = self.predictor(s_t, z_latent)
+
+                # Transition MSE loss
+                dyn_loss = F.mse_loss(s_next_pred, s_next).item()
+                dyn_losses.append(dyn_loss)
+
+                # No-Op Loss Ratio
+                no_op_loss = F.mse_loss(s_t, s_next).item()
+                no_op_ratios.append(dyn_loss / max(no_op_loss, 1e-6))
+
+                # Action Perturbation Drift
+                z_random = torch.randn_like(z_latent)
+                s_next_pred_rand = self.predictor(s_t, z_random)
+                drift = F.mse_loss(s_next_pred, s_next_pred_rand).item()
+                drifts.append(drift)
+
         mean_step_loss = torch.stack(step_losses).mean()
         mean_casa_loss = torch.stack(casa_losses).mean()
-        return mean_step_loss, mean_casa_loss
+        mean_dyn_loss = sum(dyn_losses) / len(dyn_losses)
+        mean_noop = sum(no_op_ratios) / len(no_op_ratios)
+        mean_drift = sum(drifts) / len(drifts)
+
+        return mean_step_loss, mean_casa_loss, mean_dyn_loss, mean_noop, mean_drift
 
     def training_step(self, batch, batch_idx):
-        loss_cfm, loss_casa = self(batch)
+        loss_cfm, loss_casa, loss_dyn, noop, drift = self(batch)
         total_loss = loss_cfm + 0.2 * loss_casa
 
         self.log(
@@ -161,14 +207,24 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.log(
             "train_total_loss", total_loss, on_step=False, on_epoch=True, prog_bar=False
         )
+        self.log(
+            "train_dyn_loss", loss_dyn, on_step=False, on_epoch=True, prog_bar=False
+        )
+        self.log("train_noop_ratio", noop, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(
+            "train_action_drift", drift, on_step=False, on_epoch=True, prog_bar=False
+        )
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        loss_cfm, loss_casa = self(batch)
+        loss_cfm, loss_casa, loss_dyn, noop, drift = self(batch)
         total_loss = loss_cfm + 0.2 * loss_casa
         self.log("val_cfm_loss", loss_cfm, on_epoch=True, prog_bar=False)
         self.log("val_casa_loss", loss_casa, on_epoch=True, prog_bar=False)
         self.log("val_total_loss", total_loss, on_epoch=True, prog_bar=False)
+        self.log("val_dyn_loss", loss_dyn, on_epoch=True, prog_bar=False)
+        self.log("val_noop_ratio", noop, on_epoch=True, prog_bar=False)
+        self.log("val_action_drift", drift, on_epoch=True, prog_bar=False)
         return total_loss
 
     def configure_optimizers(self):
@@ -200,10 +256,14 @@ class EpochMetricsTableCallback(pl.Callback):
         train_cfm = metrics.get("train_cfm_loss") or metrics.get("train_cfm_loss_step")
         train_casa = metrics.get("train_casa_loss")
         train_total = metrics.get("train_total_loss")
+        train_noop = metrics.get("train_noop_ratio")
+        train_drift = metrics.get("train_action_drift")
 
         val_cfm = metrics.get("val_cfm_loss")
         val_casa = metrics.get("val_casa_loss")
         val_total = metrics.get("val_total_loss")
+        val_noop = metrics.get("val_noop_ratio")
+        val_drift = metrics.get("val_action_drift")
 
         def fmt(val):
             return f"{val.item():.5f}" if val is not None else "N/A"
@@ -215,6 +275,8 @@ class EpochMetricsTableCallback(pl.Callback):
             f"\n  CFM Loss            | {fmt(train_cfm):<11} | {fmt(val_cfm):<11}"
             f"\n  CASA Loss           | {fmt(train_casa):<11} | {fmt(val_casa):<11}"
             f"\n  Total Loss          | {fmt(train_total):<11} | {fmt(val_total):<11}"
+            f"\n  No-Op Ratio         | {fmt(train_noop):<11} | {fmt(val_noop):<11}"
+            f"\n  Action Drift        | {fmt(train_drift):<11} | {fmt(val_drift):<11}"
             f"\n===============================================================\n"
         )
 
