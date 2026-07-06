@@ -170,6 +170,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Step physics
             sim.sync_ctrl_to_qpos(sim.last_target_q)
+            sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
+            sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [1.0, 0.0, 0.0, 0.0]
+            sim.data.qvel[:6] = 0.0
             import mujoco
 
             mujoco.mj_step(sim.model, sim.data)

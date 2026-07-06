@@ -132,15 +132,13 @@ export default function App() {
         />
 
         {/* Right Column: Telemetry & GNN Library */}
-        <div className="flex flex-col gap-4">
-          <div className="flex-grow">
-            <TelemetryPanel
-              energy={energy}
-              energyHistory={energyHistory}
-              tactileGrid={tactileGrid}
-              joints={joints}
-            />
-          </div>
+        <div className="dashboard-column">
+          <TelemetryPanel
+            energy={energy}
+            energyHistory={energyHistory}
+            tactileGrid={tactileGrid}
+            joints={joints}
+          />
           <GnnLibrary skills={skills} />
         </div>
       </main>

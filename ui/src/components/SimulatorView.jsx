@@ -82,8 +82,8 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
     
     return {
-      x: ((clientX - rect.left) / rect.width) * 640,
-      y: ((clientY - rect.top) / rect.height) * 360
+      x: ((clientX - rect.left) / rect.width) * 224,
+      y: ((clientY - rect.top) / rect.height) * 224
     };
   };
 
@@ -219,8 +219,8 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
         
         <canvas
           ref={canvasRef}
-          width={640}
-          height={360}
+          width={224}
+          height={224}
           className="viewport-canvas"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
