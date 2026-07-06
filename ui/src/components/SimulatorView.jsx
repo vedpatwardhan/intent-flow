@@ -1,10 +1,10 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Focus, Navigation, Camera } from 'lucide-react';
 
-export default function SimulatorView({ frame, onInteraction, connectionStatus }) {
+export default function SimulatorView({ frames, onInteraction, connectionStatus }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
-  
+
   const [tool, setTool] = useState('box');
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
@@ -34,8 +34,8 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
       ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
       ctx.fillRect(drawnBox.x, drawnBox.y, drawnBox.width, drawnBox.height);
       ctx.fillStyle = '#22c55e';
-      ctx.font = '12px Outfit';
-      ctx.fillText("Goal Mask", drawnBox.x + 4, drawnBox.y + 16);
+      ctx.font = '10px Outfit';
+      ctx.fillText("Goal Mask", drawnBox.x + 4, drawnBox.y + 14);
     }
 
     if (drawnVector) {
@@ -56,7 +56,7 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
         drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, 'rgba(6, 182, 212, 0.8)');
       }
     }
-  }, [isDrawing, startPos, currentPos, drawnBox, drawnVector, tool]);
+  }, [isDrawing, startPos, currentPos, drawnBox, drawnVector, tool, activeCam]);
 
   const drawArrow = (ctx, fromx, fromy, tox, toy, color = '#06b6d4') => {
     ctx.strokeStyle = color;
@@ -77,10 +77,12 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
   };
 
   const getMousePos = (e) => {
+    if (!canvasRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
-    
+
+    // Map bounding client coordinates to 224x224 camera pixels
     return {
       x: ((clientX - rect.left) / rect.width) * 224,
       y: ((clientY - rect.top) / rect.height) * 224
@@ -110,7 +112,7 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
         width: Math.abs(currentPos.x - startPos.x),
         height: Math.abs(currentPos.y - startPos.y)
       };
-      
+
       if (box.width > 5 && box.height > 5) {
         setDrawnBox(box);
         onInteraction({
@@ -142,6 +144,9 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
 
   const handleCameraChange = (camId) => {
     setActiveCam(camId);
+    // Clear canvas when switching camera focus to prevent coordinate leaks
+    setDrawnBox(null);
+    setDrawnVector(null);
     onInteraction({
       type: 'select_camera',
       camera: camId
@@ -150,20 +155,20 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
 
   return (
     <div className="panel h-full" style={{ borderColor: 'var(--accent-cyan)' }}>
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <div>
           <h2 className="panel-title">
             <Camera className="text-cyan-400" size={18} />
-            Simulator Feed
+            Simulator Grid
           </h2>
-          <p className="panel-subtitle">Live 3D MuJoCo viewport camera views</p>
+          <p className="panel-subtitle">Multi-view observation cockpit (Click a view to Focus & Annotate)</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button 
-            onClick={() => setTool('box')} 
+          <button
+            onClick={() => setTool('box')}
             className={`btn-phase btn-phase-action ${tool === 'box' ? 'active' : ''}`}
-            style={{ 
-              padding: '6px 10px', 
+            style={{
+              padding: '6px 10px',
               background: tool === 'box' ? 'var(--accent-cyan-dim)' : '',
               borderColor: tool === 'box' ? 'var(--accent-cyan)' : ''
             }}
@@ -171,11 +176,11 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
           >
             <Focus size={14} className={tool === 'box' ? 'text-cyan-400' : ''} />
           </button>
-          <button 
-            onClick={() => setTool('vector')} 
+          <button
+            onClick={() => setTool('vector')}
             className={`btn-phase btn-phase-action ${tool === 'vector' ? 'active' : ''}`}
-            style={{ 
-              padding: '6px 10px', 
+            style={{
+              padding: '6px 10px',
               background: tool === 'vector' ? 'var(--accent-cyan-dim)' : '',
               borderColor: tool === 'vector' ? 'var(--accent-cyan)' : ''
             }}
@@ -183,8 +188,8 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
           >
             <Navigation size={14} className={`rotate-45 ${tool === 'vector' ? 'text-cyan-400' : ''}`} />
           </button>
-          <button 
-            onClick={clearCanvas} 
+          <button
+            onClick={clearCanvas}
             className="btn-phase btn-phase-action"
             style={{ padding: '6px 10px' }}
           >
@@ -193,42 +198,44 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
         </div>
       </div>
 
-      {/* Camera Selection Tabs */}
-      <div className="tab-list">
+      {/* Simulator Multi-View Grid */}
+      <div className="cam-grid" ref={containerRef}>
         {cameras.map((cam) => (
-          <button
+          <div
             key={cam.id}
             onClick={() => handleCameraChange(cam.id)}
-            className={`tab-btn ${activeCam === cam.id ? 'active' : ''}`}
+            className={`cam-grid-card ${activeCam === cam.id ? 'focused' : ''}`}
           >
-            {cam.name}
-          </button>
-        ))}
-      </div>
+            {frames && frames[cam.id] ? (
+              <img
+                src={frames[cam.id]}
+                alt={cam.name}
+              />
+            ) : (
+              <div style={{ color: '#475569', fontSize: '11px' }}>Waiting...</div>
+            )}
+            <span className="cam-grid-label">{cam.name} View</span>
 
-      <div className="viewport-frame">
-        {frame ? (
-          <img 
-            src={frame} 
-            alt="Sim feed" 
-            className="viewport-img"
-          />
-        ) : (
-          <div style={{ color: '#64748b', fontSize: '13px' }}>Waiting for simulator feed...</div>
-        )}
-        
-        <canvas
-          ref={canvasRef}
-          width={224}
-          height={224}
-          className="viewport-canvas"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onTouchStart={handleMouseDown}
-          onTouchMove={handleMouseMove}
-          onTouchEnd={handleMouseUp}
-        />
+            {/* Canvas overlay ONLY loaded on the focused camera */}
+            {activeCam === cam.id && (
+              <>
+                <span className="cam-focus-overlay">Focus</span>
+                <canvas
+                  ref={canvasRef}
+                  width={224}
+                  height={224}
+                  className="focused-canvas"
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onTouchStart={handleMouseDown}
+                  onTouchMove={handleMouseMove}
+                  onTouchEnd={handleMouseUp}
+                />
+              </>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

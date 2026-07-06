@@ -33,7 +33,7 @@ body {
   overflow: hidden;
 }
 
-/* Flex Utilities to avoid style attributes in JSX */
+/* Flex Utilities */
 .flex-row-center {
   display: flex;
   flex-direction: row;
@@ -61,7 +61,7 @@ body {
   flex-grow: 1;
 }
 
-/* Header Navbar */
+/* Header Navbar & Navigation Tabs */
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -108,6 +108,34 @@ body {
   color: #64748b;
 }
 
+.header-nav {
+  display: flex;
+  gap: 6px;
+}
+
+.nav-tab {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #94a3b8;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-tab:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.nav-tab.active {
+  color: var(--accent-cyan);
+  background: var(--accent-cyan-dim);
+  border-color: rgba(6, 182, 212, 0.2);
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -135,7 +163,7 @@ body {
   font-family: monospace;
 }
 
-/* Layout Grid */
+/* Layout Grids */
 .dashboard-layout {
   display: grid;
   grid-template-columns: 340px 1fr 360px;
@@ -385,38 +413,80 @@ body {
   100% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
-/* Camera tabs */
-.tab-list {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 6px;
-  margin-bottom: 14px;
-  overflow-x: auto;
+/* Multi-View Grid System */
+.cam-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 8px;
+  width: 100%;
+  height: 100%;
 }
 
-.tab-btn {
+.cam-grid-card {
+  position: relative;
+  background: #000;
+  border: 1px solid #1a1a24;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: #64748b;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
+  justify-content: center;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.tab-btn:hover {
-  color: #e2e8f0;
-}
-
-.tab-btn.active {
-  color: var(--accent-cyan);
+.cam-grid-card.focused {
   border-color: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan-dim);
+}
+
+.cam-grid-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.cam-grid-label {
+  position: absolute;
+  bottom: 4px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #94a3b8;
+  font-size: 8px;
+  font-family: monospace;
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+.cam-grid-card.focused .cam-grid-label {
+  color: var(--accent-cyan);
+}
+
+.cam-focus-overlay {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: var(--accent-cyan);
+  color: #000;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+/* Canvas overlay inside a focused card */
+.focused-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 15;
 }
 
 .dashboard-column {
@@ -427,7 +497,7 @@ body {
   overflow: hidden;
 }
 
-/* Simulator Aspect View */
+/* Simulator Aspect View wrapper */
 .viewport-frame {
   position: relative;
   background: #000;
@@ -440,23 +510,6 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-}
-
-.viewport-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-}
-
-.viewport-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  cursor: crosshair;
-  z-index: 10;
 }
 
 /* Connection Badges */
@@ -592,4 +645,131 @@ body {
   border-color: rgba(6, 182, 212, 0.2);
   color: #fff;
   font-weight: 600;
+}
+
+/* Full-Page Workspaces (Pages 2, 3, 4) */
+.full-page-layout {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  height: calc(100vh - 88px);
+  box-sizing: border-box;
+}
+
+.sidebar-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  height: 100%;
+}
+
+.list-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.01);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 16px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.list-item-card {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.list-item-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.list-item-card.selected {
+  border-color: var(--accent-cyan);
+  background: var(--accent-cyan-dim);
+}
+
+/* Diagnostics Heatmap grid */
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  height: 100%;
+}
+
+.diagnostics-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.diagnostics-viewport {
+  position: relative;
+  flex-grow: 1;
+  background: #000;
+  border: 1px solid #1a1a24;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+}
+
+/* PointNeXt 3D Canvas wrapper */
+.pn-mesh-box {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Composer Panel Nodes */
+.composer-canvas {
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.node-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #0f1015;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11px;
+}
+
+.node-btn {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  padding: 6px;
+  text-align: left;
+  cursor: pointer;
+  color: #94a3b8;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.node-btn:hover {
+  background: rgba(6, 182, 212, 0.05);
+  color: #fff;
+}
+
+.node-btn.selected {
+  background: var(--accent-cyan-dim);
+  border-color: var(--accent-cyan);
+  color: #fff;
 }

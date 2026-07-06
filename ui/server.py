@@ -145,7 +145,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 if payload.get("type") == "select_camera":
                     active_camera = payload["camera"]
-                    print(f"Selected Camera: {active_camera}")
+                    print(f"Selected Camera Focus: {active_camera}")
 
                 elif payload.get("type") == "ik_command":
                     phase = payload["phase"]
@@ -171,30 +171,36 @@ async def websocket_endpoint(websocket: WebSocket):
             # Step physics
             sim.sync_ctrl_to_qpos(sim.last_target_q)
             sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
-            sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [1.0, 0.0, 0.0, 0.0]
+            sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+            ]
             sim.data.qvel[:6] = 0.0
             import mujoco
 
             mujoco.mj_step(sim.model, sim.data)
 
-            # Get camera frame
-            sim.renderer.update_scene(sim.data, camera=active_camera)
-            rgb = sim.renderer.render()
+            # Render and encode all 5 cameras for the UI grid
+            frames = {}
+            for name in sim.cam_names:
+                sim.renderer.update_scene(sim.data, camera=name)
+                rgb = sim.renderer.render()
 
-            # Add visual noise if BadWorld Attack is active
-            if attack_active:
-                rgb = rgb.copy()
-                rgb[:, :, 0] = np.clip(rgb[:, :, 0] + 50, 0, 255)
+                # Apply visual noise if BadWorld Attack is active on active camera
+                if attack_active and name == active_camera:
+                    rgb = rgb.copy()
+                    rgb[:, :, 0] = np.clip(rgb[:, :, 0] + 50, 0, 255)
 
-            # Buffer image to base64
-            img = Image.fromarray(rgb)
-            img_resized = img.resize((320, 320))
-            buf = io.BytesIO()
-            img_resized.save(buf, format="JPEG", quality=80)
-            byte_im = buf.getvalue()
-            img_b64 = "data:image/jpeg;base64," + base64.b64encode(byte_im).decode(
-                "utf-8"
-            )
+                img = Image.fromarray(rgb)
+                # Resizing to 160x160 ensures low latency and fits the UI grid perfectly
+                img_resized = img.resize((160, 160))
+                buf = io.BytesIO()
+                img_resized.save(buf, format="JPEG", quality=75)
+                frames[name] = "data:image/jpeg;base64," + base64.b64encode(
+                    buf.getvalue()
+                ).decode("utf-8")
 
             # Calculate actual physics telemetry
             physics = sim.get_physics_state()
@@ -249,7 +255,7 @@ async def websocket_endpoint(websocket: WebSocket):
             ]
 
             ws_payload = {
-                "frame": img_b64,
+                "frames": frames,
                 "energy": energy,
                 "tactile_grid": tactile_grid,
                 "joints": joints_data,
@@ -258,7 +264,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             await websocket.send_text(json.dumps(ws_payload))
             step_count += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05)  # ~20fps
 
     except WebSocketDisconnect:
         print("UI Disconnected")
