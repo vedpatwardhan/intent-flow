@@ -16,7 +16,6 @@ export default function App() {
   
   const wsRef = useRef(null);
 
-  // WebSocket connect logic
   useEffect(() => {
     connectWS();
     return () => {
@@ -85,41 +84,39 @@ export default function App() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Top Navigation / Dashboard Header */}
-      <header className="glass-panel mx-4 mt-4 flex justify-between items-center py-3 px-6 border border-white/5 rounded-xl bg-black/40">
-        <div className="flex items-center gap-3">
-          <div className="bg-cyan-500/10 p-2 rounded-lg border border-cyan-500/20">
-            <Cpu className="text-cyan-400 animate-pulse" size={24} />
+      {/* Top Navigation Navbar */}
+      <header className="app-header">
+        <div className="header-left">
+          <div className="header-logo">
+            <Cpu size={20} />
           </div>
-          <div>
-            <h1 className="text-lg font-bold text-neutral-100 tracking-wide font-sans">CORTEX OS</h1>
-            <span className="text-[10px] text-neutral-500 font-mono">LATENT-FLOW CONTROLLER • STAGE 3 VLA</span>
+          <div className="header-title-group">
+            <h1>CORTEX OS</h1>
+            <span>LATENT-FLOW CONTROLLER • STAGE 3 VLA</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] text-neutral-400 font-mono uppercase">Simulation Engine</span>
-            <span className="text-xs text-neutral-500 font-mono">MuJoCo (Local)</span>
+        <div className="header-right">
+          <div className="status-indicator-group">
+            <div className="status-label">
+              Simulation Engine
+            </div>
+            <div className="status-val">
+              MuJoCo (Local)
+            </div>
           </div>
           <button 
             onClick={() => { if (wsRef.current) wsRef.current.close(); }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition ${
-              connectionStatus === 'connected' 
-                ? 'bg-green-500/10 border-green-500/20 text-green-400' 
-                : connectionStatus === 'connecting'
-                ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                : 'bg-red-500/10 border-red-500/20 text-red-400'
-            }`}
+            className={`btn-conn ${connectionStatus}`}
           >
-            {connectionStatus === 'connecting' && <RefreshCw size={12} className="animate-spin" />}
+            {connectionStatus === 'connecting' && <RefreshCw size={11} className="animate-spin" />}
             {connectionStatus === 'connected' ? 'ONLINE' : connectionStatus === 'connecting' ? 'CONNECTING' : 'OFFLINE'}
           </button>
         </div>
       </header>
 
       {/* Main Grid Workspace */}
-      <main className="dashboard-grid flex-grow">
+      <main className="dashboard-layout">
         {/* Left Column: Control Panel */}
         <ControlPanel 
           onUserCommand={handleInteraction}

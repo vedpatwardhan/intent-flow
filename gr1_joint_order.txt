@@ -1,0 +1,48 @@
+# Canonical GR-1 Joint Order (32-dim Protocol)
+# This file is the SOURCE OF TRUTH for all simulation, recording, and inference logic.
+# ALIGNMENT: 1:1 Parity with Isaac-GR00T Foundation Protocol (Interleaved).
+# COMPOSITION: 14 Arm + 12 Hand + 3 Head + 3 Waist = 32 DOF.
+
+# --- LEFT ARM (0-6) ---
+left_shoulder_pitch_joint
+left_shoulder_roll_joint
+left_shoulder_yaw_joint
+left_elbow_pitch_joint
+left_wrist_yaw_joint
+left_wrist_roll_joint
+left_wrist_pitch_joint
+
+# --- LEFT HAND (7-12) ---
+L_thumb_proximal_yaw_joint
+L_thumb_proximal_pitch_joint
+L_index_proximal_joint
+L_middle_proximal_joint
+L_ring_proximal_joint
+L_pinky_proximal_joint
+
+# --- HEAD / NECK (13-15) ---
+head_pitch_joint
+head_roll_joint
+head_yaw_joint
+
+# --- RIGHT ARM (16-22) ---
+right_shoulder_pitch_joint
+right_shoulder_roll_joint
+right_shoulder_yaw_joint
+right_elbow_pitch_joint
+right_wrist_yaw_joint
+right_wrist_roll_joint
+right_wrist_pitch_joint
+
+# --- RIGHT HAND (23-28) ---
+R_thumb_proximal_yaw_joint
+R_thumb_proximal_pitch_joint
+R_index_proximal_joint
+R_middle_proximal_joint
+R_ring_proximal_joint
+R_pinky_proximal_joint
+
+# --- WAIST (29-31) ---
+waist_yaw_joint
+waist_pitch_joint
+waist_roll_joint

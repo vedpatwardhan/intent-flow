@@ -5,7 +5,7 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   
-  const [tool, setTool] = useState('box'); // 'box' or 'vector'
+  const [tool, setTool] = useState('box');
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [currentPos, setCurrentPos] = useState({ x: 0, y: 0 });
@@ -21,36 +21,30 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
     { id: 'world_wrist', name: 'Wrist' }
   ];
 
-  // Redraw canvas content (bounding box or vector arrow)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw active box
     if (drawnBox) {
-      ctx.strokeStyle = '#22c55e'; // Green
+      ctx.strokeStyle = '#22c55e';
       ctx.lineWidth = 2;
       ctx.strokeRect(drawnBox.x, drawnBox.y, drawnBox.width, drawnBox.height);
       ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
       ctx.fillRect(drawnBox.x, drawnBox.y, drawnBox.width, drawnBox.height);
-      
-      // Target text label
       ctx.fillStyle = '#22c55e';
       ctx.font = '12px Outfit';
       ctx.fillText("Goal Mask", drawnBox.x + 4, drawnBox.y + 16);
     }
 
-    // Draw active vector arrow
     if (drawnVector) {
       drawArrow(ctx, drawnVector.start[0], drawnVector.start[1], drawnVector.end[0], drawnVector.end[1]);
     }
 
-    // Draw active drawing feedback
     if (isDrawing) {
       if (tool === 'box') {
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.8)'; // Cyan
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.8)';
         ctx.lineWidth = 2;
         ctx.strokeRect(
           startPos.x,
@@ -68,14 +62,11 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 3;
-    
-    // Draw line
     ctx.beginPath();
     ctx.moveTo(fromx, fromy);
     ctx.lineTo(tox, toy);
     ctx.stroke();
 
-    // Draw arrowhead
     const angle = Math.atan2(toy - fromy, tox - fromx);
     ctx.beginPath();
     ctx.moveTo(tox, toy);
@@ -90,7 +81,6 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
     
-    // Map client coordinates to 640x360 canvas coordinates
     return {
       x: ((clientX - rect.left) / rect.width) * 640,
       y: ((clientY - rect.top) / rect.height) * 360
@@ -159,73 +149,79 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
   };
 
   return (
-    <div className="glass-panel flex flex-col h-full glow-cyan">
-      <div className="flex justify-between items-center mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`w-3 h-3 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}`} />
-          <h2 className="font-semibold text-lg">MuJoCo Simulator View</h2>
+    <div className="panel h-full" style={{ borderColor: 'var(--accent-cyan)' }}>
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <div>
+          <h2 className="panel-title">
+            <Camera className="text-cyan-400" size={18} />
+            Simulator Feed
+          </h2>
+          <p className="panel-subtitle">Live 3D MuJoCo viewport camera views</p>
         </div>
-        <div className="flex gap-2">
+        <div style={{ display: 'flex', gap: '8px' }}>
           <button 
             onClick={() => setTool('box')} 
-            className={`p-2 rounded border transition ${tool === 'box' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'border-neutral-800 hover:bg-neutral-800'}`}
+            className={`btn-phase btn-phase-action ${tool === 'box' ? 'active' : ''}`}
+            style={{ 
+              padding: '6px 10px', 
+              background: tool === 'box' ? 'var(--accent-cyan-dim)' : '',
+              borderColor: tool === 'box' ? 'var(--accent-cyan)' : ''
+            }}
             title="Goal Bounding Box"
           >
-            <Focus size={16} />
+            <Focus size={14} className={tool === 'box' ? 'text-cyan-400' : ''} />
           </button>
           <button 
             onClick={() => setTool('vector')} 
-            className={`p-2 rounded border transition ${tool === 'vector' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'border-neutral-800 hover:bg-neutral-800'}`}
+            className={`btn-phase btn-phase-action ${tool === 'vector' ? 'active' : ''}`}
+            style={{ 
+              padding: '6px 10px', 
+              background: tool === 'vector' ? 'var(--accent-cyan-dim)' : '',
+              borderColor: tool === 'vector' ? 'var(--accent-cyan)' : ''
+            }}
             title="Directional Motion Vector"
           >
-            <Navigation size={16} className="rotate-45" />
+            <Navigation size={14} className={`rotate-45 ${tool === 'vector' ? 'text-cyan-400' : ''}`} />
           </button>
           <button 
             onClick={clearCanvas} 
-            className="px-3 py-1 text-xs border border-neutral-800 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 rounded transition"
+            className="btn-phase btn-phase-action"
+            style={{ padding: '6px 10px' }}
           >
-            Clear Overlay
+            Clear
           </button>
         </div>
       </div>
 
       {/* Camera Selection Tabs */}
-      <div className="flex border-b border-neutral-800 mb-3 overflow-x-auto gap-1 pb-1">
+      <div className="tab-list">
         {cameras.map((cam) => (
           <button
             key={cam.id}
             onClick={() => handleCameraChange(cam.id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition ${
-              activeCam === cam.id
-                ? 'bg-neutral-800 text-cyan-400 border-b-2 border-cyan-500'
-                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/60'
-            }`}
+            className={`tab-btn ${activeCam === cam.id ? 'active' : ''}`}
           >
-            <Camera size={12} />
             {cam.name}
           </button>
         ))}
       </div>
 
-      <div 
-        ref={containerRef} 
-        className="relative flex-grow bg-black rounded-lg overflow-hidden border border-neutral-900 aspect-video flex items-center justify-center"
-      >
+      <div className="viewport-frame">
         {frame ? (
           <img 
             src={frame} 
             alt="Sim feed" 
-            className="w-full h-full object-contain pointer-events-none"
+            className="viewport-img"
           />
         ) : (
-          <div className="text-neutral-500 text-sm">Waiting for simulator feed...</div>
+          <div style={{ color: '#64748b', fontSize: '13px' }}>Waiting for simulator feed...</div>
         )}
         
         <canvas
           ref={canvasRef}
           width={640}
           height={360}
-          className="absolute inset-0 w-full h-full cursor-crosshair z-10"
+          className="viewport-canvas"
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

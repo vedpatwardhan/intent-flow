@@ -1,21 +1,18 @@
 import React, { useState } from 'react';
-import { GitCommit, Plus, CheckCircle, RefreshCw } from 'lucide-react';
+import { GitCommit, CheckCircle, RefreshCw } from 'lucide-react';
 
 export default function GnnLibrary({ skills }) {
   const [hoveredNode, setHoveredNode] = useState(null);
 
-  // SVG dimensions for the skill network map
-  const width = 300;
-  const height = 150;
+  const width = 320;
+  const height = 130;
 
-  // Safe default skills if empty
   const skillList = skills || [
-    { id: '1', name: 'reach_drawer', type: 'internalized', x: 50, y: 75, active: true },
-    { id: '2', name: 'pinch_cube', type: 'internalized', x: 150, y: 40, active: false },
-    { id: '3', name: 'lift_cube', type: 'externalized', x: 250, y: 75, active: false }
+    { id: '1', name: 'reach_cube', type: 'internalized', x: 60, y: 65, active: true },
+    { id: '2', name: 'pinch_cube', type: 'internalized', x: 160, y: 35, active: false },
+    { id: '3', name: 'lift_cube', type: 'externalized', x: 260, y: 65, active: false }
   ];
 
-  // Draw transition connections
   const connections = [
     { from: '1', to: '2' },
     { from: '2', to: '3' },
@@ -23,24 +20,37 @@ export default function GnnLibrary({ skills }) {
   ];
 
   return (
-    <div className="glass-panel flex flex-col gap-4">
-      <div className="flex justify-between items-center">
+    <div className="panel" style={{ padding: '16px' }}>
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div>
-          <h2 className="font-semibold text-lg text-neutral-100 flex items-center gap-2">
-            <GitCommit className="text-cyan-400" size={20} />
+          <h2 className="panel-title" style={{ fontSize: '15px' }}>
+            <GitCommit className="text-cyan-400" size={16} />
             GNN Skill Library
           </h2>
-          <p className="text-xs text-neutral-500">Autonomous GNN dynamic skill evolution</p>
+          <p className="panel-subtitle" style={{ fontSize: '10px' }}>Autonomous dynamic skill evolution</p>
         </div>
-        <div className="flex items-center gap-1 text-[10px] bg-cyan-950/60 border border-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded">
+        <div 
+          style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '4px', 
+            background: 'var(--accent-cyan-dim)', 
+            border: '1px solid rgba(6, 182, 212, 0.2)', 
+            color: 'var(--accent-cyan)',
+            fontSize: '9px',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em'
+          }}
+        >
           <RefreshCw size={8} className="animate-spin" /> Evolving
         </div>
       </div>
 
       {/* SVG Skills Graph */}
-      <div className="bg-black/80 rounded-lg border border-neutral-900 h-40 relative overflow-hidden">
+      <div className="gnn-canvas" style={{ marginBottom: '12px' }}>
         <svg className="w-full h-full">
-          {/* Draw connecting lines */}
           {connections.map((c, idx) => {
             const fromNode = skillList.find(n => n.id === c.from);
             const toNode = skillList.find(n => n.id === c.to);
@@ -52,14 +62,13 @@ export default function GnnLibrary({ skills }) {
                 y1={fromNode.y}
                 x2={toNode.x}
                 y2={toNode.y}
-                stroke={fromNode.active && toNode.active ? '#06b6d4' : '#222'}
+                stroke={fromNode.active && toNode.active ? 'var(--accent-cyan)' : '#1e293b'}
                 strokeWidth={fromNode.active && toNode.active ? 2 : 1}
                 strokeDasharray={fromNode.type === 'externalized' ? '4,4' : 'none'}
               />
             );
           })}
 
-          {/* Draw nodes */}
           {skillList.map((skill) => (
             <g 
               key={skill.id}
@@ -67,41 +76,54 @@ export default function GnnLibrary({ skills }) {
               onMouseEnter={() => setHoveredNode(skill)}
               onMouseLeave={() => setHoveredNode(null)}
             >
-              {/* Outer halo */}
               <circle
                 cx={skill.x}
                 cy={skill.y}
-                r={skill.active ? 10 : 7}
+                r={skill.active ? 8 : 6}
                 fill="none"
-                stroke={skill.active ? '#06b6d4' : '#333'}
+                stroke={skill.active ? 'var(--accent-cyan)' : '#334155'}
                 strokeWidth={2}
                 className={skill.active ? 'animate-pulse' : ''}
               />
-              {/* Inner core */}
               <circle
                 cx={skill.x}
                 cy={skill.y}
-                r={4}
-                fill={skill.type === 'internalized' ? '#06b6d4' : '#ef4444'}
+                r={3}
+                fill={skill.type === 'internalized' ? 'var(--accent-cyan)' : 'var(--accent-red)'}
               />
             </g>
           ))}
         </svg>
 
-        {/* Hover info tooltip */}
         {hoveredNode && (
-          <div className="absolute bottom-2 left-2 right-2 bg-neutral-950/90 border border-neutral-850 p-2 rounded text-[11px] backdrop-blur flex justify-between items-center">
+          <div 
+            style={{
+              position: 'absolute',
+              bottom: '6px',
+              left: '6px',
+              right: '6px',
+              background: 'rgba(10, 10, 15, 0.95)',
+              border: '1px solid #1e293b',
+              padding: '6px 10px',
+              borderRadius: '6px',
+              fontSize: '10px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              backdropFilter: 'blur(4px)'
+            }}
+          >
             <div>
-              <span className="font-semibold text-neutral-200">{hoveredNode.name}</span>
-              <span className="text-[10px] text-neutral-500 block capitalize">{hoveredNode.type} Skill</span>
+              <span style={{ fontWeight: '600', color: '#f8fafc', display: 'block' }}>{hoveredNode.name}</span>
+              <span style={{ color: '#64748b', fontSize: '9px', textTransform: 'capitalize' }}>{hoveredNode.type} Skill</span>
             </div>
-            <div className="flex items-center gap-1 text-[10px]">
+            <div>
               {hoveredNode.active ? (
-                <span className="text-cyan-400 flex items-center gap-0.5">
-                  <CheckCircle size={10} /> Active
+                <span style={{ color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                  <CheckCircle size={8} /> Active
                 </span>
               ) : (
-                <span className="text-neutral-600">Standby</span>
+                <span style={{ color: '#475569' }}>Standby</span>
               )}
             </div>
           </div>
@@ -109,21 +131,24 @@ export default function GnnLibrary({ skills }) {
       </div>
 
       {/* Skills list table */}
-      <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto">
+      <div className="gnn-table">
         {skillList.map(skill => (
           <div 
             key={skill.id} 
-            className={`flex justify-between items-center p-2 rounded text-xs border ${
-              skill.active 
-                ? 'bg-cyan-500/5 border-cyan-500/20 text-cyan-200 font-semibold' 
-                : 'bg-neutral-900/30 border-neutral-850 text-neutral-400'
-            }`}
+            className={`gnn-row ${skill.active ? 'active' : ''}`}
           >
-            <div className="flex items-center gap-2">
-              <span className={`w-1.5 h-1.5 rounded-full ${skill.type === 'internalized' ? 'bg-cyan-400' : 'bg-red-400'}`} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span 
+                style={{ 
+                  width: '6px', 
+                  height: '6px', 
+                  borderRadius: '50%',
+                  backgroundColor: skill.type === 'internalized' ? 'var(--accent-cyan)' : 'var(--accent-red)'
+                }} 
+              />
               <span>{skill.name}</span>
             </div>
-            <span className="text-[10px] opacity-70 capitalize">{skill.type}</span>
+            <span style={{ opacity: 0.7, textTransform: 'capitalize', fontSize: '9px' }}>{skill.type}</span>
           </div>
         ))}
       </div>
