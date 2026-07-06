@@ -1,26 +1,15 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Send, Sliders, FileCode } from 'lucide-react';
+import { ShieldAlert, Send, Sliders, Play, RotateCcw, HelpCircle } from 'lucide-react';
 
 export default function ControlPanel({ onUserCommand, onComboStocChange, onTriggerAttack }) {
-  const [textPrompt, setTextPrompt] = useState('pinch the green block and lift it');
+  const [textPrompt, setTextPrompt] = useState('pinch the red block and lift it');
   const [attackActive, setAttackActive] = useState(false);
   const [timesteps, setTimesteps] = useState({
-    torso: 0,
-    arm: 0,
-    hand: 0,
-    vision: 0
+    torso: 0.0,
+    arm: 0.0,
+    hand: 0.0,
+    vision: 0.0
   });
-  
-  const [xmlContent, setXmlContent] = useState(
-`<mujoco model="humanoid_pinch">
-  <compiler angle="degree"/>
-  <option gravity="0 0 -9.81"/>
-  <worldbody>
-    <body name="block" pos="0.4 0 0.1">
-      <geom size="0.02 0.02 0.02" type="box"/>
-    </body>
-  </worldbody>
-</mujoco>`);
 
   const handleSubmitPrompt = (e) => {
     e.preventDefault();
@@ -43,6 +32,25 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
     onTriggerAttack(nextState);
   };
 
+  const triggerIkPhase = (phase) => {
+    onUserCommand({
+      type: 'ik_command',
+      phase: phase
+    });
+  };
+
+  const triggerReset = () => {
+    onUserCommand({
+      type: 'reset'
+    });
+  };
+
+  const triggerWildRandomize = () => {
+    onUserCommand({
+      type: 'wild_randomize'
+    });
+  };
+
   return (
     <div className="glass-panel flex flex-col gap-5 h-full overflow-y-auto">
       <div>
@@ -50,7 +58,7 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
           <Sliders className="text-cyan-400" size={20} />
           Control Center
         </h2>
-        <p className="text-xs text-neutral-500">Parameter tuning & state intervention</p>
+        <p className="text-xs text-neutral-500">Parameter tuning & physical state intervention</p>
       </div>
 
       {/* Task input */}
@@ -69,6 +77,56 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
           </button>
         </div>
       </form>
+
+      <hr className="border-neutral-850" />
+
+      {/* Actual MuJoCo IK Phase Controllers */}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs text-neutral-400 font-semibold uppercase tracking-wider flex items-center gap-1">
+          <Play size={14} className="text-green-400" />
+          Interactive IK Pickup Phases
+        </label>
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          <button
+            onClick={triggerReset}
+            className="py-2 px-3 text-xs bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded transition flex items-center justify-center gap-1 text-neutral-200"
+          >
+            <RotateCcw size={12} />
+            Reset Env
+          </button>
+          <button
+            onClick={triggerWildRandomize}
+            className="py-2 px-3 text-xs bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded transition flex items-center justify-center gap-1 text-neutral-200"
+          >
+            <HelpCircle size={12} />
+            Wild Randomize
+          </button>
+          <button
+            onClick={() => triggerIkPhase(0)}
+            className="py-2 px-3 text-xs bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 rounded transition text-left"
+          >
+            Phase 0: Reach
+          </button>
+          <button
+            onClick={() => triggerIkPhase(1)}
+            className="py-2 px-3 text-xs bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 rounded transition text-left"
+          >
+            Phase 1: Descent
+          </button>
+          <button
+            onClick={() => triggerIkPhase(2)}
+            className="py-2 px-3 text-xs bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 rounded transition text-left"
+          >
+            Phase 2: Grasp
+          </button>
+          <button
+            onClick={() => triggerIkPhase(3)}
+            className="py-2 px-3 text-xs bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 hover:border-cyan-500/40 text-cyan-400 rounded transition text-left"
+          >
+            Phase 3: Lift
+          </button>
+        </div>
+      </div>
 
       <hr className="border-neutral-850" />
 
@@ -110,22 +168,6 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
           <ShieldAlert size={18} />
           {attackActive ? 'BadWorld Attack Engaged' : 'Inject BadWorld Attack'}
         </button>
-      </div>
-
-      <hr className="border-neutral-850" />
-
-      {/* MuJoCo XML editor */}
-      <div className="flex flex-col gap-2 flex-grow">
-        <label className="text-xs text-neutral-400 font-semibold uppercase tracking-wider flex items-center gap-1">
-          <FileCode size={14} />
-          MuJoCo XML (Interactive Mock)
-        </label>
-        <textarea
-          value={xmlContent}
-          onChange={(e) => setXmlContent(e.target.value)}
-          className="w-full flex-grow bg-neutral-950 border border-neutral-900 focus:border-cyan-500 rounded p-2 text-xs font-mono text-neutral-400 outline-none resize-none transition"
-          rows={6}
-        />
       </div>
     </div>
   );

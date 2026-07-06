@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Focus, Navigation } from 'lucide-react';
+import { Focus, Navigation, Camera } from 'lucide-react';
 
 export default function SimulatorView({ frame, onInteraction, connectionStatus }) {
   const canvasRef = useRef(null);
@@ -11,6 +11,15 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
   const [currentPos, setCurrentPos] = useState({ x: 0, y: 0 });
   const [drawnBox, setDrawnBox] = useState(null);
   const [drawnVector, setDrawnVector] = useState(null);
+  const [activeCam, setActiveCam] = useState('world_center');
+
+  const cameras = [
+    { id: 'world_center', name: 'Center' },
+    { id: 'world_top', name: 'Top' },
+    { id: 'world_left', name: 'Left' },
+    { id: 'world_right', name: 'Right' },
+    { id: 'world_wrist', name: 'Wrist' }
+  ];
 
   // Redraw canvas content (bounding box or vector arrow)
   useEffect(() => {
@@ -78,12 +87,13 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
 
   const getMousePos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    // Support mouse and touch events
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+    
+    // Map client coordinates to 640x360 canvas coordinates
     return {
-      x: clientX - rect.left,
-      y: clientY - rect.top
+      x: ((clientX - rect.left) / rect.width) * 640,
+      y: ((clientY - rect.top) / rect.height) * 360
     };
   };
 
@@ -111,7 +121,6 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
         height: Math.abs(currentPos.y - startPos.y)
       };
       
-      // Ensure box has non-trivial dimensions
       if (box.width > 5 && box.height > 5) {
         setDrawnBox(box);
         onInteraction({
@@ -139,6 +148,14 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
     setDrawnBox(null);
     setDrawnVector(null);
     onInteraction({ type: 'clear' });
+  };
+
+  const handleCameraChange = (camId) => {
+    setActiveCam(camId);
+    onInteraction({
+      type: 'select_camera',
+      camera: camId
+    });
   };
 
   return (
@@ -170,6 +187,24 @@ export default function SimulatorView({ frame, onInteraction, connectionStatus }
             Clear Overlay
           </button>
         </div>
+      </div>
+
+      {/* Camera Selection Tabs */}
+      <div className="flex border-b border-neutral-800 mb-3 overflow-x-auto gap-1 pb-1">
+        {cameras.map((cam) => (
+          <button
+            key={cam.id}
+            onClick={() => handleCameraChange(cam.id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition ${
+              activeCam === cam.id
+                ? 'bg-neutral-800 text-cyan-400 border-b-2 border-cyan-500'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/60'
+            }`}
+          >
+            <Camera size={12} />
+            {cam.name}
+          </button>
+        ))}
       </div>
 
       <div 
