@@ -19,7 +19,7 @@ export default function EncoderDiagnostics({ frame }) {
   const drawDinoAttnMap = () => {
     // Generate simple SVG circles radiating outward from the focal point representing attention intensities
     return (
-      <svg className="w-full h-full" style={{ background: '#050508' }}>
+      <svg viewBox="0 0 224 224" className="w-full h-full" style={{ background: '#050508' }}>
         {/* Draw mock background image frames */}
         {frame && <image href={frame} width="100%" height="100%" opacity="0.45" />}
         
@@ -49,7 +49,7 @@ export default function EncoderDiagnostics({ frame }) {
     }
 
     return (
-      <svg className="w-full h-full" style={{ background: '#050508' }}>
+      <svg viewBox="0 0 224 224" className="w-full h-full" style={{ background: '#050508' }}>
         {frame && <image href={frame} width="100%" height="100%" opacity="0.4" />}
         
         {/* Render Jet colormap heatmap */}
@@ -111,7 +111,7 @@ export default function EncoderDiagnostics({ frame }) {
     }
 
     return (
-      <svg className="w-full h-full" style={{ background: '#020204' }}>
+      <svg viewBox="0 0 224 224" className="w-full h-full" style={{ background: '#020204' }}>
         {pts.map((p, idx) => (
           <circle key={idx} cx={p.x} cy={p.y} r="2.5" fill={p.color} opacity="0.8" />
         ))}

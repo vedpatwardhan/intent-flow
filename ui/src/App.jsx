@@ -17,7 +17,7 @@ export default function App() {
   const [joints, setJoints] = useState({ positions: [0, 0, 0, 0], torques: [0, 0, 0, 0] });
   const [skills, setSkills] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  
+
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -95,36 +95,36 @@ export default function App() {
             <Cpu size={20} />
           </div>
           <div className="header-title-group">
-            <h1>CORTEX OS</h1>
-            <span>LATENT-FLOW CONTROLLER • STAGE 3 VLA</span>
+            <h1>LATENT-FLOW</h1>
+            <span>RL CONTROLLER</span>
           </div>
         </div>
 
         {/* Dashboard Navigation Tabs */}
         <nav className="header-nav">
-          <button 
-            onClick={() => setActivePage('command')} 
+          <button
+            onClick={() => setActivePage('command')}
             className={`nav-tab flex-row-center gap-8 ${activePage === 'command' ? 'active' : ''}`}
           >
             <Grid size={14} />
             Command Center
           </button>
-          <button 
-            onClick={() => setActivePage('trajectories')} 
+          <button
+            onClick={() => setActivePage('trajectories')}
             className={`nav-tab flex-row-center gap-8 ${activePage === 'trajectories' ? 'active' : ''}`}
           >
             <PlayCircle size={14} />
             Trajectory Explorer
           </button>
-          <button 
-            onClick={() => setActivePage('encoders')} 
+          <button
+            onClick={() => setActivePage('encoders')}
             className={`nav-tab flex-row-center gap-8 ${activePage === 'encoders' ? 'active' : ''}`}
           >
             <Eye size={14} />
             Encoder Diagnostics
           </button>
-          <button 
-            onClick={() => setActivePage('skills')} 
+          <button
+            onClick={() => setActivePage('skills')}
             className={`nav-tab flex-row-center gap-8 ${activePage === 'skills' ? 'active' : ''}`}
           >
             <GitCommit size={14} />
@@ -141,7 +141,7 @@ export default function App() {
               MuJoCo (Local)
             </div>
           </div>
-          <button 
+          <button
             onClick={() => { if (wsRef.current) wsRef.current.close(); }}
             className={`btn-conn ${connectionStatus}`}
           >
@@ -155,14 +155,14 @@ export default function App() {
       {activePage === 'command' && (
         <main className="dashboard-layout">
           {/* Left Column: Control Panel */}
-          <ControlPanel 
+          <ControlPanel
             onUserCommand={handleInteraction}
             onComboStocChange={handleComboStocChange}
             onTriggerAttack={handleTriggerAttack}
           />
 
           {/* Center Column: Grid View of 5 Cameras */}
-          <SimulatorView 
+          <SimulatorView
             frames={frames}
             onInteraction={handleInteraction}
             connectionStatus={connectionStatus}
@@ -170,8 +170,8 @@ export default function App() {
 
           {/* Right Column: Telemetry & GNN Library summary */}
           <div className="dashboard-column">
-            <TelemetryPanel 
-              energy={energy} 
+            <TelemetryPanel
+              energy={energy}
               energyHistory={energyHistory}
               tactileGrid={tactileGrid}
               joints={joints}

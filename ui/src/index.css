@@ -725,7 +725,6 @@ body {
 
 .diagnostics-viewport {
   position: relative;
-  flex-grow: 1;
   background: #000;
   border: 1px solid #1a1a24;
   border-radius: 8px;
@@ -734,6 +733,9 @@ body {
   align-items: center;
   justify-content: center;
   aspect-ratio: 1;
+  max-width: 260px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 /* PointNeXt 3D Canvas wrapper */
