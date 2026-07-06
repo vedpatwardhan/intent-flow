@@ -727,5 +727,21 @@ Joint SFT fine-tuning of adapters, MSAT, Predictor, and the dual-state Hierarchi
   python latent-flow/train.py stage=2
   ```
 
+### 6. Interactive Command Center UI (Stage 3 Simulation & Control)
+A premium dashboard for real-time visualization of the Stage 3 simulation, EBM energy charts, ComboStoc timelines, and GNN skill library evolution.
+
+*   **Start the WebSocket Server** (launches mock FastAPI telemetry and PIL image rendering):
+    ```bash
+    cd latent-flow/ui
+    ../../.venv/bin/python -m uvicorn server:app --reload --port 8000
+    ```
+
+*   **Start the React Frontend** (runs the Vite dev server):
+    ```bash
+    cd latent-flow/ui
+    npm run dev
+    ```
+    Once started, navigate to `http://localhost:5173` in your browser.
+
 
 
