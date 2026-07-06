@@ -33,6 +33,34 @@ body {
   overflow: hidden;
 }
 
+/* Flex Utilities to avoid style attributes in JSX */
+.flex-row-center {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.gap-4 {
+  gap: 16px;
+}
+
+.gap-8 {
+  gap: 8px;
+}
+
+.gap-12 {
+  gap: 12px;
+}
+
+.flex-grow {
+  flex-grow: 1;
+}
+
 /* Header Navbar */
 .app-header {
   display: flex;
@@ -191,6 +219,12 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #94a3b8;
+}
+
+.form-label-flex {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .input-text {

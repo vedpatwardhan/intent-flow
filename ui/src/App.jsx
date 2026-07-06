@@ -13,7 +13,7 @@ export default function App() {
   const [joints, setJoints] = useState({ positions: [0, 0, 0, 0], torques: [0, 0, 0, 0] });
   const [skills, setSkills] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  
+
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -91,8 +91,8 @@ export default function App() {
             <Cpu size={20} />
           </div>
           <div className="header-title-group">
-            <h1>CORTEX OS</h1>
-            <span>LATENT-FLOW CONTROLLER • STAGE 3 VLA</span>
+            <h1>LATENT-FLOW</h1>
+            <span>RL CONTROLLER</span>
           </div>
         </div>
 
@@ -105,7 +105,7 @@ export default function App() {
               MuJoCo (Local)
             </div>
           </div>
-          <button 
+          <button
             onClick={() => { if (wsRef.current) wsRef.current.close(); }}
             className={`btn-conn ${connectionStatus}`}
           >
@@ -118,14 +118,14 @@ export default function App() {
       {/* Main Grid Workspace */}
       <main className="dashboard-layout">
         {/* Left Column: Control Panel */}
-        <ControlPanel 
+        <ControlPanel
           onUserCommand={handleInteraction}
           onComboStocChange={handleComboStocChange}
           onTriggerAttack={handleTriggerAttack}
         />
 
         {/* Center Column: Simulator Feed & Canvas Overlay */}
-        <SimulatorView 
+        <SimulatorView
           frame={frame}
           onInteraction={handleInteraction}
           connectionStatus={connectionStatus}
@@ -134,8 +134,8 @@ export default function App() {
         {/* Right Column: Telemetry & GNN Library */}
         <div className="flex flex-col gap-4">
           <div className="flex-grow">
-            <TelemetryPanel 
-              energy={energy} 
+            <TelemetryPanel
+              energy={energy}
               energyHistory={energyHistory}
               tactileGrid={tactileGrid}
               joints={joints}

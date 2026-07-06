@@ -65,13 +65,12 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
         {/* Goal Command input */}
         <form onSubmit={handleSubmitPrompt} className="form-group">
           <label className="form-label">Goal Command (CLIP)</label>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div className="flex-row-center gap-8">
             <input
               type="text"
               value={textPrompt}
               onChange={(e) => setTextPrompt(e.target.value)}
-              className="input-text"
-              style={{ flexGrow: 1 }}
+              className="input-text flex-grow"
               placeholder="Type task prompt..."
             />
             <button type="submit" className="btn-send">
@@ -84,7 +83,7 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
 
         {/* Interactive IK Phase controllers */}
         <div className="form-group">
-          <label className="form-label flex items-center gap-1">
+          <label className="form-label form-label-flex">
             <Play size={12} className="text-green-400" />
             Interactive IK Pickup Phases
           </label>
@@ -115,7 +114,7 @@ export default function ControlPanel({ onUserCommand, onComboStocChange, onTrigg
         <hr className="separator" />
 
         {/* ComboStoc timeline noise sliders */}
-        <div className="form-group" style={{ gap: '12px' }}>
+        <div className="form-group gap-12">
           <label className="form-label">ComboStoc Asynchronous Noise ($t$)</label>
           {Object.entries(timesteps).map(([group, val]) => (
             <div key={group} className="slider-group">
