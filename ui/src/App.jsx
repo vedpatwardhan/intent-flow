@@ -141,12 +141,11 @@ export default function App() {
               MuJoCo (Local)
             </div>
           </div>
-          <button
+          <button 
             onClick={() => { if (wsRef.current) wsRef.current.close(); }}
-            className={`btn-conn ${connectionStatus}`}
+            className={`btn-conn ${connectionStatus === 'connected' ? 'connected' : 'disconnected'}`}
           >
-            {connectionStatus === 'connecting' && <RefreshCw size={11} className="animate-spin" />}
-            {connectionStatus === 'connected' ? 'ONLINE' : connectionStatus === 'connecting' ? 'CONNECTING' : 'OFFLINE'}
+            {connectionStatus === 'connected' ? 'ONLINE' : 'OFFLINE'}
           </button>
         </div>
       </header>
