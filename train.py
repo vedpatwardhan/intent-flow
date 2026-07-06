@@ -3,7 +3,7 @@ import hydra
 from omegaconf import OmegaConf
 from trainers.stage1_pretrain import train_stage1
 from trainers.stage2_sft import train_stage2
-from trainers.stage3_rl import train_stage3
+from trainers.stage3 import train_stage3
 
 
 @hydra.main(version_base=None, config_path="config", config_name="default_config")
