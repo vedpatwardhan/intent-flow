@@ -123,6 +123,7 @@ sim.reset_env(lock_posture=True)
 app = FastAPI()
 
 active_camera = "world_center"
+encoder_processing_enabled = True
 combostoc_noise = {"torso": 0.0, "arm": 0.0, "hand": 0.0, "vision": 0.0}
 attack_active = False
 
@@ -132,15 +133,15 @@ for i, arg in enumerate(sys.argv):
         colab_url = sys.argv[i + 1]
 colab_url = colab_url or os.environ.get("COLAB_URL")
 
-click_x = 112
-click_y = 112
+click_x = None
+click_y = None
 text_prompt = "cube block"
 frame_history = deque(maxlen=5)
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global active_camera, attack_active, combostoc_noise, click_x, click_y, text_prompt
+    global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, text_prompt
     await websocket.accept()
     print("UI Connected via WebSocket")
 
@@ -175,8 +176,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     val = payload["value"]
                     combostoc_noise[group] = val
 
+                elif payload.get("type") == "toggle_encoders":
+                    encoder_processing_enabled = bool(payload["enabled"])
+                    print(
+                        f"Set Encoder Processing Enabled: {encoder_processing_enabled}"
+                    )
+
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
+
+                elif payload.get("type") == "clear_selections":
+                    click_x = None
+                    click_y = None
+                    print("Cleared active camera click selections.")
 
                 elif payload.get("type") == "original_click":
                     click_x = int(payload["x"])
@@ -291,8 +303,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 "skills": skills_data,
             }
 
-            if colab_url:
-                base64_frame = frames.get("world_center", "")
+            if colab_url and click_x is not None:
+                base64_frame = frames.get(active_camera, "")
                 if base64_frame:
                     frame_history.append(base64_frame)
                     async with httpx.AsyncClient() as client:

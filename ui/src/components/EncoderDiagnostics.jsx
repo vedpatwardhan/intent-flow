@@ -124,6 +124,13 @@ export default function EncoderDiagnostics({
     onInteraction({ type: 'goal_click', x, y });
   };
 
+  const handleClearSelections = () => {
+    setSegmentMarkers(prev => ({ ...prev, [activeCam]: null }));
+    setTrackMarkers(prev => ({ ...prev, [activeCam]: null }));
+    setGoalMarkers(prev => ({ ...prev, [activeCam]: null }));
+    onInteraction({ type: 'clear_selections' });
+  };
+
   const renderHeatmapOverlay = (dataMatrix, colorMap) => {
     if (!dataMatrix || dataMatrix.length === 0) {
       return (
@@ -542,6 +549,24 @@ export default function EncoderDiagnostics({
                 </div>
               );
             })}
+            <button
+              onClick={handleClearSelections}
+              style={{
+                background: 'var(--accent-red-dim)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: 'var(--accent-red)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                marginLeft: 'auto',
+                alignSelf: 'center',
+                transition: 'all 0.2s'
+              }}
+            >
+              Clear Selections
+            </button>
           </div>
 
           {/* Dedicated Row 1: 3 Interactive Viewports stretching to match Row 2 card widths */}
