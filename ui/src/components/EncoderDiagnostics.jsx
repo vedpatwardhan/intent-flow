@@ -35,10 +35,10 @@ export default function EncoderDiagnostics({
   const [activeSliders, setActiveSliders] = useState([16, 17, 29, 30, 31]);
   const [jointValues, setJointValues] = useState({});
   
-  // Independent click markers for each mode
-  const [segmentMarker, setSegmentMarker] = useState(null);
-  const [trackMarker, setTrackMarker] = useState(null);
-  const [goalMarker, setGoalMarker] = useState(null);
+  // Decoupled click markers indexed by camera ID
+  const [segmentMarkers, setSegmentMarkers] = useState({});
+  const [trackMarkers, setTrackMarkers] = useState({});
+  const [goalMarkers, setGoalMarkers] = useState({});
 
   const handleTextSubmit = (e) => {
     e.preventDefault();
@@ -78,17 +78,17 @@ export default function EncoderDiagnostics({
   const triggerReset = () => {
     onInteraction({ type: 'reset' });
     setJointValues({});
-    setSegmentMarker(null);
-    setTrackMarker(null);
-    setGoalMarker(null);
+    setSegmentMarkers({});
+    setTrackMarkers({});
+    setGoalMarkers({});
   };
 
   const triggerRandomize = () => {
     onInteraction({ type: 'wild_randomize' });
     setJointValues({});
-    setSegmentMarker(null);
-    setTrackMarker(null);
-    setGoalMarker(null);
+    setSegmentMarkers({});
+    setTrackMarkers({});
+    setGoalMarkers({});
   };
 
   const handleCameraChange = (camId) => {
@@ -99,12 +99,12 @@ export default function EncoderDiagnostics({
     });
   };
 
-  // Click captures mapped directly to individual functions
+  // Click captures mapped directly to individual functions and decoupled by camera ID
   const handleSegmentClick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.round(((e.clientX - rect.left) / rect.width) * 224);
     const y = Math.round(((e.clientY - rect.top) / rect.height) * 224);
-    setSegmentMarker({ x, y });
+    setSegmentMarkers(prev => ({ ...prev, [activeCam]: { x, y } }));
     onInteraction({ type: 'original_click', x, y });
   };
 
@@ -112,7 +112,7 @@ export default function EncoderDiagnostics({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.round(((e.clientX - rect.left) / rect.width) * 224);
     const y = Math.round(((e.clientY - rect.top) / rect.height) * 224);
-    setTrackMarker({ x, y });
+    setTrackMarkers(prev => ({ ...prev, [activeCam]: { x, y } }));
     onInteraction({ type: 'track_click', x, y });
   };
 
@@ -120,7 +120,7 @@ export default function EncoderDiagnostics({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.round(((e.clientX - rect.left) / rect.width) * 224);
     const y = Math.round(((e.clientY - rect.top) / rect.height) * 224);
-    setGoalMarker({ x, y });
+    setGoalMarkers(prev => ({ ...prev, [activeCam]: { x, y } }));
     onInteraction({ type: 'goal_click', x, y });
   };
 
@@ -566,7 +566,7 @@ export default function EncoderDiagnostics({
                 style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
               >
                 {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(segmentMarker, 'var(--accent-red)')}
+                {renderClickReticle(segmentMarkers[activeCam], 'var(--accent-red)')}
               </div>
               <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                 Click to segment / generate point cloud.
@@ -587,7 +587,7 @@ export default function EncoderDiagnostics({
                 style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
               >
                 {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(trackMarker, 'var(--accent-cyan)')}
+                {renderClickReticle(trackMarkers[activeCam], 'var(--accent-cyan)')}
               </div>
               <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                 Click to seed continuous visual tracks.
@@ -608,7 +608,7 @@ export default function EncoderDiagnostics({
                 style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
               >
                 {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(goalMarker, 'var(--accent-green)')}
+                {renderClickReticle(goalMarkers[activeCam], 'var(--accent-green)')}
               </div>
               <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                 Click to anchor policy trajectory goals.
