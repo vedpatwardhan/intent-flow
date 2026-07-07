@@ -205,6 +205,12 @@ def train_stage3(config, use_subset=False):
         if "flow_matcher" in checkpoint:
             flow_matcher.load_state_dict(checkpoint["flow_matcher"])
 
+    # Create a frozen copy of the initial SFT base model to act as the uncorrupted global teacher for d-OPSD distillation
+    base_teacher = copy.deepcopy(flow_matcher).to(device)
+    for p in base_teacher.parameters():
+        p.requires_grad = False
+    base_teacher.eval()
+
     # Node parameters are registered inside the optimizer
     optimizer = optim.AdamW(
         list(flow_matcher.parameters())
@@ -386,12 +392,10 @@ def train_stage3(config, use_subset=False):
 
                 # 6. Privileged d-OPSD teacher-student distillation (HARD TASKS ONLY)
                 distill_loss = torch.tensor(0.0, device=device)
-                if is_hard_task and len(gnn_library.specialists) > 0:
-                    # Distill from active node specialist
-                    best_key = active_node_key
-                    best_policy = gnn_library.specialists[best_key]
+                if is_hard_task:
+                    # Distill from the uncorrupted global teacher copy to maintain correct trajectory manifold
                     with torch.no_grad():
-                        teacher_action = best_policy.sample(
+                        teacher_action = base_teacher.sample(
                             s_t_sample, s_target_sample, num_steps=10
                         )
                     distill_loss = criterion(a_sample, teacher_action) * 1.5
