@@ -94,6 +94,11 @@ export default function SimulatorView({ frames, onInteraction, connectionStatus 
     setIsDrawing(true);
     setStartPos(pos);
     setCurrentPos(pos);
+    onInteraction({
+      type: 'original_click',
+      x: pos.x,
+      y: pos.y
+    });
   };
 
   const handleMouseMove = (e) => {

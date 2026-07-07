@@ -17,8 +17,19 @@ export default function App() {
   const [joints, setJoints] = useState({ positions: [0, 0, 0, 0], torques: [0, 0, 0, 0] });
   const [skills, setSkills] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
+  const [activeCam, setActiveCam] = useState('world_center');
+  const [dinoAttnCache, setDinoAttnCache] = useState({});
+  const [clipSimCache, setClipSimCache] = useState({});
+  const [samMaskCache, setSamMaskCache] = useState({});
+  const [pointCloudCache, setPointCloudCache] = useState({});
+  const [vggtTracksCache, setVggtTracksCache] = useState({});
 
   const wsRef = useRef(null);
+  const activeCamRef = useRef('world_center');
+
+  useEffect(() => {
+    activeCamRef.current = activeCam;
+  }, [activeCam]);
 
   useEffect(() => {
     connectWS();
@@ -48,6 +59,22 @@ export default function App() {
         if (data.tactile_grid) setTactileGrid(data.tactile_grid);
         if (data.joints) setJoints(data.joints);
         if (data.skills) setSkills(data.skills);
+        const currentCam = activeCamRef.current;
+        if (data.dino_attn !== undefined) {
+          setDinoAttnCache(prev => ({ ...prev, [currentCam]: data.dino_attn }));
+        }
+        if (data.clip_sim !== undefined) {
+          setClipSimCache(prev => ({ ...prev, [currentCam]: data.clip_sim }));
+        }
+        if (data.sam_mask !== undefined) {
+          setSamMaskCache(prev => ({ ...prev, [currentCam]: data.sam_mask }));
+        }
+        if (data.point_cloud !== undefined) {
+          setPointCloudCache(prev => ({ ...prev, [currentCam]: data.point_cloud }));
+        }
+        if (data.vggt_tracks !== undefined) {
+          setVggtTracksCache(prev => ({ ...prev, [currentCam]: data.vggt_tracks }));
+        }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
       }
@@ -183,11 +210,20 @@ export default function App() {
       {activePage === 'trajectories' && (
         <TrajectoryExplorer />
       )}
-
       {activePage === 'encoders' && (
-        <EncoderDiagnostics frame={frames?.world_center} />
+        <EncoderDiagnostics
+          frame={frames?.[activeCam] || frames?.world_center}
+          frames={frames}
+          dinoAttn={dinoAttnCache[activeCam]}
+          clipSim={clipSimCache[activeCam]}
+          samMask={samMaskCache[activeCam]}
+          pointCloud={pointCloudCache[activeCam] || []}
+          vggtTracks={vggtTracksCache[activeCam] || []}
+          activeCam={activeCam}
+          onCameraChange={setActiveCam}
+          onInteraction={handleInteraction}
+        />
       )}
-
       {activePage === 'skills' && (
         <SkillComposer />
       )}

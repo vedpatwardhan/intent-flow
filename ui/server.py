@@ -4,9 +4,11 @@ import io
 import json
 import os
 import sys
+from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from PIL import Image
 import numpy as np
+import httpx
 
 # Add parent directory (latent-flow root) to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -124,10 +126,21 @@ active_camera = "world_center"
 combostoc_noise = {"torso": 0.0, "arm": 0.0, "hand": 0.0, "vision": 0.0}
 attack_active = False
 
+colab_url = None
+for i, arg in enumerate(sys.argv):
+    if arg == "--colab-url" and i + 1 < len(sys.argv):
+        colab_url = sys.argv[i + 1]
+colab_url = colab_url or os.environ.get("COLAB_URL")
+
+click_x = 112
+click_y = 112
+text_prompt = "cube block"
+frame_history = deque(maxlen=5)
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global active_camera, attack_active, combostoc_noise
+    global active_camera, attack_active, combostoc_noise, click_x, click_y, text_prompt
     await websocket.accept()
     print("UI Connected via WebSocket")
 
@@ -164,6 +177,22 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
+
+                elif payload.get("type") == "original_click":
+                    click_x = int(payload["x"])
+                    click_y = int(payload["y"])
+                    print(f"Set click coordinates to: ({click_x}, {click_y})")
+
+                elif payload.get("type") == "text_prompt":
+                    text_prompt = payload["text"]
+                    print(f"Set text prompt to: {text_prompt}")
+
+                elif payload.get("type") == "set_joint":
+                    idx = int(payload["index"])
+                    val = float(payload["value"])
+                    act_norm = np.full(32, np.nan, dtype=np.float32)
+                    act_norm[idx] = val
+                    sim.process_target_32(act_norm)
 
             except asyncio.TimeoutError:
                 pass
@@ -261,6 +290,37 @@ async def websocket_endpoint(websocket: WebSocket):
                 "joints": joints_data,
                 "skills": skills_data,
             }
+
+            if colab_url:
+                base64_frame = frames.get("world_center", "")
+                if base64_frame:
+                    frame_history.append(base64_frame)
+                    async with httpx.AsyncClient() as client:
+                        try:
+                            r = await client.post(
+                                f"{colab_url}/process",
+                                json={
+                                    "frame": base64_frame,
+                                    "click_x": click_x,
+                                    "click_y": click_y,
+                                    "text_prompt": text_prompt,
+                                    "history_frames": list(frame_history),
+                                },
+                                timeout=1.5,
+                            )
+                            if r.status_code == 200:
+                                res_data = r.json()
+                                ws_payload.update(
+                                    {
+                                        "dino_attn": res_data.get("dino_attn"),
+                                        "clip_sim": res_data.get("clip_sim"),
+                                        "sam_mask": res_data.get("sam_mask"),
+                                        "point_cloud": res_data.get("point_cloud"),
+                                        "vggt_tracks": res_data.get("vggt_tracks"),
+                                    }
+                                )
+                        except Exception as e:
+                            print(f"Colab communication error: {e}")
 
             await websocket.send_text(json.dumps(ws_payload))
             step_count += 1
