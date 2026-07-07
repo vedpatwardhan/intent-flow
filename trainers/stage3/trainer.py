@@ -24,6 +24,92 @@ from trainers.stage3.discriminator import TrajectoryDiscriminator
 from trainers.stage3.attacker import BadWorldAttacker
 
 
+class CLAREFeatureDiscriminator(nn.Module):
+    """
+    CLARE Feature Discriminator.
+    Monitors internal layer statistics during training using
+    autoencoder-based reconstruction checks to flag out-of-distribution shifts.
+    """
+
+    def __init__(self, state_dim=512):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(state_dim, 128), nn.GELU(), nn.Linear(128, 32)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(32, 128), nn.GELU(), nn.Linear(128, state_dim)
+        )
+
+    def get_novelty_score(self, s_t):
+        with torch.no_grad():
+            reconstructed = self.decoder(self.encoder(s_t))
+            error = torch.mean((s_t - reconstructed) ** 2, dim=-1)
+        return error.mean().item()
+
+
+class GNNSkillLibrary(nn.Module):
+    """
+    Programmatic Graph Neural Network Skill Library (The Automaton).
+    Manages structural skill nodes (z_i) and dynamically spawns new Mixture-of-Flows
+    specialists when CLARE autoencoders flag sustained OOD novelty.
+    """
+
+    def __init__(self, base_flow_matcher, state_dim=512, novelty_threshold=0.08):
+        super().__init__()
+        self.state_dim = state_dim
+        self.novelty_threshold = novelty_threshold
+
+        # Core structural nodes mapped as explicit skill macro vectors
+        self.nodes = nn.ParameterDict(
+            {"skill_0": nn.Parameter(torch.randn(1, state_dim))}
+        )
+
+        # Sparse Mixture-of-Flows (MoF) specialist dictionary
+        self.specialists = nn.ModuleDict({"skill_0": copy.deepcopy(base_flow_matcher)})
+
+        # CLARE discriminators for lifelong OOD boundaries
+        self.discriminators = nn.ModuleDict(
+            {"skill_0": CLAREFeatureDiscriminator(state_dim=state_dim)}
+        )
+
+    def route_or_spawn(self, s_t, base_flow_matcher):
+        """
+        Evaluates the current state footprint. If all active skill nodes flag
+        novelty beyond the threshold, it triggers an autonomous node-spawning event.
+        """
+        lowest_novelty = float("inf")
+        best_skill_key = "skill_0"
+
+        for key, discriminator in self.discriminators.items():
+            score = discriminator.get_novelty_score(s_t)
+            if score < lowest_novelty:
+                lowest_novelty = score
+                best_skill_key = key
+
+        # Node-Spawning Logic (Skill0.5 / Auto-Expansion)
+        if lowest_novelty > self.novelty_threshold:
+            new_idx = len(self.nodes)
+            new_key = f"skill_{new_idx}"
+            print(
+                f"[GNN-AUTOMATON] Novelty {lowest_novelty:.4f} > Threshold {self.novelty_threshold}. Spawning node: {new_key}"
+            )
+
+            # 1. Register continuous skill embedding node
+            self.nodes[new_key] = nn.Parameter(
+                torch.randn(1, self.state_dim, device=s_t.device)
+            )
+            # 2. Allocate a fresh, un-corrupted MoF specialist clone
+            self.specialists[new_key] = copy.deepcopy(base_flow_matcher)
+            # 3. Instantiate dedicated CLARE monitor
+            self.discriminators[new_key] = CLAREFeatureDiscriminator(
+                state_dim=self.state_dim
+            ).to(s_t.device)
+
+            return self.specialists[new_key], new_key
+
+        return self.specialists[best_skill_key], best_skill_key
+
+
 class HybridMemoryTriad:
     """
     Multi-tiered memory tracking:
@@ -55,7 +141,9 @@ class HybridMemoryTriad:
 
 
 def train_stage3(config, use_subset=False):
-    print("--- STARTING ALIGNED STAGE 3: RAM ALIGNMENT, COMBOSTOC & SKILL0.5 ---")
+    print(
+        "--- STARTING STRUCTURALLY REFACTORED STAGE 3: GNN, ANCHORED TARGETS & RAM MULTIPLIERS ---"
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     checkpoint_dir = config["paths"]["checkpoint_dir"]
@@ -88,6 +176,12 @@ def train_stage3(config, use_subset=False):
     flow_matcher = ComboStocFlowMatcher(
         action_dim=config["model"]["action_dim"], config=config
     ).to(device)
+
+    # Initialize GNN Skill Library container before epoch cycle
+    gnn_library = GNNSkillLibrary(
+        flow_matcher, state_dim=config["model"]["latent_dim"]
+    ).to(device)
+
     discriminator = TrajectoryDiscriminator(
         action_dim=config["model"]["action_dim"]
     ).to(device)
@@ -111,9 +205,10 @@ def train_stage3(config, use_subset=False):
         if "flow_matcher" in checkpoint:
             flow_matcher.load_state_dict(checkpoint["flow_matcher"])
 
-    policy_checkpoints = [copy.deepcopy(flow_matcher)]
+    # Node parameters are registered inside the optimizer
     optimizer = optim.AdamW(
         list(flow_matcher.parameters())
+        + list(gnn_library.parameters())
         + list(predictor.parameters())
         + list(discriminator.parameters())
         + list(action_adapter.parameters())
@@ -176,12 +271,19 @@ def train_stage3(config, use_subset=False):
                 if len(memory.short_term) >= 2:
                     s_t = s_t + memory.gist.to(device)
 
-                # Determine goal configuration state from final target coordinate
-                # During online rollouts, target represents task context.
-                s_target = s_t.clone()
+                # MemoryWAM Anchor Target Grounding (Instead of flat self-cloning)
+                if len(memory.anchors) > 0:
+                    s_target = memory.anchors[-1].to(device)
+                else:
+                    s_target = s_t.clone()
+
+                # Route state tokens through the GNN Continuum to select active MoF specialist head
+                active_policy, active_node_key = gnn_library.route_or_spawn(
+                    s_t, flow_matcher
+                )
 
                 # --- 1. POLICY ACTION PROPOSAL (COMBOSTOC) ---
-                pred_action = flow_matcher.sample_with_steering(
+                pred_action = active_policy.sample_with_steering(
                     s_t, s_target, num_steps=10
                 )
 
@@ -190,7 +292,7 @@ def train_stage3(config, use_subset=False):
                 if is_easy_task:
                     # Run aggressive BadWorld perceptual gaslighting to destroy shortcuts
                     perturbed_s_t = attacker.generate_perturbed_context(
-                        flow_matcher, s_t, s_target, pred_action
+                        active_policy, s_t, s_target, pred_action
                     )
 
                 # Step simulation
@@ -205,6 +307,7 @@ def train_stage3(config, use_subset=False):
                         "action": pred_action.detach(),
                         "next_obs": next_obs,
                         "reward": reward,
+                        "active_policy": active_policy,
                     }
                 )
 
@@ -228,36 +331,37 @@ def train_stage3(config, use_subset=False):
                 s_t_sample = transition["s_t"]
                 s_target_sample = transition["s_target"]
                 a_sample = transition["action"]
+                policy_target = transition["active_policy"]
 
                 # 2. Reconstruct intermediate flow matching step (RAM step)
                 x_0 = torch.randn_like(a_sample)
                 t_rand = torch.rand(a_sample.size(0), 1, device=device)
 
                 # Expand t_rand to vector for ComboStoc flow compatibility
-                t_vector = t_rand.expand(-1, flow_matcher.action_dim)
+                t_vector = t_rand.expand(-1, policy_target.action_dim)
 
                 x_t = t_vector * a_sample + (1.0 - t_vector) * x_0
                 target_vel = a_sample - x_0
 
                 # Predict velocity
-                pred_vel = flow_matcher.velocity_field(
+                pred_vel = policy_target.velocity_field(
                     x_t, t_vector, s_t_sample, s_target_sample
                 )
                 cfm_loss = criterion(pred_vel, target_vel)
 
-                # 3. Scale flow gradients directly by final endpoint reward (RAM)
-                ram_scale = max(
-                    0.1, 1.0 + final_reward
-                )  # final_reward is negative target distance
-                ram_loss = cfm_loss * ram_scale
-
-                # 4. Trajectory Realism Discriminator (DRL) feedback
+                # 3. Trajectory Realism Discriminator (DRL) feedback
                 real_score = discriminator(a_sample, s_t_sample)
                 loss_real = bce(real_score, torch.ones_like(real_score))
 
                 fake_score = discriminator(a_sample.detach(), s_t_sample)
                 loss_fake = bce(fake_score, torch.zeros_like(fake_score))
                 loss_disc = 0.5 * (loss_real + loss_fake)
+
+                # 4. Unified RAM Scalar Equation (Multiplying CFM loss directly by the combined reward)
+                combined_reward = torch.clamp(
+                    1.0 + final_reward + real_score.detach(), min=0.05
+                )
+                ram_loss = cfm_loss * combined_reward.item()
 
                 # 5. Contrastive EBM dynamics predictor training
                 z_action_expert = action_adapter(a_sample)
@@ -282,8 +386,10 @@ def train_stage3(config, use_subset=False):
 
                 # 6. Privileged d-OPSD teacher-student distillation (HARD TASKS ONLY)
                 distill_loss = torch.tensor(0.0, device=device)
-                if is_hard_task and len(policy_checkpoints) > 0:
-                    best_policy = policy_checkpoints[-1]
+                if is_hard_task and len(gnn_library.specialists) > 0:
+                    # Distill from active node specialist
+                    best_key = active_node_key
+                    best_policy = gnn_library.specialists[best_key]
                     with torch.no_grad():
                         teacher_action = best_policy.sample(
                             s_t_sample, s_target_sample, num_steps=10
@@ -293,8 +399,6 @@ def train_stage3(config, use_subset=False):
                 # Aggregate total generator loss
                 total_gen_loss = (
                     loss_ebm * config["stage3"]["ram_weight"]
-                    + bce(real_score, torch.zeros_like(real_score))
-                    * config["stage3"]["adv_weight"]
                     + ram_loss * config["stage3"]["distill_weight"]
                     + distill_loss * 0.5
                 )
@@ -309,18 +413,15 @@ def train_stage3(config, use_subset=False):
                 optimizer.step()
                 epoch_disc_loss += loss_disc.item()
 
-        # Update Auto-NPO checkpoint sliding pool
-        policy_checkpoints.append(copy.deepcopy(flow_matcher))
-        if len(policy_checkpoints) > 5:
-            policy_checkpoints.pop(0)
-
         print(
-            f"Epoch {epoch+1:03d} | RL Gen Loss: {epoch_generator_loss/num_episodes:.5f} | Disc Loss: {epoch_disc_loss/num_episodes:.5f} | Success Rate: {success_rate:.2f}"
+            f"Epoch {epoch+1:03d} | RL Gen Loss: {epoch_generator_loss/num_episodes:.5f} | Disc Loss: {epoch_disc_loss/num_episodes:.5f} | Success Rate: {success_rate:.2f} | Spawned Skills: {len(gnn_library.nodes)}"
         )
 
     # Save final Stage 3 weights
     final_path = os.path.join(checkpoint_dir, "stage3_rl_final.pt")
     print(f"Saving final Stage 3 RL weights to: {final_path}")
+
+    # Save active GNN skill nodes and specialist dictionaries
     torch.save(
         {
             "vis_adapter": vis_adapter.state_dict(),
@@ -332,7 +433,8 @@ def train_stage3(config, use_subset=False):
             "action_adapter": action_adapter.state_dict(),
             "action_down_proj": action_down_proj.state_dict(),
             "predictor": predictor.state_dict(),
-            "flow_matcher": flow_matcher.state_dict(),
+            "gnn_nodes": gnn_library.nodes.state_dict(),
+            "gnn_specialists": gnn_library.specialists.state_dict(),
         },
         final_path,
     )
