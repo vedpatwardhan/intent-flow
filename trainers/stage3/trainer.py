@@ -20,7 +20,7 @@ from models.msat import MultiStreamActionTransformer
 from models.jepa_predictor import JepaPredictor
 from trainers.stage3.env import GR1Stage3Env
 from trainers.stage3.denoiser import ComboStocFlowMatcher
-from trainers.stage3.critic import EBMCritic, TrajectoryDiscriminator
+from trainers.stage3.discriminator import TrajectoryDiscriminator
 from trainers.stage3.attacker import BadWorldAttacker
 
 
@@ -86,7 +86,6 @@ def train_stage3(config, use_subset=False):
     flow_matcher = ComboStocFlowMatcher(
         action_dim=config["model"]["action_dim"], config=config
     ).to(device)
-    ebm_critic = EBMCritic(action_dim=config["model"]["action_dim"]).to(device)
     discriminator = TrajectoryDiscriminator(
         action_dim=config["model"]["action_dim"]
     ).to(device)
@@ -116,7 +115,6 @@ def train_stage3(config, use_subset=False):
     optimizer = optim.AdamW(
         list(flow_matcher.parameters())
         + list(predictor.parameters())
-        + list(ebm_critic.parameters())
         + list(discriminator.parameters())
         + list(action_adapter.parameters())
         + list(action_down_proj.parameters()),
