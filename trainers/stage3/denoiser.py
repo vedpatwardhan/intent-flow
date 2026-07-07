@@ -85,3 +85,27 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             x_t = x_t + v_t * dt
 
         return x_t
+
+    @torch.no_grad()
+    def sample_reverse(self, x_1, s_t, s_target, num_steps=10):
+        """
+        Flow Reversal Steering (FRS).
+        Integrates backward along the learned vector field from t=1 (clean action) to t=0 (noise space).
+        """
+        batch_size = x_1.size(0)
+        x_t = x_1.clone()
+        dt = 1.0 / num_steps
+
+        for i in range(num_steps):
+            t_val = 1.0 - (i * dt)
+            t = torch.full((batch_size, 1), t_val, device=x_1.device)
+            if self.action_dim > 1:
+                t = t.expand(-1, self.action_dim)
+
+            # Predict velocity direction
+            v_t = self.velocity_field(x_t, t, s_t, s_target)
+
+            # Step backward: x_{t-dt} = x_t - v_t * dt
+            x_t = x_t - v_t * dt
+
+        return x_t

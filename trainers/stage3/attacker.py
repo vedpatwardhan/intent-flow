@@ -5,47 +5,55 @@ import torch.nn.functional as F
 
 class BadWorldAttacker:
     """
-    BadWorld Minimax Attacker.
-    Identifies worst-case perturbations to maximize early denoising disruption,
-    generating challenging training boundaries for the flow matcher.
+    BadWorld Perceptual Attacker.
+    Optimizes a perturbation vector applied strictly to the context state representation (s_t)
+    within the Critical Subspace Mask (M) to maximize disruption of early denoising dynamics (t -> 0).
     """
 
-    def __init__(self, action_dim=12, perturb_lr=0.05):
+    def __init__(self, action_dim=58, state_dim=512, perturb_lr=0.02):
         self.action_dim = action_dim
+        self.state_dim = state_dim
         self.perturb_lr = perturb_lr
 
-    def generate_perturbation(
-        self, flow_matcher, s_t, s_target, original_action, num_steps=5
+    def generate_perturbed_context(
+        self, flow_matcher, s_t, s_target, original_action, mask=None, num_steps=5
     ):
         """
-        Runs an inner minimax optimization loop to find the worst-case perturbation vector
-        which maximizes the flow matcher's prediction error.
+        Runs the minimax optimization loop to find the worst-case state representation perturbation.
+        mask: [Batch, StateDim] - restricts perturbation to target subspace (e.g., visual coordinates).
         """
-        # Initialize perturbation force
-        perturb = torch.zeros_like(original_action, requires_grad=True)
+        # If no mask is passed, default to target the visual subspace (first 384 dimensions of the 512 state)
+        if mask is None:
+            mask = torch.zeros_like(s_t)
+            mask[:, :384] = 1.0  # Focus strictly on visual token coordinates
+
+        # Initialize state perturbation vector
+        perturb = torch.zeros_like(s_t, requires_grad=True)
 
         for _ in range(num_steps):
-            # Calculate perturbed action
-            perturbed_action = original_action + perturb
+            # Apply masked perturbation to the context state
+            perturbed_s_t = s_t + mask * perturb
 
-            # Predict velocity under perturbation
-            t = torch.rand(original_action.size(0), 1, device=original_action.device)
-            x_t = t * perturbed_action + (1.0 - t) * torch.randn_like(perturbed_action)
+            # Sample early denoising timesteps (t -> 0)
+            t = torch.rand(s_t.size(0), 1, device=s_t.device) * 0.2
 
-            # Target is the clean direction
-            target_vel = perturbed_action - torch.randn_like(perturbed_action)
+            # Interpolate flow path
+            x_0 = torch.randn_like(original_action)
+            x_t = t * original_action + (1.0 - t) * x_0
+            target_vel = original_action - x_0
 
-            # Denoising velocity w.r.t context
-            pred_vel = flow_matcher.velocity_field(x_t, t, s_t, s_target)
+            # Predict velocity under perturbed context
+            pred_vel = flow_matcher.velocity_field(x_t, t, perturbed_s_t, s_target)
 
-            # Loss is standard MSE prediction error (we want to MAXIMIZE this error)
+            # Maximize CFM prediction error
             error_loss = torch.mean((pred_vel - target_vel) ** 2)
 
-            # Backprop to get gradients of error w.r.t the perturbation
+            # Get gradients w.r.t the perturbation
             grads = torch.autograd.grad(error_loss, perturb)[0]
 
-            # Maximize error (Gradient Ascent)
+            # Gradient ascent: maximize error
             perturb = perturb.detach() + self.perturb_lr * grads.sign()
             perturb.requires_grad = True
 
-        return perturb.detach()
+        # Return final perturbed context representation
+        return (s_t + mask * perturb).detach()

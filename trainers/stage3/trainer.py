@@ -36,24 +36,26 @@ class HybridMemoryTriad:
         self.capacity = capacity
         self.short_term = []
         self.anchors = []
-        self.gist = []
+        self.gist = torch.zeros(1, 512)
 
     def update(self, s_t, tactile_spike):
-        self.short_term.append(s_t.detach())
+        self.short_term.append(s_t.detach().cpu())
         if len(self.short_term) > self.capacity:
             self.short_term.pop(0)
 
+        # Anchor memory snapshot on tactile spikes
         if tactile_spike > 0.5:
-            self.anchors.append(s_t.detach())
+            self.anchors.append(s_t.detach().cpu())
             if len(self.anchors) > 3:
                 self.anchors.pop(0)
 
+        # Gist token is a moving average of recent state representations
         if len(self.short_term) >= 2:
-            self.gist = torch.mean(torch.stack(self.short_term), dim=0, keepdim=True)
+            self.gist = torch.mean(torch.stack(self.short_term), dim=0)
 
 
 def train_stage3(config, use_subset=False):
-    print("--- STARTING ISOLATED STAGE 3: RAM ALIGNMENT, COMBOSTOC & SKILL0.5 ---")
+    print("--- STARTING ALIGNED STAGE 3: RAM ALIGNMENT, COMBOSTOC & SKILL0.5 ---")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     checkpoint_dir = config["paths"]["checkpoint_dir"]
@@ -77,12 +79,12 @@ def train_stage3(config, use_subset=False):
     ).to(device)
     predictor = JepaPredictor(
         state_dim=config["model"]["latent_dim"],
-        action_dim=16,  # Matches Stage 2 bottleneck dim
+        action_dim=16,  # Matches Stage 2 SFT bottleneck
         hidden_dim=config["model"]["latent_dim"],
     ).to(device)
     action_down_proj = nn.Linear(512, 16).to(device)
 
-    # 2. Stage 3 ComboStoc and Critic Systems
+    # 2. Stage 3 ComboStoc and Discriminator Systems
     flow_matcher = ComboStocFlowMatcher(
         action_dim=config["model"]["action_dim"], config=config
     ).to(device)
@@ -101,13 +103,11 @@ def train_stage3(config, use_subset=False):
         tactile_adapter.load_state_dict(checkpoint["tactile_adapter"])
         action_adapter.load_state_dict(checkpoint["action_adapter"])
         if "state_adapter" in checkpoint:
-            # Replaced locally but loaded for compatibility
             pass
         msat.load_state_dict(checkpoint["msat"])
         predictor.load_state_dict(checkpoint["predictor"])
         if "action_down_proj" in checkpoint:
             action_down_proj.load_state_dict(checkpoint["action_down_proj"])
-        # Load flow matcher weights directly from SFT checkpoint
         if "flow_matcher" in checkpoint:
             flow_matcher.load_state_dict(checkpoint["flow_matcher"])
 
@@ -121,23 +121,36 @@ def train_stage3(config, use_subset=False):
         lr=config["stage3"]["lr"],
     )
 
-    # Initialize true MuJoCo environment client
     env = GR1Stage3Env(action_dim=config["model"]["action_dim"])
-    memory = HybridMemoryTriad()
     criterion = nn.MSELoss()
     bce = nn.BCELoss()
+
+    # Success rate tracker for Skill0.5 routing gate
+    recent_successes = []
 
     epochs = 5 if use_subset else config["stage3"]["epochs"]
     for epoch in range(epochs):
         epoch_generator_loss = 0.0
         epoch_disc_loss = 0.0
 
-        for episode in range(5 if use_subset else 10):
+        num_episodes = 5 if use_subset else 10
+        for episode in range(num_episodes):
             obs = env.reset()
+            memory = HybridMemoryTriad()
             done = False
 
-            step_losses = []
-            disc_losses = []
+            # Collect episode trajectory history
+            trajectory_history = []
+            final_reward = -2.0
+
+            # Calculate current success rate
+            success_rate = (
+                sum(recent_successes) / len(recent_successes)
+                if recent_successes
+                else 0.5
+            )
+            is_easy_task = success_rate > 0.8
+            is_hard_task = success_rate < 0.3
 
             while not done:
                 # Format current observation state
@@ -155,40 +168,104 @@ def train_stage3(config, use_subset=False):
                     "tactile": tactile_emb,
                     "proprioception": obs["proprioception"].to(device),
                 }
-                s_t = msat(modality_dict)
-                s_target = s_t.clone()  # Set target state equal to current context
 
-                # --- 1. COMBOSTOC SAMPLING PROPOSAL ---
+                # Fused state representation (MSAT)
+                s_t = msat(modality_dict)
+
+                # Memory Grounding: Add gist context residually
+                if len(memory.short_term) >= 2:
+                    s_t = s_t + memory.gist.to(device)
+
+                # Determine goal configuration state from final target coordinate
+                # During online rollouts, target represents task context.
+                s_target = s_t.clone()
+
+                # --- 1. POLICY ACTION PROPOSAL (COMBOSTOC) ---
                 pred_action = flow_matcher.sample_with_steering(
                     s_t, s_target, num_steps=10
                 )
 
-                # --- 2. BADWORLD WORST-CASE PERTURBATIONS ---
-                perturb_force = attacker.generate_perturbation(
-                    flow_matcher, s_t, s_target, pred_action
-                )
+                # --- 2. SKILL0.5 ADVERSARIAL ATTACKER (EASY TASKS ONLY) ---
+                perturbed_s_t = s_t.clone()
+                if is_easy_task:
+                    # Run aggressive BadWorld perceptual gaslighting to destroy shortcuts
+                    perturbed_s_t = attacker.generate_perturbed_context(
+                        flow_matcher, s_t, s_target, pred_action
+                    )
 
-                # Step physics
-                next_obs, reward, done, info = env.step(
-                    pred_action.detach(), perturb_force=perturb_force
-                )
+                # Step simulation
+                next_obs, reward, done, info = env.step(pred_action.detach())
                 memory.update(s_t, info["tactile_spike"])
 
-                # --- 3. TRAJECTORY Realism discriminator ---
-                real_score = discriminator(pred_action.detach(), s_t)
+                # Store transition history for RAM regression training
+                trajectory_history.append(
+                    {
+                        "s_t": perturbed_s_t.detach(),
+                        "s_target": s_target.detach(),
+                        "action": pred_action.detach(),
+                        "next_obs": next_obs,
+                        "reward": reward,
+                    }
+                )
+
+                obs = next_obs
+                final_reward = reward
+
+            # Track task success (target distance threshold)
+            task_success = float(info["target_dist"] < 0.05)
+            recent_successes.append(task_success)
+            if len(recent_successes) > 10:
+                recent_successes.pop(0)
+
+            # --- RAM (REINFORCE ADJOINT MATCHING) EPISODIC UPDATE ---
+            if len(trajectory_history) > 0:
+                optimizer.zero_grad()
+
+                # 1. Sample a random intermediate timestep from history
+                sample_idx = torch.randint(0, len(trajectory_history), (1,)).item()
+                transition = trajectory_history[sample_idx]
+
+                s_t_sample = transition["s_t"]
+                s_target_sample = transition["s_target"]
+                a_sample = transition["action"]
+
+                # 2. Reconstruct intermediate flow matching step (RAM step)
+                x_0 = torch.randn_like(a_sample)
+                t_rand = torch.rand(a_sample.size(0), 1, device=device)
+
+                # Expand t_rand to vector for ComboStoc flow compatibility
+                t_vector = t_rand.expand(-1, flow_matcher.action_dim)
+
+                x_t = t_vector * a_sample + (1.0 - t_vector) * x_0
+                target_vel = a_sample - x_0
+
+                # Predict velocity
+                pred_vel = flow_matcher.velocity_field(
+                    x_t, t_vector, s_t_sample, s_target_sample
+                )
+                cfm_loss = criterion(pred_vel, target_vel)
+
+                # 3. Scale flow gradients directly by final endpoint reward (RAM)
+                ram_scale = max(
+                    0.1, 1.0 + final_reward
+                )  # final_reward is negative target distance
+                ram_loss = cfm_loss * ram_scale
+
+                # 4. Trajectory Realism Discriminator (DRL) feedback
+                real_score = discriminator(a_sample, s_t_sample)
                 loss_real = bce(real_score, torch.ones_like(real_score))
 
-                fake_score = discriminator(pred_action, s_t)
+                fake_score = discriminator(a_sample.detach(), s_t_sample)
                 loss_fake = bce(fake_score, torch.zeros_like(fake_score))
                 loss_disc = 0.5 * (loss_real + loss_fake)
-                disc_losses.append(loss_disc)
 
-                # --- 4. CONTRASTIVE EBM ENERGY MATCHING ---
-                # Positive transition (expert target) -> minimize prediction error
-                z_action_expert = action_adapter(pred_action)
+                # 5. Contrastive EBM dynamics predictor training
+                z_action_expert = action_adapter(a_sample)
                 z_action_expert_16 = action_down_proj(z_action_expert)
-                s_next_pred = predictor(s_t, z_action_expert_16)
+                s_next_pred = predictor(s_t_sample, z_action_expert_16)
 
+                # Target state at t+1
+                next_obs = transition["next_obs"]
                 vis_tok_next = vis_adapter(next_obs["vision"].to(device))
                 pt_tok_next = pt_adapter(next_obs["pointnext"].to(device))
                 vggt_tok_next = vggt_adapter(next_obs["vggt"].to(device))
@@ -200,59 +277,37 @@ def train_stage3(config, use_subset=False):
                     "tactile": tactile_adapter(next_obs["tactile"].to(device)),
                     "proprioception": next_obs["proprioception"].to(device),
                 }
-                s_next = msat(modality_dict_next)
-                loss_ebm_pos = criterion(s_next_pred, s_next)
+                s_next = msat(modality_dict_next).detach()
+                loss_ebm = criterion(s_next_pred, s_next)
 
-                # Negative transition (failure target) -> maximize prediction error (increase energy)
-                z_action_fail = action_adapter(pred_action + perturb_force)
-                z_action_fail_16 = action_down_proj(z_action_fail)
-                s_next_pred_fail = predictor(s_t, z_action_fail_16)
-                loss_ebm_neg = -criterion(s_next_pred_fail, s_next)
+                # 6. Privileged d-OPSD teacher-student distillation (HARD TASKS ONLY)
+                distill_loss = torch.tensor(0.0, device=device)
+                if is_hard_task and len(policy_checkpoints) > 0:
+                    best_policy = policy_checkpoints[-1]
+                    with torch.no_grad():
+                        teacher_action = best_policy.sample(
+                            s_t_sample, s_target_sample, num_steps=10
+                        )
+                    distill_loss = criterion(a_sample, teacher_action) * 1.5
 
-                loss_ebm = loss_ebm_pos + 0.1 * loss_ebm_neg
-
-                # --- 5. SKILL0.5 ROUTING & d-OPSD DISTILLATION ---
-                best_policy = policy_checkpoints[-1]
-                with torch.no_grad():
-                    teacher_action = best_policy.sample(s_t, s_target, num_steps=10)
-
-                # Easy/Medium tasks: distill standard student policy. Hard: privileged d-OPSD
-                is_hard_task = info["target_dist"] > 0.18
-                if is_hard_task:
-                    # Inject privileged target memory anchors
-                    distill_loss = criterion(pred_action, teacher_action) * 1.5
-                else:
-                    distill_loss = criterion(pred_action, teacher_action)
-
-                # --- 6. RAM (Reinforce Adjoint Matching) Loss ---
-                # Multiply flow match gradients by relative success rewards
-                ram_scale = max(0.1, 1.0 + reward)  # reward is negative distance
-                ram_loss = distill_loss * ram_scale
-
-                # Aggregate Stage 3 Losses
-                generator_loss = (
+                # Aggregate total generator loss
+                total_gen_loss = (
                     loss_ebm * config["stage3"]["ram_weight"]
-                    + bce(fake_score, torch.ones_like(fake_score))
+                    + bce(real_score, torch.zeros_like(real_score))
                     * config["stage3"]["adv_weight"]
                     + ram_loss * config["stage3"]["distill_weight"]
+                    + distill_loss * 0.5
                 )
-                step_losses.append(generator_loss)
-                obs = next_obs
 
-            # Run optimizer steps
-            if step_losses:
-                optimizer.zero_grad()
-                total_step_loss = torch.stack(step_losses).mean()
-                total_step_loss.backward()
+                total_gen_loss.backward()
                 optimizer.step()
-                epoch_generator_loss += total_step_loss.item()
+                epoch_generator_loss += total_gen_loss.item()
 
-            if disc_losses:
+                # Train discriminator separately
                 optimizer.zero_grad()
-                total_disc_loss = torch.stack(disc_losses).mean()
-                total_disc_loss.backward()
+                loss_disc.backward()
                 optimizer.step()
-                epoch_disc_loss += total_disc_loss.item()
+                epoch_disc_loss += loss_disc.item()
 
         # Update Auto-NPO checkpoint sliding pool
         policy_checkpoints.append(copy.deepcopy(flow_matcher))
@@ -260,7 +315,7 @@ def train_stage3(config, use_subset=False):
             policy_checkpoints.pop(0)
 
         print(
-            f"Epoch {epoch+1:03d} | RL Generator Loss: {epoch_generator_loss/10:.5f} | Disc Loss: {epoch_disc_loss/10:.5f}"
+            f"Epoch {epoch+1:03d} | RL Gen Loss: {epoch_generator_loss/num_episodes:.5f} | Disc Loss: {epoch_disc_loss/num_episodes:.5f} | Success Rate: {success_rate:.2f}"
         )
 
     # Save final Stage 3 weights
