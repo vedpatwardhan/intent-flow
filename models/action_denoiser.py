@@ -63,6 +63,11 @@ class ActionVelocityField(nn.Module):
             nn.Linear(1, time_dim), nn.GELU(), nn.Linear(time_dim, time_dim)
         )
 
+        # ComboStoc: timeline projection layer initialized to average timesteps at step 0
+        self.combostoc_time_proj = nn.Linear(action_dim, 1)
+        nn.init.constant_(self.combostoc_time_proj.weight, 1.0 / action_dim)
+        nn.init.constant_(self.combostoc_time_proj.bias, 0.0)
+
         # Combined conditioning dimension: s_t (state_dim) + s_target (state_dim) + time (time_dim)
         cond_dim = state_dim * 2 + time_dim
 
@@ -96,11 +101,17 @@ class ActionVelocityField(nn.Module):
     def forward(self, x_t, t, s_t, s_target):
         """
         x_t: [Batch, ActionDim] (current noisy action estimate)
-        t: [Batch, 1] (current flow matching time step in [0, 1])
+        t: [Batch, 1] or [Batch, ActionDim] (current flow matching time step)
         s_t: [Batch, StateDim] (current context state embedding)
         s_target: [Batch, StateDim] (target configuration state embedding)
         """
-        t_embed = self.time_mlp(t)
+        # ComboStoc: Handle multi-dimensional time vectors using pre-initialized projection
+        if t.size(-1) > 1:
+            t_input = self.combostoc_time_proj(t)
+        else:
+            t_input = t
+
+        t_embed = self.time_mlp(t_input)
         # Joint conditioning vector
         cond = torch.cat([s_t, s_target, t_embed], dim=-1)
 

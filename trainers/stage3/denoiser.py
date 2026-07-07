@@ -26,21 +26,30 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
     def get_cfm_loss(self, x_1, s_t, s_target):
         """
-        Calculates CFM loss using independent timeline timesteps t_i for each joint.
+        Calculates CFM loss using independent timeline timesteps t_i for each joint
+        with the official ComboStoc blending scheme to preserve sync coherence.
         """
         batch_size = x_1.size(0)
         x_0 = torch.randn_like(x_1)
 
-        # ComboStoc: Sample independent t for each dimension/joint group [Batch, ActionDim]
-        t = torch.rand(batch_size, self.action_dim, device=x_1.device)
+        # 1. Sample unsynced independent timelines
+        t_unsync = torch.rand(batch_size, self.action_dim, device=x_1.device)
+
+        # 2. Sample synced uniform timeline
+        t_sync = torch.rand(batch_size, 1, device=x_1.device).expand(
+            -1, self.action_dim
+        )
+
+        # 3. Blend them using the ComboStoc blend scheme (blends uniform and unsynced)
+        progress = torch.rand(batch_size, 1, device=x_1.device)
+        t = t_sync * (1.0 - progress) + t_unsync * progress
 
         # Interpolate flow path along independent timesteps
         x_t = t * x_1 + (1.0 - t) * x_0
         target_velocity = x_1 - x_0
 
-        # Collapse t to single-dimension average for context time_mlp embedding inside ActionVelocityField
-        t_avg = t.mean(dim=-1, keepdim=True)
-        pred_velocity = self.velocity_field(x_t, t_avg, s_t, s_target)
+        # Pass independent time vector directly to the velocity field
+        pred_velocity = self.velocity_field(x_t, t, s_t, s_target)
 
         loss = torch.mean((pred_velocity - target_velocity) ** 2)
         return loss
@@ -70,8 +79,8 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             t_vals = steering_timelines + (i * dt)
             t_vals = torch.clamp(t_vals, 0.0, 1.0)
 
-            t_avg = t_vals.mean(dim=-1, keepdim=True)
-            v_t = self.velocity_field(x_t, t_avg, s_t, s_target)
+            # Pass independent time vector directly to the velocity field
+            v_t = self.velocity_field(x_t, t_vals, s_t, s_target)
 
             x_t = x_t + v_t * dt
 
