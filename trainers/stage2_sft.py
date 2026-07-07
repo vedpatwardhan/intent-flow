@@ -45,8 +45,17 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.action_adapter = ActionAdapter(d_in=config["model"]["action_dim"])
         self.state_adapter = ActionAdapter(d_in=config["model"]["state_dim"])
 
-        self.msat = MultiStreamActionTransformer()
-        self.predictor = JepaPredictor(action_dim=16)
+        self.msat = MultiStreamActionTransformer(
+            latent_dim=config["model"]["latent_dim"],
+            num_heads=config["model"]["num_heads"],
+            num_layers=config["model"]["num_layers"],
+            dropout=config["model"]["dropout"],
+        )
+        self.predictor = JepaPredictor(
+            state_dim=config["model"]["latent_dim"],
+            action_dim=16,
+            hidden_dim=config["model"]["latent_dim"],
+        )
         self.action_down_proj = nn.Linear(512, 16)
         self.flow_matcher = CLAPFlowMatcher(
             action_dim=config["model"]["action_dim"], config=config

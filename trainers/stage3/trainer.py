@@ -69,13 +69,23 @@ def train_stage3(config, use_subset=False):
         device
     )
 
-    msat = MultiStreamActionTransformer().to(device)
-    predictor = JepaPredictor(action_dim=512).to(device)
+    msat = MultiStreamActionTransformer(
+        latent_dim=config["model"]["latent_dim"],
+        num_heads=config["model"]["num_heads"],
+        num_layers=config["model"]["num_layers"],
+        dropout=config["model"]["dropout"],
+    ).to(device)
+    predictor = JepaPredictor(
+        state_dim=config["model"]["latent_dim"],
+        action_dim=16,  # Matches Stage 2 bottleneck dim
+        hidden_dim=config["model"]["latent_dim"],
+    ).to(device)
+    action_down_proj = nn.Linear(512, 16).to(device)
 
     # 2. Stage 3 ComboStoc and Critic Systems
-    flow_matcher = ComboStocFlowMatcher(action_dim=config["model"]["action_dim"]).to(
-        device
-    )
+    flow_matcher = ComboStocFlowMatcher(
+        action_dim=config["model"]["action_dim"], config=config
+    ).to(device)
     ebm_critic = EBMCritic(action_dim=config["model"]["action_dim"]).to(device)
     discriminator = TrajectoryDiscriminator(
         action_dim=config["model"]["action_dim"]
@@ -91,8 +101,13 @@ def train_stage3(config, use_subset=False):
         vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
         tactile_adapter.load_state_dict(checkpoint["tactile_adapter"])
         action_adapter.load_state_dict(checkpoint["action_adapter"])
+        if "state_adapter" in checkpoint:
+            # Replaced locally but loaded for compatibility
+            pass
         msat.load_state_dict(checkpoint["msat"])
         predictor.load_state_dict(checkpoint["predictor"])
+        if "action_down_proj" in checkpoint:
+            action_down_proj.load_state_dict(checkpoint["action_down_proj"])
         # Load flow matcher weights directly from SFT checkpoint
         if "flow_matcher" in checkpoint:
             flow_matcher.load_state_dict(checkpoint["flow_matcher"])
@@ -103,7 +118,8 @@ def train_stage3(config, use_subset=False):
         + list(predictor.parameters())
         + list(ebm_critic.parameters())
         + list(discriminator.parameters())
-        + list(action_adapter.parameters()),
+        + list(action_adapter.parameters())
+        + list(action_down_proj.parameters()),
         lr=config["stage3"]["lr"],
     )
 
@@ -172,7 +188,8 @@ def train_stage3(config, use_subset=False):
                 # --- 4. CONTRASTIVE EBM ENERGY MATCHING ---
                 # Positive transition (expert target) -> minimize prediction error
                 z_action_expert = action_adapter(pred_action)
-                s_next_pred = predictor(s_t, z_action_expert)
+                z_action_expert_16 = action_down_proj(z_action_expert)
+                s_next_pred = predictor(s_t, z_action_expert_16)
 
                 vis_tok_next = vis_adapter(next_obs["vision"].to(device))
                 pt_tok_next = pt_adapter(next_obs["pointnext"].to(device))
@@ -190,7 +207,8 @@ def train_stage3(config, use_subset=False):
 
                 # Negative transition (failure target) -> maximize prediction error (increase energy)
                 z_action_fail = action_adapter(pred_action + perturb_force)
-                s_next_pred_fail = predictor(s_t, z_action_fail)
+                z_action_fail_16 = action_down_proj(z_action_fail)
+                s_next_pred_fail = predictor(s_t, z_action_fail_16)
                 loss_ebm_neg = -criterion(s_next_pred_fail, s_next)
 
                 loss_ebm = loss_ebm_pos + 0.1 * loss_ebm_neg
@@ -259,6 +277,7 @@ def train_stage3(config, use_subset=False):
             "tactile_adapter": tactile_adapter.state_dict(),
             "msat": msat.state_dict(),
             "action_adapter": action_adapter.state_dict(),
+            "action_down_proj": action_down_proj.state_dict(),
             "predictor": predictor.state_dict(),
             "flow_matcher": flow_matcher.state_dict(),
         },
