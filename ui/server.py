@@ -138,10 +138,22 @@ click_y = None
 text_prompt = "cube block"
 frame_history = deque(maxlen=5)
 
+colab_is_processing = False
+needs_colab_processing = False
+last_colab_query_time = 0.0
+
+cached_dino_attn = None
+cached_clip_sim = None
+cached_sam_mask = None
+cached_point_cloud = []
+cached_vggt_tracks = []
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, text_prompt
+    global colab_is_processing, needs_colab_processing, last_colab_query_time
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
     await websocket.accept()
     print("UI Connected via WebSocket")
 
@@ -188,15 +200,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif payload.get("type") == "clear_selections":
                     click_x = None
                     click_y = None
+                    needs_colab_processing = False
+                    cached_dino_attn = None
+                    cached_clip_sim = None
+                    cached_sam_mask = None
+                    cached_point_cloud = []
+                    cached_vggt_tracks = []
                     print("Cleared active camera click selections.")
 
-                elif payload.get("type") == "original_click":
+                elif payload.get("type") in [
+                    "original_click",
+                    "track_click",
+                    "goal_click",
+                ]:
                     click_x = int(payload["x"])
                     click_y = int(payload["y"])
-                    print(f"Set click coordinates to: ({click_x}, {click_y})")
+                    needs_colab_processing = True
+                    print(
+                        f"Set click coordinates via {payload.get('type')} to: ({click_x}, {click_y})"
+                    )
 
                 elif payload.get("type") == "text_prompt":
                     text_prompt = payload["text"]
+                    needs_colab_processing = True
                     print(f"Set text prompt to: {text_prompt}")
 
                 elif payload.get("type") == "set_joint":
@@ -301,38 +327,55 @@ async def websocket_endpoint(websocket: WebSocket):
                 "tactile_grid": tactile_grid,
                 "joints": joints_data,
                 "skills": skills_data,
+                "dino_attn": cached_dino_attn,
+                "clip_sim": cached_clip_sim,
+                "sam_mask": cached_sam_mask,
+                "point_cloud": cached_point_cloud,
+                "vggt_tracks": cached_vggt_tracks,
             }
 
-            if colab_url and click_x is not None:
+            current_time = asyncio.get_event_loop().time()
+            if colab_url and needs_colab_processing and not colab_is_processing:
                 base64_frame = frames.get(active_camera, "")
                 if base64_frame:
                     frame_history.append(base64_frame)
-                    async with httpx.AsyncClient() as client:
+                    colab_is_processing = True
+                    needs_colab_processing = False
+                    last_colab_query_time = current_time
+
+                    async def run_colab_query(payload_data):
+                        global colab_is_processing
+                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
                         try:
-                            r = await client.post(
-                                f"{colab_url}/process",
-                                json={
-                                    "frame": base64_frame,
-                                    "click_x": click_x,
-                                    "click_y": click_y,
-                                    "text_prompt": text_prompt,
-                                    "history_frames": list(frame_history),
-                                },
-                                timeout=1.5,
-                            )
-                            if r.status_code == 200:
-                                res_data = r.json()
-                                ws_payload.update(
-                                    {
-                                        "dino_attn": res_data.get("dino_attn"),
-                                        "clip_sim": res_data.get("clip_sim"),
-                                        "sam_mask": res_data.get("sam_mask"),
-                                        "point_cloud": res_data.get("point_cloud"),
-                                        "vggt_tracks": res_data.get("vggt_tracks"),
-                                    }
+                            async with httpx.AsyncClient() as client:
+                                r = await client.post(
+                                    f"{colab_url}/process",
+                                    json=payload_data,
+                                    timeout=5.0,
                                 )
+                                if r.status_code == 200:
+                                    res_data = r.json()
+                                    cached_dino_attn = res_data.get("dino_attn")
+                                    cached_clip_sim = res_data.get("clip_sim")
+                                    cached_sam_mask = res_data.get("sam_mask")
+                                    cached_point_cloud = res_data.get("point_cloud")
+                                    cached_vggt_tracks = res_data.get("vggt_tracks")
                         except Exception as e:
-                            print(f"Colab communication error: {e}")
+                            import traceback
+
+                            print("Colab communication error:")
+                            traceback.print_exc()
+                        finally:
+                            colab_is_processing = False
+
+                    post_payload = {
+                        "frame": base64_frame,
+                        "click_x": click_x,
+                        "click_y": click_y,
+                        "text_prompt": text_prompt,
+                        "history_frames": list(frame_history),
+                    }
+                    asyncio.create_task(run_colab_query(post_payload))
 
             await websocket.send_text(json.dumps(ws_payload))
             step_count += 1

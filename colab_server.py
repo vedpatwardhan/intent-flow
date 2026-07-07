@@ -207,8 +207,10 @@ async def process_frame(payload: FramePayload):
             mask_logits_resized = cv2.resize(mask_logits, (w, h))
             sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
 
-            # Encode SAM mask to base64 PNG
-            _, buffer = cv2.imencode(".png", sam_mask_np * 255)
+            # Encode SAM mask as a green-colored BGR image (0, 255, 0)
+            green_mask = np.zeros((h, w, 3), dtype=np.uint8)
+            green_mask[sam_mask_np > 0] = [0, 255, 0]  # Green set in BGR
+            _, buffer = cv2.imencode(".png", green_mask)
             response["sam_mask"] = "data:image/png;base64," + base64.b64encode(
                 buffer
             ).decode("utf-8")
@@ -278,7 +280,12 @@ async def process_frame(payload: FramePayload):
         return response
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}"
+        )
 
 
 if __name__ == "__main__":

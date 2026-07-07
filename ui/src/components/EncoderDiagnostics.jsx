@@ -34,8 +34,8 @@ export default function EncoderDiagnostics({
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // Default right_shoulder_pitch
   const [activeSliders, setActiveSliders] = useState([16, 17, 29, 30, 31]);
   const [jointValues, setJointValues] = useState({});
-  
-  // Decoupled click markers indexed by camera ID
+
+  // Independent click markers for each mode
   const [segmentMarkers, setSegmentMarkers] = useState({});
   const [trackMarkers, setTrackMarkers] = useState({});
   const [goalMarkers, setGoalMarkers] = useState({});
@@ -99,7 +99,7 @@ export default function EncoderDiagnostics({
     });
   };
 
-  // Click captures mapped directly to individual functions and decoupled by camera ID
+  // Click captures mapped directly to individual functions
   const handleSegmentClick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.round(((e.clientX - rect.left) / rect.width) * 224);
@@ -159,9 +159,9 @@ export default function EncoderDiagnostics({
         if (val > 0.05) {
           let fillStyle = '';
           if (colorMap === 'inferno') {
-            fillStyle = `rgba(249, 115, 22, ${val * 0.85})`;
+            fillStyle = `rgba(249, 115, 22, ${val * 0.6})`;
           } else {
-            fillStyle = `rgba(6, 182, 212, ${val * 0.85})`;
+            fillStyle = `rgba(6, 182, 212, ${(1 - val) * 0.6})`;
           }
 
           grid.push(
@@ -211,8 +211,8 @@ export default function EncoderDiagnostics({
           const y = pt[1] * 240;
           return (
             <g key={idx}>
-              <circle cx={x} cy={y} r="3" fill="var(--accent-cyan)" />
-              <line x1={x} y1={y} x2={x - 5} y2={y - 5} stroke="var(--accent-cyan)" strokeWidth="1.5" opacity="0.6" />
+              <circle cx={x} cy={y} r="3" fill="var(--accent-amber)" />
+              <line x1={x} y1={y} x2={x - 5} y2={y - 5} stroke="var(--accent-amber)" strokeWidth="1.5" opacity="0.6" />
             </g>
           );
         })}
@@ -287,13 +287,13 @@ export default function EncoderDiagnostics({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', boxSizing: 'border-box', padding: '10px 16px' }}>
-      
+
       {/* Split Workspace Layout */}
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '12px', flexGrow: 1, minHeight: 0 }}>
-        
+
         {/* Left Column: Squeezed Header Banner + Joint Sliders */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', overflow: 'hidden' }}>
-          
+
           {/* Header Panel squeezed to Left Column Width (320px) */}
           <div className="panel" style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <h2 className="panel-title" style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
@@ -464,7 +464,7 @@ export default function EncoderDiagnostics({
                 <Sparkles size={11} className="text-cyan-400" />
                 INTEGRATION SHIELD ACTIONS
               </div>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px' }}>
                 {['Approach', 'Descend', 'Grasp', 'Lift'].map((phaseName, i) => (
                   <button
@@ -502,7 +502,7 @@ export default function EncoderDiagnostics({
 
         {/* Right Column: Camera View Selector & Visual Overlays Grid */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflow: 'hidden', height: '100%' }}>
-          
+
           {/* Live Camera Selection Row forced to horizontal layout */}
           <div className="panel" style={{
             padding: '8px 12px',
@@ -576,7 +576,7 @@ export default function EncoderDiagnostics({
             gap: '12px',
             flexShrink: 0
           }}>
-            
+
             {/* Viewport 1: SAM Interactive Segmenter */}
             <div className="panel" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
               <div className="panel-header" style={{ marginBottom: '2px' }}>
@@ -649,11 +649,11 @@ export default function EncoderDiagnostics({
               gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
               gap: '12px'
             }}>
-              
+
               {/* DINOv3 Attn Map */}
               <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)' }}>
+                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-amber)' }}>
                     <Target size={11} />
                     DINOv3 Spatial Attention
                   </span>
@@ -754,9 +754,9 @@ export default function EncoderDiagnostics({
 
             </div>
           </div>
-          
+
         </div>
-        
+
       </div>
     </div>
   );
