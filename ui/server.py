@@ -174,6 +174,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 if payload.get("type") == "select_camera":
                     active_camera = payload["camera"]
+                    needs_colab_processing = True
                     print(f"Selected Camera Focus: {active_camera}")
 
                 elif payload.get("type") == "ik_command":

@@ -189,7 +189,7 @@ async def process_frame(payload: FramePayload):
                     .cpu()
                     .numpy()
                 )
-                sim_norm = (sim - sim.min()) / (sim.max() - sim.min() + 1e-8)
+                sim_norm = (sim.min() - sim) / (sim.max() - sim.min() + 1e-8)
                 response["clip_sim"] = sim_norm.tolist()
 
         # 3. SAM Instance Mask Segmenter (Conditional on click inputs)
