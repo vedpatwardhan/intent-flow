@@ -290,9 +290,19 @@ async def process_frame(payload: FramePayload):
 
                 # 3D pinhole projection perspective correction
                 focal_length = max(w, h)
-                xs_proj = (xs - w / 2.0) * zs / focal_length
-                ys_proj = (h / 2.0 - ys) * zs / focal_length
+                cx = w / 2.0
+                cy = h / 2.0
+
+                # Normalize values for visualization
+                xs_proj = (xs - cx) * zs / focal_length
+                ys_proj = (cy - ys) * zs / focal_length
                 zs_proj = zs
+
+                # Convert colors to hex
+                colors = frame[ys, xs]
+                rs = colors[:, 0] / 255.0
+                gs = colors[:, 1] / 255.0
+                bs = colors[:, 2] / 255.0
 
                 # Enforce aspect ratio preservation with global scaling normalization
                 x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
@@ -303,12 +313,6 @@ async def process_frame(payload: FramePayload):
                 xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
                 ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
                 zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
-
-                # Get colors and normalize to [0, 1]
-                colors = frame[ys, xs]
-                rs = colors[:, 0] / 255.0
-                gs = colors[:, 1] / 255.0
-                bs = colors[:, 2] / 255.0
 
                 # Format points: [x, y, z, r, g, b]
                 point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)

@@ -301,16 +301,42 @@ export default function EncoderDiagnostics({
       );
     }
 
-    const projectedPoints = pointCloud.map((pt, idx) => {
-      // Zoom and project using the perspective of the Plotly 3D viewport
-      // X = Width (horizontal), Y = Height (vertical), Z = Depth (into screen)
-      const zoom = 135;
+    // 1. Exact Plotly Camera Transformation Matrix
+    // Match custom_camera: eye=[0.1, 0.1, 2.0], up=[0, 1, 0]
+    const eye = [0.1, 0.1, 2.0];
+    const eyeNorm = Math.sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
+    const forward = [-eye[0] / eyeNorm, -eye[1] / eyeNorm, -eye[2] / eyeNorm];
+    const up_initial = [0.0, 1.0, 0.0];
 
-      // Match the camera angle exactly: look from eye [0.1, 0.1, 2] and up [0, 1, 0]
-      // Subtracting Z (depth) from screenY shifts farther points UPWARD (back-horizon)
-      // Adding Z (depth) to screenX shifts farther points RIGHTWARD (depth-pitch)
-      const screenX = 120 + (pt[0] + 0.05 * pt[2]) * zoom;
-      const screenY = 120 - (pt[1] + 0.05 * pt[2]) * zoom;
+    // Deriving orthogonal system (Gram-Schmidt)
+    const right_raw = [-forward[2], 0.0, forward[0]];
+    const rightNorm = Math.sqrt(right_raw[0]*right_raw[0] + right_raw[2]*right_raw[2]);
+    const right = [right_raw[0] / rightNorm, 0.0, right_raw[2] / rightNorm];
+
+    const up = [
+      right[1]*forward[2] - right[2]*forward[1],
+      right[2]*forward[0] - right[0]*forward[2],
+      right[0]*forward[1] - right[1]*forward[0]
+    ];
+
+    // 2. Camera Space Transformation and Projection
+    const pointsWithDepth = pointCloud.map((pt) => {
+      const px = pt[0];
+      const py = pt[1];
+      const pz = pt[2];
+
+      const x_cam = px * right[0] + py * right[1] + pz * right[2];
+      const y_cam = px * up[0] + py * up[1] + pz * up[2];
+      const z_cam = px * forward[0] + py * forward[1] + pz * forward[2] + 2.0;
+
+      // Perspective focal scaling
+      const focal = 1.25;
+      const x_proj = (x_cam * focal) / z_cam;
+      const y_proj = (y_cam * focal) / z_cam;
+
+      // Map to 240x240 local viewport layout
+      const screenX = ((x_proj + 1.0) / 2.0) * 240;
+      const screenY = ((1.0 - y_proj) / 2.0) * 240;
 
       let pointColor = '#3b82f6';
       if (pt.length >= 6) {
@@ -323,13 +349,24 @@ export default function EncoderDiagnostics({
         pointColor = activation > 0.6 ? '#facc15' : activation > 0.3 ? '#ef4444' : '#3b82f6';
       }
 
+      return { screenX, screenY, z_cam, pointColor };
+    });
+
+    // 3. Painter's Algorithm: Sort by depth (z_cam) descending to draw back-to-front
+    pointsWithDepth.sort((a, b) => b.z_cam - a.z_cam);
+
+    const projectedPoints = pointsWithDepth.map((p, idx) => {
+      // Clip circles to stay inside quadrant boundaries
+      if (p.screenX < 0 || p.screenX > 240 || p.screenY < 0 || p.screenY > 240) {
+        return null;
+      }
       return (
         <circle
           key={idx}
-          cx={screenX}
-          cy={screenY}
-          r="3"
-          fill={pointColor}
+          cx={p.screenX}
+          cy={p.screenY}
+          r="1.8"
+          fill={p.pointColor}
           opacity="0.9"
         />
       );
