@@ -85,25 +85,25 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', flex: 1 }}>
         <FeatureCard
-          title="DINOv3"
+          title="DINOv3 Spatial Attention"
           data={isolatedFeatures?.dino_subspace}
           icon={Eye}
           color="var(--accent-amber)"
         />
         <FeatureCard
-          title="SAM"
+          title="SAM Segmentation Mask"
           data={isolatedFeatures?.sam_mask}
           icon={Target}
           color="var(--accent-red)"
         />
         <FeatureCard
-          title="VGGT Tracks"
+          title="VGGT Trajectory Tracks"
           data={isolatedFeatures?.vggt_local}
           icon={Move}
           color="var(--accent-cyan)"
         />
         <FeatureCard
-          title="PointNeXt"
+          title="PointNeXt 3D Cloud"
           data={isolatedFeatures?.pointnext_isolated}
           icon={Grid}
           color="var(--accent-purple)"
