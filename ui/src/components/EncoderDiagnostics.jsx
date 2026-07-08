@@ -685,7 +685,7 @@ export default function EncoderDiagnostics({
           {/* Row 1: Unified Workspace + Critical Subspace */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
+            gridTemplateColumns: '0.6fr 1.4fr',
             gap: '12px',
             flexShrink: 0
           }}>

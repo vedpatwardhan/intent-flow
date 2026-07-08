@@ -1,5 +1,5 @@
 import React from 'react';
-import { Eye, Grid, Move, Activity } from 'lucide-react';
+import { Eye, Grid, Move, Target } from 'lucide-react';
 
 const FeatureCard = ({ title, data, icon: Icon, color }) => {
   if (!data || data.length === 0) {
@@ -74,8 +74,8 @@ const FeatureCard = ({ title, data, icon: Icon, color }) => {
 
 export default function CriticalSubspace({ frame, isolatedFeatures }) {
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent-green)' }}>
-      <div className="panel-header" style={{ marginBottom: '10px' }}>
+    <div className="panel" style={{ borderColor: 'var(--accent-green)', display: 'flex', flexDirection: 'column' }}>
+      <div className="panel-header" style={{ marginBottom: '8px' }}>
         <h2 className="panel-title">
           <Eye className="text-green-400" size={16} />
           Critical Subspace
@@ -83,7 +83,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
         <p className="panel-subtitle">Task-isolated latent features</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', height: '120px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', flex: 1 }}>
         <FeatureCard
           title="DINOv3"
           data={isolatedFeatures?.dino_subspace}
@@ -91,10 +91,10 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           color="var(--accent-amber)"
         />
         <FeatureCard
-          title="PointNeXt"
-          data={isolatedFeatures?.pointnext_isolated}
-          icon={Grid}
-          color="var(--accent-purple)"
+          title="SAM"
+          data={isolatedFeatures?.sam_mask}
+          icon={Target}
+          color="var(--accent-red)"
         />
         <FeatureCard
           title="VGGT Tracks"
@@ -103,15 +103,15 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           color="var(--accent-cyan)"
         />
         <FeatureCard
-          title="Tactile"
-          data={isolatedFeatures?.tactile_active}
-          icon={Activity}
-          color="var(--accent-green)"
+          title="PointNeXt"
+          data={isolatedFeatures?.pointnext_isolated}
+          icon={Grid}
+          color="var(--accent-purple)"
         />
       </div>
 
       <div style={{
-        marginTop: '6px',
+        marginTop: '8px',
         padding: '6px',
         background: 'rgba(34, 197, 94, 0.05)',
         border: '1px solid rgba(34, 197, 94, 0.2)',
