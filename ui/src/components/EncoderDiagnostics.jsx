@@ -329,8 +329,8 @@ export default function EncoderDiagnostics({
       const y_cam = px * up[0] + py * up[1] + pz * up[2];
       const z_cam = px * forward[0] + py * forward[1] + pz * forward[2] + 2.0;
 
-      // Perspective focal scaling
-      const focal = 1.25;
+      // Perspective focal scaling (Zoom factor)
+      const focal = 1.8;
       const x_proj = (x_cam * focal) / z_cam;
       const y_proj = (y_cam * focal) / z_cam;
 
