@@ -275,10 +275,10 @@ async def process_frame(payload: FramePayload):
                     )
                     response["point_cloud"] = point_cloud.tolist()
             else:
-                # Scene-wide point cloud by sampling a grid (25 x 25 = 625 points)
+                # Scene-wide point cloud by sampling a grid (100 x 100 = 10000 points)
                 grid_x, grid_y = np.meshgrid(
-                    np.linspace(0, w - 1, 25).astype(int),
-                    np.linspace(0, h - 1, 25).astype(int),
+                    np.linspace(0, w - 1, 100).astype(int),
+                    np.linspace(0, h - 1, 100).astype(int),
                 )
                 xs = grid_x.flatten()
                 ys = grid_y.flatten()
@@ -331,9 +331,12 @@ async def process_frame(payload: FramePayload):
                         )
                         p_prev = p_next.copy()
 
-                    for pt in p_next:
-                        # Append start-end points relative to width/height
-                        tracks.append([float(pt[0][0]) / w, float(pt[0][1]) / h])
+                    for start_pt, end_pt in zip(p0, p_next):
+                        x_start = float(start_pt[0][0]) / w
+                        y_start = float(start_pt[0][1]) / h
+                        x_end = float(end_pt[0][0]) / w
+                        y_end = float(end_pt[0][1]) / h
+                        tracks.append([x_start, y_start, x_end, y_end])
                     response["vggt_tracks"] = tracks
             except Exception as evggt:
                 print(f"KLT tracking failed: {evggt}")

@@ -156,6 +156,9 @@ async def websocket_endpoint(websocket: WebSocket):
     global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
     await websocket.accept()
     print("UI Connected via WebSocket")
+    needs_colab_processing = (
+        True  # Auto-trigger default Colab processing request to populate panels on load
+    )
 
     index_id = sim.model.body("R_index_tip_link").id
     thumb_id = sim.model.body("R_thumb_tip_link").id

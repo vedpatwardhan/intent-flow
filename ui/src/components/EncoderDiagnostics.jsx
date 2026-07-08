@@ -18,6 +18,76 @@ const CAMERAS = [
   { id: 'world_wrist', name: 'Wrist' }
 ];
 
+const HeatmapCanvas = ({ dataMatrix, colorMap }) => {
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 240, 240);
+
+    if (!dataMatrix || dataMatrix.length === 0) return;
+
+    // Create 14x14 pixel data
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 14;
+    tempCanvas.height = 14;
+    const tempCtx = tempCanvas.getContext('2d');
+    const imgData = tempCtx.createImageData(14, 14);
+
+    const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
+    const getJetRGB = (v) => {
+      const r = clamp(Math.min(4 * v - 1.5, -4 * v + 4.5), 0, 1) * 255;
+      const g = clamp(Math.min(4 * v - 0.5, -4 * v + 3.5), 0, 1) * 255;
+      const b = clamp(Math.min(4 * v + 0.5, -4 * v + 2.5), 0, 1) * 255;
+      return [Math.round(r), Math.round(g), Math.round(b)];
+    };
+
+    for (let r = 0; r < 14; r++) {
+      for (let c = 0; c < 14; c++) {
+        const val = dataMatrix[r]?.[c] || 0.0;
+        const idx = (r * 14 + c) * 4;
+        if (val > 0.05) {
+          const [red, green, blue] = getJetRGB(val);
+          imgData.data[idx] = red;
+          imgData.data[idx + 1] = green;
+          imgData.data[idx + 2] = blue;
+          imgData.data[idx + 3] = Math.round(val * 0.45 * 255);
+        } else {
+          imgData.data[idx] = 0;
+          imgData.data[idx + 1] = 0;
+          imgData.data[idx + 2] = 0;
+          imgData.data[idx + 3] = 0;
+        }
+      }
+    }
+    tempCtx.putImageData(imgData, 0, 0);
+
+    // Upscale to 240x240 with bilinear filtering
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(tempCanvas, 0, 0, 14, 14, 0, 0, 240, 240);
+  }, [dataMatrix, colorMap]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={240}
+      height={240}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        borderRadius: '6px'
+      }}
+    />
+  );
+};
+
 export default function EncoderDiagnostics({
   frame,
   frames,
@@ -149,40 +219,7 @@ export default function EncoderDiagnostics({
         </div>
       );
     }
-
-    const grid = [];
-    const patchSize = 240 / 14;
-
-    for (let r = 0; r < 14; r++) {
-      for (let c = 0; c < 14; c++) {
-        const val = dataMatrix[r]?.[c] || 0.0;
-        if (val > 0.05) {
-          let fillStyle = '';
-          if (colorMap === 'inferno') {
-            fillStyle = `rgba(249, 115, 22, ${val * 0.6})`;
-          } else {
-            fillStyle = `rgba(6, 182, 212, ${(1 - val) * 0.6})`;
-          }
-
-          grid.push(
-            <rect
-              key={`${r}-${c}`}
-              x={c * patchSize}
-              y={r * patchSize}
-              width={patchSize}
-              height={patchSize}
-              fill={fillStyle}
-            />
-          );
-        }
-      }
-    }
-
-    return (
-      <svg viewBox="0 0 240 240" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-        {grid}
-      </svg>
-    );
+    return <HeatmapCanvas dataMatrix={dataMatrix} colorMap={colorMap} />;
   };
 
   const renderVggtTracks = () => {
@@ -206,13 +243,38 @@ export default function EncoderDiagnostics({
 
     return (
       <svg viewBox="0 0 240 240" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 2 L 10 5 L 0 8 z" fill="var(--accent-amber)" />
+          </marker>
+        </defs>
         {vggtTracks.map((pt, idx) => {
-          const x = pt[0] * 240;
-          const y = pt[1] * 240;
+          if (pt.length < 4) return null;
+          const x1 = pt[0] * 240;
+          const y1 = pt[1] * 240;
+          const x2 = pt[2] * 240;
+          const y2 = pt[3] * 240;
+
+          // Amplify vector length slightly for clearer visualization
+          const scale = 2.0;
+          const dx = (x2 - x1) * scale;
+          const dy = (y2 - y1) * scale;
+          const targetX = x1 + dx;
+          const targetY = y1 + dy;
+
           return (
             <g key={idx}>
-              <circle cx={x} cy={y} r="3" fill="var(--accent-amber)" />
-              <line x1={x} y1={y} x2={x - 5} y2={y - 5} stroke="var(--accent-amber)" strokeWidth="1.5" opacity="0.6" />
+              <line
+                x1={x1}
+                y1={y1}
+                x2={targetX}
+                y2={targetY}
+                stroke="var(--accent-amber)"
+                strokeWidth="2"
+                opacity="0.8"
+                markerEnd="url(#arrow)"
+              />
+              <circle cx={x1} cy={y1} r="2.5" fill="var(--accent-amber)" opacity="0.6" />
             </g>
           );
         })}
@@ -239,13 +301,26 @@ export default function EncoderDiagnostics({
       );
     }
 
-    const projectedPoints = pointCloud.map((pt, idx) => {
-      const px = pt[0] * 80;
-      const py = pt[1] * 80;
-      const pz = pt[2] * 40;
+    // Pitch (orbit around X) and Yaw (orbit around Y) to match simulation camera perspective
+    const pitch = -35 * Math.PI / 180;
+    const yaw = -15 * Math.PI / 180;
 
-      const screenX = 120 + (px - py) * 0.8;
-      const screenY = 120 + (px + py) * 0.4 - pz;
+    const cosP = Math.cos(pitch);
+    const sinP = Math.sin(pitch);
+    const cosY = Math.cos(yaw);
+    const sinY = Math.sin(yaw);
+
+    const projectedPoints = pointCloud.map((pt, idx) => {
+      // Apply 3D rotation: Yaw first, then Pitch
+      const x1 = pt[0] * cosY - pt[2] * sinY;
+      const z1 = pt[0] * sinY + pt[2] * cosY;
+
+      const y2 = pt[1] * cosP - z1 * sinP;
+
+      // Project onto 2D screen space with zoom factor
+      const zoom = 150;
+      const screenX = 120 + x1 * zoom;
+      const screenY = 130 - y2 * zoom; // SVG coordinates invert Y axis
 
       let pointColor = '#3b82f6';
       if (pt.length >= 6) {
@@ -263,7 +338,7 @@ export default function EncoderDiagnostics({
           key={idx}
           cx={screenX}
           cy={screenY}
-          r="2.5"
+          r="1.5"
           fill={pointColor}
           opacity="0.9"
         />
@@ -671,7 +746,7 @@ export default function EncoderDiagnostics({
                   style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
                 >
                   {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {renderHeatmapOverlay(dinoAttn, 'inferno')}
+                  {renderHeatmapOverlay(dinoAttn, 'jet')}
                 </div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                   Attention overlays.
@@ -691,7 +766,7 @@ export default function EncoderDiagnostics({
                   style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
                 >
                   {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {renderHeatmapOverlay(clipSim, 'viridis')}
+                  {renderHeatmapOverlay(clipSim, 'jet')}
                 </div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                   Token: <code style={{ color: 'var(--accent-cyan)' }}>"{inputText}"</code>
