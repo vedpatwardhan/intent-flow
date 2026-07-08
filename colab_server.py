@@ -245,7 +245,14 @@ async def process_frame(payload: FramePayload):
                         len(xs), min(500, len(xs)), replace=False
                     )
                     xs, ys = xs[indices], ys[indices]
-                    zs = depth_map[ys, xs]
+
+                    # Scale depth values to realistic physical distances in meters: [0.5, 2.0]
+                    raw_zs = depth_map[ys, xs]
+                    depth_min, depth_max = depth_map.min(), depth_map.max()
+                    zs = (
+                        0.5
+                        + (raw_zs - depth_min) / (depth_max - depth_min + 1e-8) * 1.5
+                    )
 
                     # 3D pinhole projection perspective correction
                     focal_length = max(w, h)
@@ -259,9 +266,9 @@ async def process_frame(payload: FramePayload):
                     z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
                     max_range = max(x_range, y_range, z_range, 1e-8)
 
-                    xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.5
-                    ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.5
-                    zs_norm = (zs_proj - zs_proj.min()) / max_range
+                    xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
+                    ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
+                    zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
 
                     # Get colors and normalize to [0, 1]
                     colors = frame[ys, xs]
@@ -282,7 +289,11 @@ async def process_frame(payload: FramePayload):
                 )
                 xs = grid_x.flatten()
                 ys = grid_y.flatten()
-                zs = depth_map[ys, xs]
+
+                # Scale depth values to realistic physical distances in meters: [0.5, 2.0]
+                raw_zs = depth_map[ys, xs]
+                depth_min, depth_max = depth_map.min(), depth_map.max()
+                zs = 0.5 + (raw_zs - depth_min) / (depth_max - depth_min + 1e-8) * 1.5
 
                 # 3D pinhole projection perspective correction
                 focal_length = max(w, h)
@@ -296,9 +307,9 @@ async def process_frame(payload: FramePayload):
                 z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
                 max_range = max(x_range, y_range, z_range, 1e-8)
 
-                xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.5
-                ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.5
-                zs_norm = (zs_proj - zs_proj.min()) / max_range
+                xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
+                ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
+                zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
 
                 # Get colors and normalize to [0, 1]
                 colors = frame[ys, xs]
