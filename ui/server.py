@@ -135,6 +135,7 @@ colab_url = colab_url or os.environ.get("COLAB_URL")
 
 click_x = None
 click_y = None
+click_type = None
 text_prompt = "cube block"
 frame_history = deque(maxlen=5)
 
@@ -151,7 +152,7 @@ cached_vggt_tracks = []
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, text_prompt
+    global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt
     global colab_is_processing, needs_colab_processing, last_colab_query_time
     global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
     await websocket.accept()
@@ -206,6 +207,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif payload.get("type") == "clear_selections":
                     click_x = None
                     click_y = None
+                    click_type = None
                     needs_colab_processing = False
                     cached_dino_attn = None
                     cached_clip_sim = None
@@ -221,6 +223,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 ]:
                     click_x = int(payload["x"])
                     click_y = int(payload["y"])
+                    click_type = payload.get("type")
                     needs_colab_processing = True
                     print(
                         f"Set click coordinates via {payload.get('type')} to: ({click_x}, {click_y})"
@@ -378,6 +381,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "frame": base64_frame,
                         "click_x": click_x,
                         "click_y": click_y,
+                        "click_type": click_type,
                         "text_prompt": text_prompt,
                         "history_frames": list(frame_history),
                     }

@@ -50,6 +50,7 @@ class FramePayload(BaseModel):
     frame: str  # Base64 encoded RGB frame
     click_x: Optional[int] = None
     click_y: Optional[int] = None
+    click_type: Optional[str] = None  # "original_click", "track_click", or "goal_click"
     text_prompt: Optional[str] = "cube block"
     history_frames: Optional[List[str]] = []  # Previous base64 frames for VGGT tracking
 
@@ -192,12 +193,13 @@ async def process_frame(payload: FramePayload):
                 sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
                 response["clip_sim"] = sim_norm.tolist()
 
-        # 3. SAM Instance Mask Segmenter (Conditional on click inputs)
+        # 3. SAM Instance Mask Segmenter (Only for Segment viewport clicks)
         sam_mask_np = None
         if (
             "sam" in models
             and payload.click_x is not None
             and payload.click_y is not None
+            and payload.click_type == "original_click"
         ):
             inputs = models["sam_processor"](
                 pil_frame,
