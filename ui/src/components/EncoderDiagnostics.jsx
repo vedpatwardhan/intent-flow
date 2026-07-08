@@ -244,8 +244,8 @@ export default function EncoderDiagnostics({
     return (
       <svg viewBox="0 0 240 240" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
         <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 2 L 10 5 L 0 8 z" fill="var(--accent-amber)" />
+          <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 2 1 L 8 5 L 2 9" fill="none" stroke="var(--accent-amber)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </marker>
         </defs>
         {vggtTracks.map((pt, idx) => {
@@ -304,19 +304,19 @@ export default function EncoderDiagnostics({
     // 1. Exact Plotly Camera Transformation Matrix
     // Match custom_camera: eye=[0.1, 0.1, 2.0], up=[0, 1, 0]
     const eye = [0.1, 0.1, 2.0];
-    const eyeNorm = Math.sqrt(eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2]);
+    const eyeNorm = Math.sqrt(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]);
     const forward = [-eye[0] / eyeNorm, -eye[1] / eyeNorm, -eye[2] / eyeNorm];
     const up_initial = [0.0, 1.0, 0.0];
 
     // Deriving orthogonal system (Gram-Schmidt)
     const right_raw = [-forward[2], 0.0, forward[0]];
-    const rightNorm = Math.sqrt(right_raw[0]*right_raw[0] + right_raw[2]*right_raw[2]);
+    const rightNorm = Math.sqrt(right_raw[0] * right_raw[0] + right_raw[2] * right_raw[2]);
     const right = [right_raw[0] / rightNorm, 0.0, right_raw[2] / rightNorm];
 
     const up = [
-      right[1]*forward[2] - right[2]*forward[1],
-      right[2]*forward[0] - right[0]*forward[2],
-      right[0]*forward[1] - right[1]*forward[0]
+      right[1] * forward[2] - right[2] * forward[1],
+      right[2] * forward[0] - right[0] * forward[2],
+      right[0] * forward[1] - right[1] * forward[0]
     ];
 
     // 2. Camera Space Transformation and Projection
