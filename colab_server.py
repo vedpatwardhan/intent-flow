@@ -247,13 +247,32 @@ async def process_frame(payload: FramePayload):
                     xs, ys = xs[indices], ys[indices]
                     zs = depth_map[ys, xs]
 
-                    # Normalize values for visualization
-                    xs_norm = (xs - w / 2) / (w / 2)
-                    ys_norm = (h / 2 - ys) / (h / 2)
-                    zs_norm = (zs - zs.min()) / (zs.max() - zs.min() + 1e-8)
+                    # 3D pinhole projection perspective correction
+                    focal_length = max(w, h)
+                    xs_proj = (xs - w / 2.0) * zs / focal_length
+                    ys_proj = (h / 2.0 - ys) * zs / focal_length
+                    zs_proj = zs
 
-                    # Format points: [x, y, z, class/feature]
-                    point_cloud = np.stack([xs_norm, ys_norm, zs_norm, zs_norm], axis=1)
+                    # Enforce aspect ratio preservation with global scaling normalization
+                    x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
+                    y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
+                    z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+                    max_range = max(x_range, y_range, z_range, 1e-8)
+
+                    xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.5
+                    ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.5
+                    zs_norm = (zs_proj - zs_proj.min()) / max_range
+
+                    # Get colors and normalize to [0, 1]
+                    colors = frame[ys, xs]
+                    rs = colors[:, 0] / 255.0
+                    gs = colors[:, 1] / 255.0
+                    bs = colors[:, 2] / 255.0
+
+                    # Format points: [x, y, z, r, g, b]
+                    point_cloud = np.stack(
+                        [xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1
+                    )
                     response["point_cloud"] = point_cloud.tolist()
             else:
                 # Scene-wide point cloud by sampling a grid (25 x 25 = 625 points)
@@ -265,13 +284,30 @@ async def process_frame(payload: FramePayload):
                 ys = grid_y.flatten()
                 zs = depth_map[ys, xs]
 
-                # Normalize values for visualization
-                xs_norm = (xs - w / 2) / (w / 2)
-                ys_norm = (h / 2 - ys) / (h / 2)
-                zs_norm = (zs - zs.min()) / (zs.max() - zs.min() + 1e-8)
+                # 3D pinhole projection perspective correction
+                focal_length = max(w, h)
+                xs_proj = (xs - w / 2.0) * zs / focal_length
+                ys_proj = (h / 2.0 - ys) * zs / focal_length
+                zs_proj = zs
 
-                # Format points: [x, y, z, class/feature]
-                point_cloud = np.stack([xs_norm, ys_norm, zs_norm, zs_norm], axis=1)
+                # Enforce aspect ratio preservation with global scaling normalization
+                x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
+                y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
+                z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+                max_range = max(x_range, y_range, z_range, 1e-8)
+
+                xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.5
+                ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.5
+                zs_norm = (zs_proj - zs_proj.min()) / max_range
+
+                # Get colors and normalize to [0, 1]
+                colors = frame[ys, xs]
+                rs = colors[:, 0] / 255.0
+                gs = colors[:, 1] / 255.0
+                bs = colors[:, 2] / 255.0
+
+                # Format points: [x, y, z, r, g, b]
+                point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
                 response["point_cloud"] = point_cloud.tolist()
 
         # 5. VGGT Point Trajectory Tracks

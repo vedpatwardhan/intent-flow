@@ -247,8 +247,16 @@ export default function EncoderDiagnostics({
       const screenX = 120 + (px - py) * 0.8;
       const screenY = 120 + (px + py) * 0.4 - pz;
 
-      const activation = pt[3] || 0.0;
-      const pointColor = activation > 0.6 ? '#facc15' : activation > 0.3 ? '#ef4444' : '#3b82f6';
+      let pointColor = '#3b82f6';
+      if (pt.length >= 6) {
+        const r = Math.round(pt[3] * 255);
+        const g = Math.round(pt[4] * 255);
+        const b = Math.round(pt[5] * 255);
+        pointColor = `rgb(${r},${g},${b})`;
+      } else {
+        const activation = pt[3] || 0.0;
+        pointColor = activation > 0.6 ? '#facc15' : activation > 0.3 ? '#ef4444' : '#3b82f6';
+      }
 
       return (
         <circle
