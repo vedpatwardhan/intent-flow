@@ -182,9 +182,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "reset":
                     sim.reset_env(lock_posture=True)
+                    needs_colab_processing = True
 
                 elif payload.get("type") == "wild_randomize":
                     sim.wild_reset()
+                    needs_colab_processing = True
 
                 elif payload.get("type") == "combostoc_noise":
                     group = payload["group"]
