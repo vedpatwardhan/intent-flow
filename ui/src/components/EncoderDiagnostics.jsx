@@ -301,26 +301,16 @@ export default function EncoderDiagnostics({
       );
     }
 
-    // Pitch (orbit around X) and Yaw (orbit around Y) to match simulation camera perspective
-    const pitch = -35 * Math.PI / 180;
-    const yaw = -15 * Math.PI / 180;
-
-    const cosP = Math.cos(pitch);
-    const sinP = Math.sin(pitch);
-    const cosY = Math.cos(yaw);
-    const sinY = Math.sin(yaw);
-
     const projectedPoints = pointCloud.map((pt, idx) => {
-      // Apply 3D rotation: Yaw first, then Pitch
-      const x1 = pt[0] * cosY - pt[2] * sinY;
-      const z1 = pt[0] * sinY + pt[2] * cosY;
+      // Zoom and project using the perspective of the Plotly 3D viewport
+      // X = Width (horizontal), Y = Height (vertical), Z = Depth (into screen)
+      const zoom = 135;
 
-      const y2 = pt[1] * cosP - z1 * sinP;
-
-      // Project onto 2D screen space with zoom factor
-      const zoom = 150;
-      const screenX = 120 + x1 * zoom;
-      const screenY = 130 - y2 * zoom; // SVG coordinates invert Y axis
+      // Match the camera angle exactly: look from eye [0.1, 0.1, 2] and up [0, 1, 0]
+      // Subtracting Z (depth) from screenY shifts farther points UPWARD (back-horizon)
+      // Adding Z (depth) to screenX shifts farther points RIGHTWARD (depth-pitch)
+      const screenX = 120 + (pt[0] + 0.05 * pt[2]) * zoom;
+      const screenY = 120 - (pt[1] + 0.05 * pt[2]) * zoom;
 
       let pointColor = '#3b82f6';
       if (pt.length >= 6) {
@@ -338,7 +328,7 @@ export default function EncoderDiagnostics({
           key={idx}
           cx={screenX}
           cy={screenY}
-          r="1.5"
+          r="3"
           fill={pointColor}
           opacity="0.9"
         />

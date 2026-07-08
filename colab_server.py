@@ -246,13 +246,8 @@ async def process_frame(payload: FramePayload):
                     )
                     xs, ys = xs[indices], ys[indices]
 
-                    # Scale depth values to realistic physical distances in meters: [0.5, 2.0]
-                    raw_zs = depth_map[ys, xs]
-                    depth_min, depth_max = depth_map.min(), depth_map.max()
-                    zs = (
-                        0.5
-                        + (raw_zs - depth_min) / (depth_max - depth_min + 1e-8) * 1.5
-                    )
+                    # Extract raw predicted depth values directly (which is already in metric meters)
+                    zs = depth_map[ys, xs]
 
                     # 3D pinhole projection perspective correction
                     focal_length = max(w, h)
@@ -290,10 +285,8 @@ async def process_frame(payload: FramePayload):
                 xs = grid_x.flatten()
                 ys = grid_y.flatten()
 
-                # Scale depth values to realistic physical distances in meters: [0.5, 2.0]
-                raw_zs = depth_map[ys, xs]
-                depth_min, depth_max = depth_map.min(), depth_map.max()
-                zs = 0.5 + (raw_zs - depth_min) / (depth_max - depth_min + 1e-8) * 1.5
+                # Extract raw predicted depth values directly (which is already in metric meters)
+                zs = depth_map[ys, xs]
 
                 # 3D pinhole projection perspective correction
                 focal_length = max(w, h)
