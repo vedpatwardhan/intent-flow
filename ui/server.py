@@ -137,7 +137,9 @@ click_x = None
 click_y = None
 click_type = None
 text_prompt = "cube block"
+text_modifier = None
 frame_history = deque(maxlen=5)
+ui_annotations = {"crops": [], "vectors": [], "segments": []}
 
 colab_is_processing = False
 needs_colab_processing = False
@@ -148,13 +150,15 @@ cached_clip_sim = None
 cached_sam_mask = None
 cached_point_cloud = []
 cached_vggt_tracks = []
+cached_task_isolated_features = {}
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt
+    global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
-    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
+    global ui_annotations
     await websocket.accept()
     print("UI Connected via WebSocket")
     needs_colab_processing = (
@@ -214,7 +218,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     cached_sam_mask = None
                     cached_point_cloud = []
                     cached_vggt_tracks = []
+                    cached_task_isolated_features = {}
                     print("Cleared active camera click selections.")
+
+                elif payload.get("type") == "add_crop":
+                    ui_annotations["crops"].append(payload["coordinates"])
+                    needs_colab_processing = True
+                    print(f"Added crop annotation: {payload['coordinates']}")
+
+                elif payload.get("type") == "add_vector":
+                    ui_annotations["vectors"].append(payload["coordinates"])
+                    needs_colab_processing = True
+                    print(f"Added vector annotation: {payload['coordinates']}")
+
+                elif payload.get("type") == "clear_annotations":
+                    ui_annotations = {"crops": [], "vectors": [], "segments": []}
+                    needs_colab_processing = True
+                    print("Cleared all UI annotations")
 
                 elif payload.get("type") in [
                     "original_click",
@@ -341,6 +361,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "sam_mask": cached_sam_mask,
                 "point_cloud": cached_point_cloud,
                 "vggt_tracks": cached_vggt_tracks,
+                "task_isolated_features": cached_task_isolated_features,
             }
 
             current_time = asyncio.get_event_loop().time()
@@ -383,6 +404,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "click_y": click_y,
                         "click_type": click_type,
                         "text_prompt": text_prompt,
+                        "text_modifier": text_modifier,
+                        "ui_annotations": ui_annotations,
                         "history_frames": list(frame_history),
                     }
                     asyncio.create_task(run_colab_query(post_payload))

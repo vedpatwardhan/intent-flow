@@ -23,6 +23,7 @@ export default function App() {
   const [samMaskCache, setSamMaskCache] = useState({});
   const [pointCloudCache, setPointCloudCache] = useState({});
   const [vggtTracksCache, setVggtTracksCache] = useState({});
+  const [taskIsolatedFeaturesCache, setTaskIsolatedFeaturesCache] = useState({});
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
@@ -74,6 +75,9 @@ export default function App() {
         }
         if (data.vggt_tracks !== undefined) {
           setVggtTracksCache(prev => ({ ...prev, [currentCam]: data.vggt_tracks }));
+        }
+        if (data.task_isolated_features !== undefined) {
+          setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
         }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
@@ -222,6 +226,7 @@ export default function App() {
           activeCam={activeCam}
           onCameraChange={setActiveCam}
           onInteraction={handleInteraction}
+          taskIsolatedFeatures={taskIsolatedFeaturesCache[activeCam]}
         />
       )}
       {activePage === 'skills' && (

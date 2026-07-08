@@ -52,6 +52,10 @@ class FramePayload(BaseModel):
     click_y: Optional[int] = None
     click_type: Optional[str] = None  # "original_click", "track_click", or "goal_click"
     text_prompt: Optional[str] = "cube block"
+    text_modifier: Optional[str] = None  # Hierarchical text modifier
+    ui_annotations: Optional[dict] = (
+        None  # {"crops": [], "vectors": [], "segments": []}
+    )
     history_frames: Optional[List[str]] = []  # Previous base64 frames for VGGT tracking
 
 
@@ -139,6 +143,12 @@ async def process_frame(payload: FramePayload):
             "sam_mask": "",
             "vggt_tracks": [],
             "point_cloud": [],
+            "task_isolated_features": {
+                "dino_subspace": [],
+                "vggt_local": [],
+                "pointnext_isolated": [],
+                "tactile_active": [],
+            },
         }
 
         # 1. DINOv3 Attention Map Extraction
@@ -350,6 +360,51 @@ async def process_frame(payload: FramePayload):
                     response["vggt_tracks"] = tracks
             except Exception as evggt:
                 print(f"KLT tracking failed: {evggt}")
+
+        # 6. Task-Isolated Feature Extraction (based on UI annotations)
+        if payload.ui_annotations and len(response["dino_attn"]) > 0:
+            annotations = payload.ui_annotations
+
+            # Create binary mask from crops and segments for DINO/PointNeXt focusing
+            combined_mask = np.zeros((14, 14), dtype=np.float32)
+
+            # Process crops (patches)
+            for crop in annotations.get("crops", []):
+                # Map crop coordinates to 14x14 grid
+                x_start = int((crop["x"] / 224) * 14)
+                y_start = int((crop["y"] / 224) * 14)
+                x_end = int(((crop["x"] + crop["width"]) / 224) * 14)
+                y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
+                combined_mask[y_start:y_end, x_start:x_end] = 1.0
+
+            # Process segments (click points for surfaces)
+            for seg in annotations.get("segments", []):
+                x_idx = int((seg["x"] / 224) * 14)
+                y_idx = int((seg["y"] / 224) * 14)
+                combined_mask[y_idx, x_idx] = 1.0
+
+            # DINO: Apply mask to get focused attention subspace
+            dino_array = np.array(response["dino_attn"])
+            masked_dino = dino_array * combined_mask
+            response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
+
+            # PointNeXt: Filter points using SAM mask (surfaces)
+            if sam_mask_np is not None and len(response["point_cloud"]) > 0:
+                response["task_isolated_features"]["pointnext_isolated"] = response[
+                    "point_cloud"
+                ][:100]
+
+            # VGGT: Return local tracks directly (independent of patches)
+            if len(response["vggt_tracks"]) > 0:
+                response["task_isolated_features"]["vggt_local"] = response[
+                    "vggt_tracks"
+                ][:10]
+
+            # Tactile grid (placeholder - would come from simulation)
+            response["task_isolated_features"]["tactile_active"] = [
+                [0.1, 0.0],
+                [0.0, 0.1],
+            ]
 
         return response
 

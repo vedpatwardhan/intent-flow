@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Target, Image as ImageIcon, Eye, Grid, Move, RotateCcw, Shuffle, Sparkles, Plus, Trash2, Crosshair } from 'lucide-react';
+import UnifiedWorkspace from './UnifiedWorkspace';
+import CriticalSubspace from './CriticalSubspace';
 
 const COMPACT_WIRE_JOINTS = [
   "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_pitch_joint", "left_wrist_yaw_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint",
@@ -98,7 +100,8 @@ export default function EncoderDiagnostics({
   vggtTracks,
   activeCam,
   onCameraChange,
-  onInteraction
+  onInteraction,
+  taskIsolatedFeatures
 }) {
   const [inputText, setInputText] = useState('cube block');
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // Default right_shoulder_pitch
@@ -679,77 +682,15 @@ export default function EncoderDiagnostics({
             </button>
           </div>
 
-          {/* Dedicated Row 1: 3 Interactive Viewports stretching to match Row 2 card widths */}
+          {/* Row 1: Unified Workspace + Critical Subspace */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+            gridTemplateColumns: '1fr 1fr',
             gap: '12px',
             flexShrink: 0
           }}>
-
-            {/* Viewport 1: SAM Interactive Segmenter */}
-            <div className="panel" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
-              <div className="panel-header" style={{ marginBottom: '2px' }}>
-                <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-red)', fontWeight: 600 }}>
-                  <Crosshair size={12} />
-                  1. Segment Viewport (SAM)
-                </span>
-              </div>
-              <div
-                className="diagnostics-viewport"
-                onClick={handleSegmentClick}
-                style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
-              >
-                {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(segmentMarkers[activeCam], 'var(--accent-red)')}
-              </div>
-              <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                Click to segment / generate point cloud.
-              </div>
-            </div>
-
-            {/* Viewport 2: VGGT Interactive Tracker */}
-            <div className="panel" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
-              <div className="panel-header" style={{ marginBottom: '2px' }}>
-                <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                  <Crosshair size={12} />
-                  2. Track Viewport (VGGT)
-                </span>
-              </div>
-              <div
-                className="diagnostics-viewport"
-                onClick={handleTrackClick}
-                style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
-              >
-                {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(trackMarkers[activeCam], 'var(--accent-cyan)')}
-              </div>
-              <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                Click to seed continuous visual tracks.
-              </div>
-            </div>
-
-            {/* Viewport 3: Flow Interactive Goal Selector */}
-            <div className="panel" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
-              <div className="panel-header" style={{ marginBottom: '2px' }}>
-                <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-green)', fontWeight: 600 }}>
-                  <Crosshair size={12} />
-                  3. Goal Viewport (Flow)
-                </span>
-              </div>
-              <div
-                className="diagnostics-viewport"
-                onClick={handleGoalClick}
-                style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', cursor: 'crosshair' }}
-              >
-                {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                {renderClickReticle(goalMarkers[activeCam], 'var(--accent-green)')}
-              </div>
-              <div style={{ fontSize: '8px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                Click to anchor policy trajectory goals.
-              </div>
-            </div>
-
+            <UnifiedWorkspace frames={frames} activeCam={activeCam} onInteraction={onInteraction} />
+            <CriticalSubspace frame={activeFrame} isolatedFeatures={taskIsolatedFeatures} />
           </div>
 
           {/* Dedicated Row 2: Visual Overlays Grid (Slightly Enlarged to 240px squares) */}
