@@ -203,25 +203,41 @@ async def process_frame(payload: FramePayload):
                 sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
                 response["clip_sim"] = sim_norm.tolist()
 
-        # 3. SAM Instance Mask Segmenter (Only for Segment viewport clicks)
+        # 3. SAM Instance Mask Segmenter (Always run if available)
         sam_mask_np = None
-        if (
-            "sam" in models
-            and payload.click_x is not None
-            and payload.click_y is not None
-            and payload.click_type == "original_click"
-        ):
-            inputs = models["sam_processor"](
-                pil_frame,
-                input_points=[[[[payload.click_x, payload.click_y]]]],
-                input_labels=[[[1]]],
-                return_tensors="pt",
-            ).to(device)
-            with torch.no_grad():
-                outputs = models["sam"](**inputs)
-            mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
-            mask_logits_resized = cv2.resize(mask_logits, (w, h))
-            sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
+        if "sam" in models:
+            if (
+                payload.click_x is not None
+                and payload.click_y is not None
+                and payload.click_type == "original_click"
+            ):
+                # Focused segmentation with click points
+                inputs = models["sam_processor"](
+                    pil_frame,
+                    input_points=[[[[payload.click_x, payload.click_y]]]],
+                    input_labels=[[[1]]],
+                    return_tensors="pt",
+                ).to(device)
+                with torch.no_grad():
+                    outputs = models["sam"](**inputs)
+                mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
+                mask_logits_resized = cv2.resize(mask_logits, (w, h))
+                sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
+            else:
+                # Scene-wide segmentation (no click points)
+                # Use a single point at center for automatic scene segmentation
+                center_x, center_y = w // 2, h // 2
+                inputs = models["sam_processor"](
+                    pil_frame,
+                    input_points=[[[[center_x, center_y]]]],
+                    input_labels=[[[1]]],
+                    return_tensors="pt",
+                ).to(device)
+                with torch.no_grad():
+                    outputs = models["sam"](**inputs)
+                mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
+                mask_logits_resized = cv2.resize(mask_logits, (w, h))
+                sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
 
             # Encode SAM mask as a green-colored BGR image (0, 255, 0)
             green_mask = np.zeros((h, w, 3), dtype=np.uint8)
@@ -361,7 +377,7 @@ async def process_frame(payload: FramePayload):
             except Exception as evggt:
                 print(f"KLT tracking failed: {evggt}")
 
-        # 6. Task-Isolated Feature Extraction (based on UI annotations)
+        # 6. Task-Isolated Feature Extraction (based on UI annotations and click points)
         if payload.ui_annotations and len(response["dino_attn"]) > 0:
             annotations = payload.ui_annotations
 
@@ -388,6 +404,17 @@ async def process_frame(payload: FramePayload):
             masked_dino = dino_array * combined_mask
             response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
 
+            # SAM: Include mask in critical subspace when click points are selected
+            if (
+                payload.click_x is not None
+                and payload.click_y is not None
+                and payload.click_type == "original_click"
+                and sam_mask_np is not None
+            ):
+                # Downsample SAM mask to 14x14 for critical subspace display
+                sam_mask_small = cv2.resize(sam_mask_np, (14, 14))
+                response["task_isolated_features"]["sam_mask"] = sam_mask_small.tolist()
+
             # PointNeXt: Filter points using SAM mask (surfaces)
             if sam_mask_np is not None and len(response["point_cloud"]) > 0:
                 response["task_isolated_features"]["pointnext_isolated"] = response[
@@ -399,12 +426,6 @@ async def process_frame(payload: FramePayload):
                 response["task_isolated_features"]["vggt_local"] = response[
                     "vggt_tracks"
                 ][:10]
-
-            # Tactile grid (placeholder - would come from simulation)
-            response["task_isolated_features"]["tactile_active"] = [
-                [0.1, 0.0],
-                [0.0, 0.1],
-            ]
 
         return response
 
