@@ -48,8 +48,8 @@ models = {}
 
 class FramePayload(BaseModel):
     frame: str  # Base64 encoded RGB frame
-    click_x: Optional[int] = 112
-    click_y: Optional[int] = 112
+    click_x: Optional[int] = None
+    click_y: Optional[int] = None
     text_prompt: Optional[str] = "cube block"
     history_frames: Optional[List[str]] = []  # Previous base64 frames for VGGT tracking
 
@@ -192,9 +192,13 @@ async def process_frame(payload: FramePayload):
                 sim_norm = (sim - sim.min()) / (sim.max() - sim.min() + 1e-8)
                 response["clip_sim"] = sim_norm.tolist()
 
-        # 3. SAM Instance Mask Segmenter
+        # 3. SAM Instance Mask Segmenter (Conditional on click inputs)
         sam_mask_np = None
-        if "sam" in models:
+        if (
+            "sam" in models
+            and payload.click_x is not None
+            and payload.click_y is not None
+        ):
             inputs = models["sam_processor"](
                 pil_frame,
                 input_points=[[[[payload.click_x, payload.click_y]]]],
@@ -215,8 +219,8 @@ async def process_frame(payload: FramePayload):
                 buffer
             ).decode("utf-8")
 
-        # 4. Depth-Anything V2 & PointNeXt Segment Cloud
-        if "depth_model" in models and sam_mask_np is not None:
+        # 4. Depth-Anything V2 & PointNeXt Segment Cloud (Fallback to full scene when SAM is None)
+        if "depth_model" in models:
             inputs_depth = models["depth_processor"](
                 images=pil_frame, return_tensors="pt"
             ).to(device)
@@ -234,10 +238,31 @@ async def process_frame(payload: FramePayload):
                     .numpy()
                 )
 
-            ys, xs = np.where(sam_mask_np > 0)
-            if len(xs) > 0:
-                indices = np.random.choice(len(xs), min(500, len(xs)), replace=False)
-                xs, ys = xs[indices], ys[indices]
+            if sam_mask_np is not None:
+                ys, xs = np.where(sam_mask_np > 0)
+                if len(xs) > 0:
+                    indices = np.random.choice(
+                        len(xs), min(500, len(xs)), replace=False
+                    )
+                    xs, ys = xs[indices], ys[indices]
+                    zs = depth_map[ys, xs]
+
+                    # Normalize values for visualization
+                    xs_norm = (xs - w / 2) / (w / 2)
+                    ys_norm = (h / 2 - ys) / (h / 2)
+                    zs_norm = (zs - zs.min()) / (zs.max() - zs.min() + 1e-8)
+
+                    # Format points: [x, y, z, class/feature]
+                    point_cloud = np.stack([xs_norm, ys_norm, zs_norm, zs_norm], axis=1)
+                    response["point_cloud"] = point_cloud.tolist()
+            else:
+                # Scene-wide point cloud by sampling a grid (25 x 25 = 625 points)
+                grid_x, grid_y = np.meshgrid(
+                    np.linspace(0, w - 1, 25).astype(int),
+                    np.linspace(0, h - 1, 25).astype(int),
+                )
+                xs = grid_x.flatten()
+                ys = grid_y.flatten()
                 zs = depth_map[ys, xs]
 
                 # Normalize values for visualization
