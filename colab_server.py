@@ -211,43 +211,7 @@ async def process_frame(payload: FramePayload):
                 response["clip_sim"] = sim_norm.tolist()
             print(f"CLIP completed at {perf_counter() - start}")
 
-        # 3. SAM Instance Mask Segmenter (Always run if available)
-        sam_mask_np = None
-        if "sam" in models:
-            mask_generator = models["sam_automatic_mask_generator"]
-            # Run inference on the entire image
-            with torch.no_grad():
-                masks_metadata = mask_generator(
-                    pil_frame,
-                    points_per_side=64,  # Forces a denser 64x64 grid search (4,096 points)
-                    pred_iou_thresh=0.6,  # Excludes low-quality, ambiguous blended masks
-                    stability_score_thresh=0.6,  # Forces masks to have sharp, definite object boundaries
-                    min_mask_region_area=5,  # Prunes away tiny pixel noise artifacts
-                )
-
-            # Process the discovered segments
-            composite_view = frame.copy()
-            for amg_mask in masks_metadata["masks"]:
-                binary_mask = (
-                    amg_mask.cpu().numpy() if torch.is_tensor(amg_mask) else amg_mask
-                )
-                random_color = np.random.randint(50, 230, size=3, dtype=np.uint8)
-                composite_view[binary_mask] = cv2.addWeighted(
-                    composite_view[binary_mask],
-                    0.6,
-                    np.ones_like(composite_view[binary_mask]) * random_color,
-                    0.4,
-                    0,
-                )
-
-            # Encode SAM mask
-            _, buffer = cv2.imencode(".png", composite_view)
-            response["sam_mask"] = "data:image/png;base64," + base64.b64encode(
-                buffer
-            ).decode("utf-8")
-            print(f"SAM completed at {perf_counter() - start}")
-
-        # 4. Depth-Anything V2 & PointNeXt Segment Cloud (Fallback to full scene when SAM is None)
+        # 3. Depth-Anything V2 & PointNeXt Segment Cloud
         if "depth_model" in models:
             inputs_depth = models["depth_processor"](
                 images=pil_frame, return_tensors="pt"
@@ -308,7 +272,7 @@ async def process_frame(payload: FramePayload):
             response["point_cloud"] = point_cloud.tolist()
             print(f"Point cloud completed at {perf_counter() - start}")
 
-        # 5. VGGT Point Trajectory Tracks
+        # 4. VGGT Point Trajectory Tracks
         # Uses optical flow to generate realistic point tracks across historical frames
         if len(payload.history_frames) >= 2:
             try:
@@ -340,8 +304,8 @@ async def process_frame(payload: FramePayload):
                 print(f"KLT tracking failed: {evggt}")
             print(f"VGGT completed at {perf_counter() - start}")
 
-        # 6. Task-Isolated Feature Extraction (based on UI annotations and click points)
-        if False:  # payload.ui_annotations and len(response["dino_attn"]) > 0:
+        # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
+        if payload.ui_annotations and len(response["dino_attn"]) > 0:
             annotations = payload.ui_annotations
 
             # Create binary mask from crops and segments for DINO/PointNeXt focusing
@@ -356,30 +320,60 @@ async def process_frame(payload: FramePayload):
                 y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
                 combined_mask[y_start:y_end, x_start:x_end] = 1.0
 
-            # Process segments (click points for surfaces)
-            for seg in annotations.get("segments", []):
-                x_idx = int((seg["x"] / 224) * 14)
-                y_idx = int((seg["y"] / 224) * 14)
-                combined_mask[y_idx, x_idx] = 1.0
+            # Process segments (click points for surfaces) using batched SAM 2 on the GPU
+            segments = annotations.get("segments", [])
+            click_pts = [[seg["x"], seg["y"]] for seg in segments]
+            num_pts = len(click_pts)
+
+            # Single-image CPU preprocessing and GPU replicating optimization
+            single_inputs = models["sam_processor"](
+                images=pil_frame,
+                input_points=[[[pt]] for pt in click_pts],
+                input_labels=[[[1]] for _ in range(num_pts)],
+                return_tensors="pt",
+            )
+
+            # Repeat them across all 5 points
+            inputs = {
+                "pixel_values": single_inputs["pixel_values"]
+                .repeat(num_pts, 1, 1, 1)
+                .to(device),
+                "original_sizes": single_inputs["original_sizes"]
+                .repeat(num_pts, 1)
+                .to(device),
+                "reshaped_input_sizes": single_inputs["reshaped_input_sizes"]
+                .repeat(num_pts, 1)
+                .to(device),
+                "input_points": single_inputs["input_points"].to(device),
+                "input_labels": single_inputs["input_labels"].to(device),
+            }
+
+            with torch.inference_mode():
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    outputs = models["sam"](**inputs)
+
+                # Downscale batched logits directly to 14x14 on the GPU
+                pred_masks = outputs.pred_masks[:, 0, 0].unsqueeze(1)
+                resized_masks = torch.nn.functional.interpolate(
+                    pred_masks, size=(14, 14), mode="bilinear", align_corners=False
+                )
+                sam_grid_masks = (
+                    (resized_masks.squeeze(1) > 0.0).cpu().numpy().astype(np.float32)
+                )
+                response["task_isolated_features"]["sam_mask"] = sam_grid_masks.tolist()
+
+            # Process vectors (directions for explaining movement)
+            for vec in annotations.get("vectors", []):
+                start_vec, end_vec = vec["start"], vec["end"]
+                pass  # --> continue from here
 
             # DINO: Apply mask to get focused attention subspace
             dino_array = np.array(response["dino_attn"])
             masked_dino = dino_array * combined_mask
             response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
 
-            # SAM: Include mask in critical subspace when click points are selected
-            if (
-                payload.click_x is not None
-                and payload.click_y is not None
-                and payload.click_type == "original_click"
-                and sam_mask_np is not None
-            ):
-                # Downsample SAM mask to 14x14 for critical subspace display
-                sam_mask_small = cv2.resize(sam_mask_np, (14, 14))
-                response["task_isolated_features"]["sam_mask"] = sam_mask_small.tolist()
-
             # PointNeXt: Filter points using SAM mask (surfaces)
-            if sam_mask_np is not None and len(response["point_cloud"]) > 0:
+            if len(response["point_cloud"]) > 0:
                 response["task_isolated_features"]["pointnext_isolated"] = response[
                     "point_cloud"
                 ][:100]
