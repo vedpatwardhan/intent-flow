@@ -2,6 +2,7 @@ import os
 import sys
 import base64
 import io
+from time import perf_counter
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -135,6 +136,7 @@ def decode_base64_image(base64_str: str) -> np.ndarray:
 @app.post("/process")
 async def process_frame(payload: FramePayload):
     try:
+        start = perf_counter()
         # Decode primary image frame
         frame = decode_base64_image(payload.frame)
         h, w, _ = frame.shape
@@ -176,6 +178,7 @@ async def process_frame(payload: FramePayload):
                 attn = torch.matmul(patches, cls_token.T).view(14, 14).cpu().numpy()
                 attn_norm = (attn - attn.min()) / (attn.max() - attn.min() + 1e-8)
                 response["dino_attn"] = attn_norm.tolist()
+            print(f"DINO completed at {perf_counter() - start}")
 
         # 2. CLIP Cosine Similarity Map
         if "clip" in models:
@@ -206,6 +209,7 @@ async def process_frame(payload: FramePayload):
                 )
                 sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
                 response["clip_sim"] = sim_norm.tolist()
+            print(f"CLIP completed at {perf_counter() - start}")
 
         # 3. SAM Instance Mask Segmenter (Always run if available)
         sam_mask_np = None
@@ -222,32 +226,26 @@ async def process_frame(payload: FramePayload):
                 )
 
             # Process the discovered segments
-            h, w = frame.shape[:2]
             composite_view = frame.copy()
-            for idx, binary_mask in enumerate(masks_metadata["masks"]):
-                # Generate a unique, random vibrant color for this specific object
-                random_color = np.random.randint(0, 255, size=3).tolist()
-
-                # Create overlay
-                overlay = np.zeros_like(frame, dtype=np.uint8)
-                overlay[binary_mask] = random_color
-
-                # Create composite view
-                alpha = 0.4
-                composite_view[binary_mask] = cv2.addWeighted(
-                    overlay, alpha, composite_view, 1 - alpha, 0
-                )[binary_mask]
-                mask_uint8 = binary_mask.cpu().numpy().astype(np.uint8)
-                contours, _ = cv2.findContours(
-                    mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            for amg_mask in masks_metadata["masks"]:
+                binary_mask = (
+                    amg_mask.cpu().numpy() if torch.is_tensor(amg_mask) else amg_mask
                 )
-                cv2.drawContours(composite_view, contours, -1, random_color, 2)
+                random_color = np.random.randint(50, 230, size=3, dtype=np.uint8)
+                composite_view[binary_mask] = cv2.addWeighted(
+                    composite_view[binary_mask],
+                    0.6,
+                    np.ones_like(composite_view[binary_mask]) * random_color,
+                    0.4,
+                    0,
+                )
 
             # Encode SAM mask
             _, buffer = cv2.imencode(".png", composite_view)
             response["sam_mask"] = "data:image/png;base64," + base64.b64encode(
                 buffer
             ).decode("utf-8")
+            print(f"SAM completed at {perf_counter() - start}")
 
         # 4. Depth-Anything V2 & PointNeXt Segment Cloud (Fallback to full scene when SAM is None)
         if "depth_model" in models:
@@ -308,6 +306,7 @@ async def process_frame(payload: FramePayload):
             # Format points: [x, y, z, r, g, b]
             point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
             response["point_cloud"] = point_cloud.tolist()
+            print(f"Point cloud completed at {perf_counter() - start}")
 
         # 5. VGGT Point Trajectory Tracks
         # Uses optical flow to generate realistic point tracks across historical frames
@@ -339,9 +338,10 @@ async def process_frame(payload: FramePayload):
                     response["vggt_tracks"] = tracks
             except Exception as evggt:
                 print(f"KLT tracking failed: {evggt}")
+            print(f"VGGT completed at {perf_counter() - start}")
 
         # 6. Task-Isolated Feature Extraction (based on UI annotations and click points)
-        if payload.ui_annotations and len(response["dino_attn"]) > 0:
+        if False:  # payload.ui_annotations and len(response["dino_attn"]) > 0:
             annotations = payload.ui_annotations
 
             # Create binary mask from crops and segments for DINO/PointNeXt focusing
@@ -390,6 +390,7 @@ async def process_frame(payload: FramePayload):
                     "vggt_tracks"
                 ][:10]
 
+        print(f"Time taken {perf_counter() - start}")
         return response
 
     except Exception as e:
