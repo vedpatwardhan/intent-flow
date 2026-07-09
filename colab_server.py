@@ -396,13 +396,7 @@ async def process_frame(payload: FramePayload):
 
             # PointNeXt: Filter and center 3D points directly using pre-computed grid variables and combined_mask
             pointnext_isolated = get_filtered_point_cloud(
-                xs,
-                ys,
-                combined_mask,
-                xs_proj,
-                ys_proj,
-                zs_proj,
-                colors,
+                xs, ys, combined_mask, xs_proj, ys_proj, zs_proj, colors
             )
             response["task_isolated_features"][
                 "pointnext_isolated"
