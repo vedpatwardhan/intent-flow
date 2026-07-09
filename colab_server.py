@@ -380,23 +380,16 @@ async def process_frame(payload: FramePayload):
             ys_14 = np.clip((ys / 224 * 14).astype(int), 0, 13)
             mask_filter = combined_mask[ys_14, xs_14] > 0.0
 
-            xs_isolated_proj = xs_proj[mask_filter]
-            ys_isolated_proj = ys_proj[mask_filter]
-            zs_isolated_proj = zs_proj[mask_filter]
+            xs_iso = xs_proj[mask_filter]
+            ys_iso = ys_proj[mask_filter]
+            zs_iso = zs_proj[mask_filter]
+            pts_iso = np.stack([xs_iso, ys_iso, zs_iso], axis=1)
 
-            x_range = xs_isolated_proj.max() - xs_isolated_proj.min()
-            y_range = ys_isolated_proj.max() - ys_isolated_proj.min()
-            z_range = zs_isolated_proj.max() - zs_isolated_proj.min()
-            max_range = max(x_range, y_range, z_range, 1e-8)
-
-            xs_norm = (xs_isolated_proj - xs_isolated_proj.mean()) / max_range * 1.6
-            ys_norm = (ys_isolated_proj - ys_isolated_proj.mean()) / max_range * 1.6
-            zs_norm = (zs_isolated_proj - zs_isolated_proj.mean()) / max_range * 1.6
-
-            colors_isolated = colors[mask_filter]
-            rs = colors_isolated[:, 0] / 255.0
-            gs = colors_isolated[:, 1] / 255.0
-            bs = colors_isolated[:, 2] / 255.0
+            max_range = max((pts_iso.max(axis=0) - pts_iso.min(axis=0)).max(), 1e-8)
+            pts_norm = (pts_iso - pts_iso.mean(axis=0)) * (1.6 / max_range)
+            xs_norm, ys_norm, zs_norm = pts_norm[:, 0], pts_norm[:, 1], pts_norm[:, 2]
+            colors_norm = colors[mask_filter] / 255.0
+            rs, gs, bs = colors_norm[:, 0], colors_norm[:, 1], colors_norm[:, 2]
 
             pointnext_isolated = np.stack(
                 [xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1
