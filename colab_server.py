@@ -411,11 +411,12 @@ async def process_frame(payload: FramePayload):
         print(f"Point cloud completed at {perf_counter() - start}")
 
         # 4. VGGT Point Trajectory Tracks
-        # Uses optical flow to generate realistic point tracks across historical frames
-        if len(payload.history_frames) >= 2:
-            vggt_3d_tracks, vggt_seeds = get_vggt_point_tracks(payload.history_frames)
-            response["vggt_tracks"] = vggt_3d_tracks.tolist()
-            print(f"VGGT completed at {perf_counter() - start}")
+        # Duplicate history frames if only one exists
+        if len(payload.history_frames) < 2:
+            payload.history_frames = [payload.frame, payload.frame]
+        vggt_3d_tracks, vggt_seeds = get_vggt_point_tracks(payload.history_frames)
+        response["vggt_tracks"] = vggt_3d_tracks.tolist()
+        print(f"VGGT completed at {perf_counter() - start}")
 
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
         if payload.ui_annotations:
