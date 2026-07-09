@@ -236,6 +236,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     needs_colab_processing = True
                     print("Cleared all UI annotations")
 
+                elif payload.get("type") == "sync_annotations":
+                    ui_annotations = payload["annotations"]
+                    needs_colab_processing = True
+                    print(f"Synchronized UI annotations: {ui_annotations}")
+
                 elif payload.get("type") in [
                     "original_click",
                     "track_click",
@@ -365,7 +370,13 @@ async def websocket_endpoint(websocket: WebSocket):
             }
 
             current_time = asyncio.get_event_loop().time()
-            if colab_url and needs_colab_processing and not colab_is_processing:
+            # Temporarily disabled /process endpoint calls to focus on UI drawing & snapping
+            if (
+                False
+                and colab_url
+                and needs_colab_processing
+                and not colab_is_processing
+            ):
                 base64_frame = frames.get(active_camera, "")
                 if base64_frame:
                     frame_history.append(base64_frame)
