@@ -375,33 +375,28 @@ async def process_frame(payload: FramePayload):
             masked_dino = dino_array * combined_mask
             response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
 
-            # PointNeXt: Filter and project 3D points using the combined_mask (crops + segments)
-            combined_mask_upscaled = cv2.resize(
-                combined_mask, (w, h), interpolation=cv2.INTER_NEAREST
-            )
-            ys, xs = np.where(combined_mask_upscaled > 0.0)
-            indices = np.random.choice(len(xs), min(500, len(xs)), replace=False)
-            xs, ys = xs[indices], ys[indices]
-            zs = depth_map[ys, xs]
+            # PointNeXt: Filter and center 3D points directly using pre-computed grid variables and combined_mask
+            xs_14 = np.clip((xs / 224 * 14).astype(int), 0, 13)
+            ys_14 = np.clip((ys / 224 * 14).astype(int), 0, 13)
+            mask_filter = combined_mask[ys_14, xs_14] > 0.0
 
-            focal_length = max(w, h)
-            xs_proj = (xs - w / 2.0) * zs / focal_length
-            ys_proj = (h / 2.0 - ys) * zs / focal_length
-            zs_proj = zs
+            xs_isolated_proj = xs_proj[mask_filter]
+            ys_isolated_proj = ys_proj[mask_filter]
+            zs_isolated_proj = zs_proj[mask_filter]
 
-            x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
-            y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
-            z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+            x_range = xs_isolated_proj.max() - xs_isolated_proj.min()
+            y_range = ys_isolated_proj.max() - ys_isolated_proj.min()
+            z_range = zs_isolated_proj.max() - zs_isolated_proj.min()
             max_range = max(x_range, y_range, z_range, 1e-8)
 
-            xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
-            ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
-            zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
+            xs_norm = (xs_isolated_proj - xs_isolated_proj.mean()) / max_range * 1.6
+            ys_norm = (ys_isolated_proj - ys_isolated_proj.mean()) / max_range * 1.6
+            zs_norm = (zs_isolated_proj - zs_isolated_proj.mean()) / max_range * 1.6
 
-            colors = frame[ys, xs]
-            rs = colors[:, 0] / 255.0
-            gs = colors[:, 1] / 255.0
-            bs = colors[:, 2] / 255.0
+            colors_isolated = colors[mask_filter]
+            rs = colors_isolated[:, 0] / 255.0
+            gs = colors_isolated[:, 1] / 255.0
+            bs = colors_isolated[:, 2] / 255.0
 
             pointnext_isolated = np.stack(
                 [xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1
