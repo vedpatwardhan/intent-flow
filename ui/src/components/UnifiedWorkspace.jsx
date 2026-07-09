@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Crosshair, Navigation, Target, RotateCcw } from 'lucide-react';
 
-export default function UnifiedWorkspace({ frames, activeCam, onInteraction }) {
+export default function UnifiedWorkspace({ frames, activeCam, onInteraction, samMask }) {
   const canvasRef = useRef(null);
   
   const [activeTool, setActiveTool] = useState('segment');
@@ -209,11 +209,20 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction }) {
       <div style={{ position: 'relative', width: '100%', maxWidth: '320px', margin: '0 auto' }}>
         <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
           {activeFrame ? (
-            <img
-              src={activeFrame}
-              alt="camera"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-            />
+            <>
+              <img
+                src={activeFrame}
+                alt="camera"
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+              {samMask && (
+                <img
+                  src={samMask}
+                  alt="sam mask"
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'screen', opacity: 0.65, pointerEvents: 'none' }}
+                />
+              )}
+            </>
           ) : (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', fontSize: '11px' }}>
               Waiting...

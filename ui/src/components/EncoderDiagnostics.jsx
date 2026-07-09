@@ -689,7 +689,7 @@ export default function EncoderDiagnostics({
             gap: '12px',
             flexShrink: 0
           }}>
-            <UnifiedWorkspace frames={frames} activeCam={activeCam} onInteraction={onInteraction} />
+            <UnifiedWorkspace frames={frames} activeCam={activeCam} onInteraction={onInteraction} samMask={samMask} />
             <CriticalSubspace frame={activeFrame} isolatedFeatures={taskIsolatedFeatures} />
           </div>
 
@@ -697,7 +697,7 @@ export default function EncoderDiagnostics({
           <div style={{ overflowY: 'auto', flexGrow: 1, paddingRight: '2px' }}>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
               gap: '12px'
             }}>
 
@@ -711,7 +711,7 @@ export default function EncoderDiagnostics({
                 </div>
                 <div
                   className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
+                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
                 >
                   {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
                   {renderHeatmapOverlay(dinoAttn, 'jet')}
@@ -731,39 +731,13 @@ export default function EncoderDiagnostics({
                 </div>
                 <div
                   className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
+                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
                 >
                   {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
                   {renderHeatmapOverlay(clipSim, 'jet')}
                 </div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
                   Token: <code style={{ color: 'var(--accent-cyan)' }}>"{inputText}"</code>
-                </div>
-              </div>
-
-              {/* SAM Instance Segmentation */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-green)' }}>
-                    <Grid size={11} />
-                    SAM Segmentation Mask
-                  </span>
-                </div>
-                <div
-                  className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
-                >
-                  {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {samMask ? (
-                    <img src={samMask} alt="sam mask" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'screen', opacity: 0.65 }} />
-                  ) : (
-                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', color: '#94a3b8', fontSize: '9px', textAlign: 'center', padding: '10px' }}>
-                      Click segment viewport above to segment.
-                    </div>
-                  )}
-                </div>
-                <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Boundary masks.
                 </div>
               </div>
 
@@ -777,7 +751,7 @@ export default function EncoderDiagnostics({
                 </div>
                 <div
                   className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', opacity: 0.85 }}
+                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', opacity: 0.85 }}
                 >
                   {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
                   {renderVggtTracks()}
@@ -795,7 +769,7 @@ export default function EncoderDiagnostics({
                     PointNeXt 3D Cloud
                   </span>
                 </div>
-                <div className="diagnostics-viewport" style={{ position: 'relative', width: '240px', height: '240px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
+                <div className="diagnostics-viewport" style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
                   {renderPointNextCloud()}
                 </div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>

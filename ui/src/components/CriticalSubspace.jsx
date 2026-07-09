@@ -91,12 +91,6 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           color="var(--accent-amber)"
         />
         <FeatureCard
-          title="SAM Segmentation Mask"
-          data={isolatedFeatures?.sam_mask}
-          icon={Target}
-          color="var(--accent-red)"
-        />
-        <FeatureCard
           title="VGGT Trajectory Tracks"
           data={isolatedFeatures?.vggt_local}
           icon={Move}
@@ -107,6 +101,12 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           data={isolatedFeatures?.pointnext_isolated}
           icon={Grid}
           color="var(--accent-purple)"
+        />
+        <FeatureCard
+          title="Tactile Features"
+          data={null}
+          icon={Target}
+          color="var(--accent-red)"
         />
       </div>
 
