@@ -34,6 +34,8 @@ const FeatureCard = ({ title, data, icon: Icon, color }) => {
     );
   }
 
+  const isImage = typeof data === 'string' && data.startsWith('data:image');
+
   return (
     <div style={{
       background: 'rgba(255, 255, 255, 0.02)',
@@ -58,15 +60,24 @@ const FeatureCard = ({ title, data, icon: Icon, color }) => {
         justifyContent: 'center',
         fontSize: '9px',
         color: '#94a3b8',
-        fontFamily: 'monospace'
+        fontFamily: 'monospace',
+        overflow: 'hidden',
+        position: 'relative'
       }}>
-        {/* Placeholder for actual feature visualization */}
-        <div style={{ textAlign: 'center' }}>
-          <div>Isolated Features</div>
-          <div style={{ fontSize: '8px', opacity: 0.7 }}>
-            {Array.isArray(data) ? `${data.length} tokens` : 'Active'}
+        {isImage ? (
+          <img
+            src={data}
+            alt={title}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{ textAlign: 'center' }}>
+            <div>Isolated Features</div>
+            <div style={{ fontSize: '8px', opacity: 0.7 }}>
+              {Array.isArray(data) ? `${data.length} tokens` : 'Active'}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
