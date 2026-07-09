@@ -96,7 +96,7 @@ def load_pretrained_models():
                 "facebook/sam2-hiera-large"
             )
             models["sam"].eval()
-            models["sam_automatic_mask_generation"] = pipeline(
+            models["sam_automatic_mask_generator"] = pipeline(
                 task="mask-generation", model="facebook/sam2-hiera-large", device=device
             )
         except Exception as e:
