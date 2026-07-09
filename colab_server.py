@@ -254,10 +254,9 @@ def get_filtered_point_cloud(
 
 def get_vggt_point_tracks(history_frames: list[str]):
     """
-    Passes historical image frames sequentially into the spatio-temporal VGGT backbone,
-    returning the raw 100 3D trajectory tracks along with their frame-0 pixel seeds.
+    Passes historical image frames into the VGGT backbone, extracts coordinates
+    from 'world_points' supporting 4D grid formats, and computes their frame-0 pixel seeds.
     """
-    # 1. Reconstruct batch video clip tensor: [1, SeqLen, 3, 224, 224]
     frames_np = [decode_base64_image(f) for f in history_frames]
     seq_len = len(frames_np)
     h, w = frames_np[0].shape[0], frames_np[0].shape[1]
@@ -265,7 +264,6 @@ def get_vggt_point_tracks(history_frames: list[str]):
     cx = w / 2.0
     cy = h / 2.0
 
-    # Process tensors through normalized float conversions
     tensor_list = []
     for f in frames_np:
         resized = cv2.resize(f, (w, h))
@@ -274,24 +272,37 @@ def get_vggt_point_tracks(history_frames: list[str]):
 
     video_tensor = (
         torch.stack(tensor_list, dim=0).unsqueeze(0).to(device)
-    )  # [1, T, 3, 224, 224]
+    )  # [1, T, 3, w, h]
 
-    # 2. Extract trajectory features natively from pixels
     with torch.no_grad():
         vggt_outputs = models["vggt"](video_tensor)
+        wp = vggt_outputs["world_points"]
 
-        # Shape: [1, SeqLen, 300] -> unpack to [100, SeqLen, 3]
-        raw_tracks = vggt_outputs["point_tracks"].squeeze(0)  # [SeqLen, 300]
-        point_tracks_3d = (
-            raw_tracks.view(seq_len, 100, 3).permute(1, 0, 2).cpu().numpy()
-        )  # [100, T, 3]
+        if wp.is_sparse:
+            wp = wp.to_dense()
 
-    # 3. Compute frame-0 pixel coordinates ('seeds') for downstream mask screening
-    # Since VGGT selects distinctive patches internally, we project the first 3D point
-    # position of each track back onto the 2D image coordinate plane
-    seed_pixels_2d = np.zeros((100, 2), dtype=np.float32)
-    for i in range(100):
-        x_3d, y_3d, z_3d = point_tracks_3d[i, 0, :]  # Track origin step
+        wp = wp.squeeze(0)  # Remove batch dimension -> now 4D [T, H, W, 3]
+
+        # Flatten spatial grid dimensions dynamically to create track pools
+        if wp.dim() == 4:
+            if wp.shape[0] == seq_len:
+                t, v_h, v_w, c = wp.shape
+                wp = wp.reshape(t, v_h * v_w, c)
+                wp = wp.permute(1, 0, 2)  # Format to [NumPoints, SeqLen, 3]
+            else:
+                v_h, v_w, t, c = wp.shape
+                wp = wp.reshape(v_h * v_w, t, c)
+        elif wp.dim() == 3:
+            if wp.shape[0] == seq_len:
+                wp = wp.permute(1, 0, 2)
+
+        point_tracks_3d = wp.cpu().numpy()
+        num_points = point_tracks_3d.shape[0]
+
+    # Map frame-0 locations back to 2D screen spaces to locate tracking seeds
+    seed_pixels_2d = np.zeros((num_points, 2), dtype=np.float32)
+    for i in range(num_points):
+        x_3d, y_3d, z_3d = point_tracks_3d[i, 0, :]
         if abs(z_3d) > 1e-5:
             x_pix = (x_3d * focal_length / z_3d) + cx
             y_pix = cy - (y_3d * focal_length / z_3d)
@@ -304,21 +315,24 @@ def get_filtered_vggt_tracks(
     vggt_3d_tracks: np.ndarray, vggt_seeds: np.ndarray, combined_mask: np.ndarray
 ) -> list:
     """
-    Filters out global VGGT trajectories, retaining only those whose starting
-    pixel coordinates land directly inside the active user-defined mask workspace.
+    Filters out global VGGT trajectories using a stride subsampler, retaining only
+    those that fall inside the active user-defined workspace mask layout.
     """
     task_isolated_tracks = []
+    num_points = vggt_3d_tracks.shape[0]
 
-    for i in range(100):
+    # Subsample stride selection matching your test notebook configuration (every 6th point)
+    subsample_step = 6
+
+    for i in range(0, num_points, subsample_step):
         x_pix, y_pix = vggt_seeds[i]
 
-        # Map 224-scale coordinate space cleanly onto the 14x14 token matrix boundary
+        # Quantize the pixel coordinates onto your 14x14 workspace mask dimensions
         mx = np.clip(int((x_pix / 224.0) * 14), 0, 13)
         my = np.clip(int((y_pix / 224.0) * 14), 0, 13)
 
-        # SCREENING: If token is active, capture the whole temporal path sequence
+        # Retain trajectories that fall within your active mask zone
         if combined_mask[my, mx] > 0.0:
-            # Retain full temporal history of this specific point track matrix [SeqLen, 3]
             task_isolated_tracks.append(vggt_3d_tracks[i].tolist())
 
     return task_isolated_tracks
@@ -400,7 +414,7 @@ async def process_frame(payload: FramePayload):
         # Uses optical flow to generate realistic point tracks across historical frames
         if len(payload.history_frames) >= 2:
             vggt_3d_tracks, vggt_seeds = get_vggt_point_tracks(payload.history_frames)
-            response["vggt_tracks"] = vggt_3d_tracks
+            response["vggt_tracks"] = vggt_3d_tracks.tolist()
             print(f"VGGT completed at {perf_counter() - start}")
 
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
@@ -425,7 +439,7 @@ async def process_frame(payload: FramePayload):
             response["task_isolated_features"]["sam_mask"] = sam_grid_masks.tolist()
 
             # Process vectors (directions for explaining movement)
-            response["task_isolated_features"]["vectors_3d"] = get_filtered_vggt_tracks(
+            response["task_isolated_features"]["vggt_local"] = get_filtered_vggt_tracks(
                 vggt_3d_tracks=vggt_3d_tracks,
                 vggt_seeds=vggt_seeds,
                 combined_mask=combined_mask,
