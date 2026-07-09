@@ -19,6 +19,7 @@ from models.vggt import VGGTEncoder
 
 try:
     from transformers import (
+        pipeline,
         CLIPProcessor,
         CLIPModel,
         Sam2Model,
@@ -95,6 +96,9 @@ def load_pretrained_models():
                 "facebook/sam2-hiera-large"
             )
             models["sam"].eval()
+            models["sam_automatic_mask_generation"] = pipeline(
+                task="mask-generation", model="facebook/sam2-hiera-large", device=device
+            )
         except Exception as e:
             print(f"SAM 2 failed to load: {e}")
 
@@ -206,43 +210,41 @@ async def process_frame(payload: FramePayload):
         # 3. SAM Instance Mask Segmenter (Always run if available)
         sam_mask_np = None
         if "sam" in models:
-            if (
-                payload.click_x is not None
-                and payload.click_y is not None
-                and payload.click_type == "original_click"
-            ):
-                # Focused segmentation with click points
-                inputs = models["sam_processor"](
+            mask_generator = models["sam_automatic_mask_generator"]
+            # Run inference on the entire image
+            with torch.no_grad():
+                masks_metadata = mask_generator(
                     pil_frame,
-                    input_points=[[[[payload.click_x, payload.click_y]]]],
-                    input_labels=[[[1]]],
-                    return_tensors="pt",
-                ).to(device)
-                with torch.no_grad():
-                    outputs = models["sam"](**inputs)
-                mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
-                mask_logits_resized = cv2.resize(mask_logits, (w, h))
-                sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
-            else:
-                # Scene-wide segmentation (no click points)
-                # Use a single point at center for automatic scene segmentation
-                center_x, center_y = w // 2, h // 2
-                inputs = models["sam_processor"](
-                    pil_frame,
-                    input_points=[[[[center_x, center_y]]]],
-                    input_labels=[[[1]]],
-                    return_tensors="pt",
-                ).to(device)
-                with torch.no_grad():
-                    outputs = models["sam"](**inputs)
-                mask_logits = outputs.pred_masks[0, 0, 0].cpu().numpy()
-                mask_logits_resized = cv2.resize(mask_logits, (w, h))
-                sam_mask_np = (mask_logits_resized > 0.0).astype(np.uint8)
+                    points_per_side=64,  # Forces a denser 64x64 grid search (4,096 points)
+                    pred_iou_thresh=0.6,  # Excludes low-quality, ambiguous blended masks
+                    stability_score_thresh=0.6,  # Forces masks to have sharp, definite object boundaries
+                    min_mask_region_area=5,  # Prunes away tiny pixel noise artifacts
+                )
 
-            # Encode SAM mask as a green-colored BGR image (0, 255, 0)
-            green_mask = np.zeros((h, w, 3), dtype=np.uint8)
-            green_mask[sam_mask_np > 0] = [0, 255, 0]  # Green set in BGR
-            _, buffer = cv2.imencode(".png", green_mask)
+            # Process the discovered segments
+            h, w = frame.shape[:2]
+            composite_view = frame.copy()
+            for idx, binary_mask in enumerate(masks_metadata["masks"]):
+                # Generate a unique, random vibrant color for this specific object
+                random_color = np.random.randint(0, 255, size=3).tolist()
+
+                # Create overlay
+                overlay = np.zeros_like(frame, dtype=np.uint8)
+                overlay[binary_mask] = random_color
+
+                # Create composite view
+                alpha = 0.4
+                composite_view[binary_mask] = cv2.addWeighted(
+                    overlay, alpha, composite_view, 1 - alpha, 0
+                )[binary_mask]
+                mask_uint8 = binary_mask.cpu().numpy().astype(np.uint8)
+                contours, _ = cv2.findContours(
+                    mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                cv2.drawContours(composite_view, contours, -1, random_color, 2)
+
+            # Encode SAM mask
+            _, buffer = cv2.imencode(".png", composite_view)
             response["sam_mask"] = "data:image/png;base64," + base64.b64encode(
                 buffer
             ).decode("utf-8")
@@ -266,85 +268,46 @@ async def process_frame(payload: FramePayload):
                     .numpy()
                 )
 
-            if sam_mask_np is not None:
-                ys, xs = np.where(sam_mask_np > 0)
-                if len(xs) > 0:
-                    indices = np.random.choice(
-                        len(xs), min(500, len(xs)), replace=False
-                    )
-                    xs, ys = xs[indices], ys[indices]
+            # Scene-wide point cloud by sampling a grid (100 x 100 = 10000 points)
+            grid_x, grid_y = np.meshgrid(
+                np.linspace(0, w - 1, 100).astype(int),
+                np.linspace(0, h - 1, 100).astype(int),
+            )
+            xs = grid_x.flatten()
+            ys = grid_y.flatten()
 
-                    # Extract raw predicted depth values directly (which is already in metric meters)
-                    zs = depth_map[ys, xs]
+            # Extract raw predicted depth values directly (which is already in metric meters)
+            zs = depth_map[ys, xs]
 
-                    # 3D pinhole projection perspective correction
-                    focal_length = max(w, h)
-                    xs_proj = (xs - w / 2.0) * zs / focal_length
-                    ys_proj = (h / 2.0 - ys) * zs / focal_length
-                    zs_proj = zs
+            # 3D pinhole projection perspective correction
+            focal_length = max(w, h)
+            cx = w / 2.0
+            cy = h / 2.0
 
-                    # Enforce aspect ratio preservation with global scaling normalization
-                    x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
-                    y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
-                    z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
-                    max_range = max(x_range, y_range, z_range, 1e-8)
+            # Normalize values for visualization
+            xs_proj = (xs - cx) * zs / focal_length
+            ys_proj = (cy - ys) * zs / focal_length
+            zs_proj = zs
 
-                    xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
-                    ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
-                    zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
+            # Convert colors to hex
+            colors = frame[ys, xs]
+            rs = colors[:, 0] / 255.0
+            gs = colors[:, 1] / 255.0
+            bs = colors[:, 2] / 255.0
 
-                    # Get colors and normalize to [0, 1]
-                    colors = frame[ys, xs]
-                    rs = colors[:, 0] / 255.0
-                    gs = colors[:, 1] / 255.0
-                    bs = colors[:, 2] / 255.0
+            # Enforce aspect ratio preservation with global scaling normalization
+            x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
+            y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
+            z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+            max_range = max(x_range, y_range, z_range, 1e-8)
 
-                    # Format points: [x, y, z, r, g, b]
-                    point_cloud = np.stack(
-                        [xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1
-                    )
-                    response["point_cloud"] = point_cloud.tolist()
-            else:
-                # Scene-wide point cloud by sampling a grid (100 x 100 = 10000 points)
-                grid_x, grid_y = np.meshgrid(
-                    np.linspace(0, w - 1, 100).astype(int),
-                    np.linspace(0, h - 1, 100).astype(int),
-                )
-                xs = grid_x.flatten()
-                ys = grid_y.flatten()
+            xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
+            ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
+            zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
 
-                # Extract raw predicted depth values directly (which is already in metric meters)
-                zs = depth_map[ys, xs]
-
-                # 3D pinhole projection perspective correction
-                focal_length = max(w, h)
-                cx = w / 2.0
-                cy = h / 2.0
-
-                # Normalize values for visualization
-                xs_proj = (xs - cx) * zs / focal_length
-                ys_proj = (cy - ys) * zs / focal_length
-                zs_proj = zs
-
-                # Convert colors to hex
-                colors = frame[ys, xs]
-                rs = colors[:, 0] / 255.0
-                gs = colors[:, 1] / 255.0
-                bs = colors[:, 2] / 255.0
-
-                # Enforce aspect ratio preservation with global scaling normalization
-                x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
-                y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
-                z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
-                max_range = max(x_range, y_range, z_range, 1e-8)
-
-                xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
-                ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
-                zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
-
-                # Format points: [x, y, z, r, g, b]
-                point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
-                response["point_cloud"] = point_cloud.tolist()
+            # Format points: [x, y, z, r, g, b]
+            point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
+            response["point_cloud"] = point_cloud.tolist()
 
         # 5. VGGT Point Trajectory Tracks
         # Uses optical flow to generate realistic point tracks across historical frames
