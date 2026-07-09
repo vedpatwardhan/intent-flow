@@ -12,11 +12,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from torchvision import transforms
+from vggt.models import VGGT
 
 # Align paths to allow imports from repository root
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from models.vggt import VGGTEncoder
 
 try:
     from transformers import (
@@ -28,6 +27,7 @@ try:
         AutoImageProcessor,
         AutoModelForDepthEstimation,
     )
+    from huggingface_hub import hf_hub_download
 
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -98,8 +98,13 @@ def load_pretrained_models():
     models["depth_model"].eval()
 
     print("Loading VGGT...")
-    models["vggt"] = VGGTEncoder().to(device)
-    models["vggt"].eval()
+    vggt_model = VGGT()
+    model_file_path = hf_hub_download(repo_id="facebook/VGGT-1B", filename="model.pt")
+    checkpoint_state = torch.load(model_file_path, map_location=device)
+    vggt_model.load_state_dict(checkpoint_state)
+    vggt_model.to(device)
+    vggt_model.eval()
+    models["vggt"] = vggt_model
 
     print("All available models initialized successfully.")
 
@@ -325,26 +330,13 @@ def get_segment_masks(annotations: dict, pil_frame: Image):
     click_pts = [[seg["x"], seg["y"]] for seg in segments]
     num_pts = len(click_pts)
 
-    # Single-image CPU preprocessing and GPU replicating optimization
-    single_inputs = models["sam_processor"](
-        images=pil_frame,
+    # Prepare inputs
+    inputs = models["sam_processor"](
+        images=[pil_frame] * num_pts,
         input_points=[[[pt]] for pt in click_pts],
         input_labels=[[[1]] for _ in range(num_pts)],
         return_tensors="pt",
     )
-
-    # Repeat them across all 5 points
-    inputs = {
-        "pixel_values": single_inputs["pixel_values"]
-        .repeat(num_pts, 1, 1, 1)
-        .to(device),
-        "original_sizes": single_inputs["original_sizes"].repeat(num_pts, 1).to(device),
-        "reshaped_input_sizes": single_inputs["reshaped_input_sizes"]
-        .repeat(num_pts, 1)
-        .to(device),
-        "input_points": single_inputs["input_points"].to(device),
-        "input_labels": single_inputs["input_labels"].to(device),
-    }
 
     with torch.inference_mode():
         with torch.autocast(device_type="cuda", dtype=torch.float16):
