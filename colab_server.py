@@ -357,9 +357,12 @@ async def process_frame(payload: FramePayload):
                 resized_masks = torch.nn.functional.interpolate(
                     pred_masks, size=(14, 14), mode="bilinear", align_corners=False
                 )
+
+                # Get grid masks and reduce to the combined mask
                 sam_grid_masks = (
                     (resized_masks.squeeze(1) > 0.0).cpu().numpy().astype(np.float32)
                 )
+                combined_mask = np.maximum.reduce(sam_grid_masks, dtype=np.float32)
                 response["task_isolated_features"]["sam_mask"] = sam_grid_masks.tolist()
 
             # Process vectors (directions for explaining movement)
@@ -372,11 +375,40 @@ async def process_frame(payload: FramePayload):
             masked_dino = dino_array * combined_mask
             response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
 
-            # PointNeXt: Filter points using SAM mask (surfaces)
-            if len(response["point_cloud"]) > 0:
-                response["task_isolated_features"]["pointnext_isolated"] = response[
-                    "point_cloud"
-                ][:100]
+            # PointNeXt: Filter and project 3D points using the combined_mask (crops + segments)
+            combined_mask_upscaled = cv2.resize(
+                combined_mask, (w, h), interpolation=cv2.INTER_NEAREST
+            )
+            ys, xs = np.where(combined_mask_upscaled > 0.0)
+            indices = np.random.choice(len(xs), min(500, len(xs)), replace=False)
+            xs, ys = xs[indices], ys[indices]
+            zs = depth_map[ys, xs]
+
+            focal_length = max(w, h)
+            xs_proj = (xs - w / 2.0) * zs / focal_length
+            ys_proj = (h / 2.0 - ys) * zs / focal_length
+            zs_proj = zs
+
+            x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
+            y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
+            z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+            max_range = max(x_range, y_range, z_range, 1e-8)
+
+            xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
+            ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
+            zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
+
+            colors = frame[ys, xs]
+            rs = colors[:, 0] / 255.0
+            gs = colors[:, 1] / 255.0
+            bs = colors[:, 2] / 255.0
+
+            pointnext_isolated = np.stack(
+                [xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1
+            )
+            response["task_isolated_features"][
+                "pointnext_isolated"
+            ] = pointnext_isolated.tolist()
 
             # VGGT: Return local tracks directly (independent of patches)
             if len(response["vggt_tracks"]) > 0:
