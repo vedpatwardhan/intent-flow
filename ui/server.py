@@ -381,7 +381,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 r = await client.post(
                                     f"{colab_url}/process",
                                     json=payload_data,
-                                    timeout=5.0,
+                                    timeout=10.0,
                                 )
                                 if r.status_code == 200:
                                     res_data = r.json()
