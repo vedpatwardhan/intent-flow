@@ -18,7 +18,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
   });
 
   const tools = [
-    { id: 'select', label: 'Select / Edit', icon: MousePointer, color: 'var(--accent-primary, #6366f1)' },
+    { id: 'select', label: 'Select', icon: MousePointer, color: 'var(--accent-primary, #6366f1)' },
     { id: 'segment', label: 'SAM Segment', icon: Crosshair, color: 'var(--accent-cyan)' },
     { id: 'vector', label: 'Motion Vector', icon: Navigation, color: 'var(--accent-amber)' },
     { id: 'crop', label: 'Target Crop', icon: Target, color: 'var(--accent-green)' }
@@ -305,7 +305,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
     // Draw existing annotations
     annotations.segments.forEach((seg, idx) => {
       const isSelected = selectedAnnotation?.type === 'segments' && selectedAnnotation?.index === idx;
-      ctx.strokeStyle = isSelected ? '#ef4444' : 'var(--accent-cyan)';
+      ctx.strokeStyle = isSelected ? '#ef4444' : '#06b6d4';
       ctx.lineWidth = isSelected ? 4 : 3;
       ctx.beginPath();
       ctx.arc(seg.x, seg.y, 10, 0, Math.PI * 2);
@@ -316,26 +316,33 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
 
     annotations.vectors.forEach((vec, idx) => {
       const isSelected = selectedAnnotation?.type === 'vectors' && selectedAnnotation?.index === idx;
-      drawArrow(ctx, vec.start[0], vec.start[1], vec.end[0], vec.end[1], isSelected ? '#ef4444' : 'var(--accent-amber)', isSelected);
+      drawArrow(ctx, vec.start[0], vec.start[1], vec.end[0], vec.end[1], isSelected ? '#ef4444' : '#f59e0b', isSelected);
     });
 
     annotations.crops.forEach((crop, idx) => {
       const isSelected = selectedAnnotation?.type === 'crops' && selectedAnnotation?.index === idx;
-      ctx.strokeStyle = isSelected ? '#ef4444' : 'var(--accent-green)';
+      ctx.strokeStyle = isSelected ? '#ef4444' : '#10b981';
       ctx.lineWidth = isSelected ? 4 : 3;
       ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
-      ctx.fillStyle = isSelected ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.15)';
+      ctx.fillStyle = isSelected ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.15)';
       ctx.fillRect(crop.x, crop.y, crop.width, crop.height);
     });
 
     // Draw current drawing state
     if (isDrawing) {
       if (activeTool === 'vector') {
-        drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, 'rgba(6, 182, 212, 0.8)');
+        drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, '#f59e0b');
       } else if (activeTool === 'crop') {
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.8)';
+        ctx.strokeStyle = '#10b981';
         ctx.lineWidth = 3;
         ctx.strokeRect(
+          startPos.x,
+          startPos.y,
+          currentPos.x - startPos.x,
+          currentPos.y - startPos.y
+        );
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+        ctx.fillRect(
           startPos.x,
           startPos.y,
           currentPos.x - startPos.x,
@@ -441,7 +448,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
           </div>
         </div>
 
-        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '600px' : '280px', margin: '0 auto' }}>
+        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '720px' : '320px', margin: '0 auto' }}>
           <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
             {activeFrame ? (
               <>
@@ -482,19 +489,19 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
               onTouchEnd={handleMouseUp}
             />
           </div>
+        </div>
 
-          <div style={{ marginTop: '8px', display: 'flex', gap: '12px', fontSize: '9px', color: '#64748b', fontFamily: 'monospace', flexWrap: 'wrap' }}>
-            {tools.map(tool => {
-              const Icon = tool.icon;
-              return (
-                <div key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: tool.color }} />
-                  <Icon size={10} />
-                  <span>{tool.label}</span>
-                </div>
-              );
-            })}
-          </div>
+        <div style={{ marginTop: '12px', display: 'flex', gap: '12px', fontSize: '10px', color: '#64748b', fontFamily: 'monospace', flexWrap: 'wrap', justifyContent: 'center' }}>
+          {tools.map(tool => {
+            const Icon = tool.icon;
+            return (
+              <div key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: tool.color }} />
+                <Icon size={10} />
+                <span>{tool.label}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </>
