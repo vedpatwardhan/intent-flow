@@ -237,19 +237,19 @@ def get_filtered_point_cloud(
     ys_14 = np.clip((ys / 224 * 14).astype(int), 0, 13)
     mask_filter = combined_mask[ys_14, xs_14] > 0.0
 
-    if not np.any(mask_filter):
-        return np.zeros((0, 6), dtype=np.float32)
-
-    xs_iso = xs_proj[mask_filter]
-    ys_iso = ys_proj[mask_filter]
-    zs_iso = zs_proj[mask_filter]
-    pts_iso = np.stack([xs_iso, ys_iso, zs_iso], axis=1)
+    # Use all points, but set colors to black for points outside mask
+    pts_iso = np.stack([xs_proj, ys_proj, zs_proj], axis=1)
 
     max_range = max((pts_iso.max(axis=0) - pts_iso.min(axis=0)).max(), 1e-8)
     pts_norm = (pts_iso - pts_iso.mean(axis=0)) * (1.6 / max_range)
     xs_norm, ys_norm, zs_norm = pts_norm[:, 0], pts_norm[:, 1], pts_norm[:, 2]
-    colors_norm = colors[mask_filter] / 255.0
+    colors_norm = colors / 255.0
     rs, gs, bs = colors_norm[:, 0], colors_norm[:, 1], colors_norm[:, 2]
+
+    # Set colors to black for points outside mask
+    rs[~mask_filter] = 0.0
+    gs[~mask_filter] = 0.0
+    bs[~mask_filter] = 0.0
 
     pointnext_isolated = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
     return pointnext_isolated
