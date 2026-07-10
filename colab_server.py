@@ -404,11 +404,10 @@ def get_segment_masks(annotations: dict, pil_frame: Image):
         input_points=[[[pt]] for pt in click_pts],
         input_labels=[[[1]] for _ in range(num_pts)],
         return_tensors="pt",
-    )
+    ).to(device)
 
     with torch.inference_mode():
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            outputs = models["sam"](**inputs)
+        outputs = models["sam"](**inputs)
 
         # Downscale batched logits directly to 14x14 on the GPU
         pred_masks = outputs.pred_masks[:, 0, 0].unsqueeze(1)
