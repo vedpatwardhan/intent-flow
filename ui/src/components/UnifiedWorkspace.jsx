@@ -448,7 +448,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
           </div>
         </div>
 
-        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '720px' : '320px', margin: '0 auto' }}>
+        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '600px' : '300px', margin: '0 auto' }}>
           <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
             {activeFrame ? (
               <>
