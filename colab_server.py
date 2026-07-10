@@ -255,45 +255,35 @@ def get_filtered_point_cloud(
     return pointnext_isolated
 
 
-def get_vggt_point_tracks(history_frames: list[str]):
+def get_vggt_point_tracks(history_frames: list[str]) -> list:
     """
-    Passes historical image frames into the VGGT backbone, extracts coordinates
-    and returns point_tracks_3d, seed_pixels_2d, wp_frame2, wp_conf_clean, and the first frame.
+    Passes historical image frames into the VGGT backbone, extracts coordinates,
+    and returns the global (unfiltered) 2D tracks as a list of [x1_norm, y1_norm, x2_norm, y2_norm].
     All processing is forced at 224x224 for ViT positional embedding alignment.
     """
     if len(history_frames) < 2:
         history_frames = [history_frames[0], history_frames[0]]
+    while len(history_frames) > 2:
+        history_frames.pop(0)
     frames_np = [decode_base64_image(f) for f in history_frames]
 
-    # Force 224x224 for transformer processing
+    seq_len = len(frames_np)
     h, w = 224, 224
-    frames_224 = [cv2.resize(f, (w, h)) for f in frames_np]
-    seq_len = len(frames_224)
-    frame_1_224 = frames_224[0]
-
-    focal_length = max(h, w)
-    cx = w / 2.0
-    cy = h / 2.0
 
     tensor_list = []
-    for f in frames_224:
-        t = torch.from_numpy(f).permute(2, 0, 1).float() / 255.0
+    frames_224 = []
+    for f in frames_np:
+        resized = cv2.resize(f, (w, h))
+        frames_224.append(resized)
+        t = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
         tensor_list.append(t)
 
     video_tensor = torch.stack(tensor_list, dim=0).unsqueeze(0).to(device)
 
     with torch.no_grad():
         vggt_outputs = models["vggt"](video_tensor)
-        wp_raw = vggt_outputs["world_points"].squeeze(0)
-        wp_conf = vggt_outputs["world_points_conf"].squeeze(0)
-
-        if wp_raw.is_sparse:
-            wp_raw = wp_raw.to_dense()
-        if wp_conf.is_sparse:
-            wp_conf = wp_conf.to_dense()
-
-        wp_raw = wp_raw.cpu().numpy()
-        wp_conf = wp_conf.cpu().numpy()
+        wp_raw = vggt_outputs["world_points"].squeeze(0).cpu().numpy()
+        wp_conf = vggt_outputs["world_points_conf"].squeeze(0).cpu().numpy()
 
     # Enforce standard spatial orientation: [H, W, T, 3]
     if wp_raw.shape[0] == seq_len:
@@ -303,72 +293,39 @@ def get_vggt_point_tracks(history_frames: list[str]):
         wp_clean_4d = wp_raw
         wp_conf_clean = wp_conf
 
-    wp_frame2 = wp_clean_4d[:, :, 1, :]
-
-    # Flatten spatial grid dimensions dynamically to create track pools
-    if wp_clean_4d.ndim == 4:
-        v_h, v_w, t, c = wp_clean_4d.shape
-        wp_flat = wp_clean_4d.reshape(v_h * v_w, t, c)
-        wp_conf_flat = wp_conf_clean.reshape(v_h * v_w, t)
-    else:
-        wp_flat = wp_clean_4d
-        wp_conf_flat = wp_conf_clean
-
-    seed_pixels_2d = np.zeros((wp_flat.shape[0], 2), dtype=np.float32)
-    for i in range(wp_flat.shape[0]):
-        x_3d, y_3d, z_3d = wp_flat[i, 0, :]
-        if abs(z_3d) > 1e-5:
-            x_pix = (x_3d * focal_length / z_3d) + cx
-            y_pix = cy - (y_3d * focal_length / z_3d)
-            seed_pixels_2d[i] = [x_pix, y_pix]
-
-    return wp_flat, seed_pixels_2d, wp_frame2, wp_conf_flat[:, 0], frame_1_224
-
-
-def get_vggt_2d_tracks_from_3d(
-    wp_flat: np.ndarray,
-    seed_pixels_2d: np.ndarray,
-    wp_frame2: np.ndarray,
-    conf_flat: np.ndarray,
-    frame_1: np.ndarray,
-    combined_mask: np.ndarray = None,
-):
-    h, w = frame_1.shape[0], frame_1.shape[1]
-    seq_len = wp_flat.shape[1]
     subsample_step = 6
+    wp_frame2 = wp_clean_4d[
+        :, :, -1, :
+    ]  # Support variable sequence length (last frame)
 
-    # Subsample natively across the spatial grid dimensions
-    H_grid, W_grid = wp_frame2.shape[0], wp_frame2.shape[1]
-    sampled_indices = []
-    for y in range(0, H_grid, subsample_step):
-        for x in range(0, W_grid, subsample_step):
-            sampled_indices.append(y * W_grid + x)
+    # Generate uniform grid seeds matching temp_3.txt
+    y_idx, x_idx = np.indices((h, w))
+    seeds_grid = np.stack((x_idx, y_idx), axis=-1).astype(np.float32)
 
-    pt_sampled = wp_flat[sampled_indices]
-    seeds_sampled = seed_pixels_2d[sampled_indices]
-    conf_sampled = conf_flat[sampled_indices]
+    # Subsample natively across the 4D matrix space
+    pt_sampled = wp_clean_4d[::subsample_step, ::subsample_step, :, :]
+    seeds_sampled = seeds_grid[::subsample_step, ::subsample_step, :]
+    conf_sampled = wp_conf_clean[::subsample_step, ::subsample_step, 0]
 
-    ix = seeds_sampled[:, 0].astype(np.int32)
-    iy = seeds_sampled[:, 1].astype(np.int32)
+    pt_flat = pt_sampled.reshape(-1, seq_len, 3)
+    seeds_flat = seeds_sampled.reshape(-1, 2)
+    conf_flat = conf_sampled.flatten()
 
-    # Filter 1: Strip out empty black background regions
-    rgb_values = frame_1[iy, ix]
+    ix = seeds_flat[:, 0].astype(np.int32)
+    iy = seeds_flat[:, 1].astype(np.int32)
+
+    # Filter 1: Strip out empty black background regions (use the 224x224 frame!)
+    rgb_values = frames_224[0][iy, ix]
     foreground_mask = np.any(rgb_values > 15, axis=1)
 
     # Filter 2: Ignore low-confidence depth regions
-    confidence_mask = conf_sampled > 0.3
+    confidence_mask = conf_flat > 0.3
 
-    # Filter 3: Apply workspace mask check (14x14) if combined_mask is specified
-    if combined_mask is not None:
-        mx = np.clip(((seeds_sampled[:, 0] / w) * 14).astype(np.int32), 0, 13)
-        my = np.clip(((seeds_sampled[:, 1] / h) * 14).astype(np.int32), 0, 13)
-        workspace_mask = combined_mask[my, mx] > 0.0
-        final_valid_mask = foreground_mask & confidence_mask & workspace_mask
-    else:
-        final_valid_mask = foreground_mask & confidence_mask
+    # Combine filters (ignoring the task workspace mask for global tracks)
+    final_valid_mask = foreground_mask & confidence_mask
 
-    pt_flat = pt_sampled[final_valid_mask]
-    seeds_flat = seeds_sampled[final_valid_mask]
+    pt_flat = pt_flat[final_valid_mask]
+    seeds_flat = seeds_flat[final_valid_mask]
 
     num_valid_seeds = seeds_flat.shape[0]
     if num_valid_seeds == 0:
@@ -376,6 +333,7 @@ def get_vggt_2d_tracks_from_3d(
 
     x_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
     y_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
+
     x_ui[:, 0] = seeds_flat[:, 0]
     y_ui[:, 0] = seeds_flat[:, 1]
 
@@ -383,17 +341,22 @@ def get_vggt_2d_tracks_from_3d(
 
     for idx in range(num_valid_seeds):
         sx, sy = int(seeds_flat[idx, 0]), int(seeds_flat[idx, 1])
-        p1_3d = pt_flat[idx, 0, :]
+        p1_3d = pt_flat[idx, 0, :]  # Absolute 3D position in Frame 1
 
+        # Define local search window boundaries inside Frame 2
         x_start = max(0, sx - search_radius)
         x_end = min(w, sx + search_radius + 1)
         y_start = max(0, sy - search_radius)
         y_end = min(h, sy + search_radius + 1)
 
+        # Extract the local 3D neighborhood from Frame 2
         local_wp_f2 = wp_frame2[y_start:y_end, x_start:x_end, :]
+
+        # Calculate 3D distances within this local window only
         local_dists = np.linalg.norm(local_wp_f2 - p1_3d, axis=2)
         best_local_idx = np.argmin(local_dists)
 
+        # Map the match back to full canvas pixel coordinates
         local_h, local_w = local_dists.shape
         match_local_y = best_local_idx // local_w
         match_local_x = best_local_idx % local_w
@@ -405,15 +368,48 @@ def get_vggt_2d_tracks_from_3d(
     motion_mask = (distances > 1.5) & (distances < float(search_radius))
     valid_indices = np.where(motion_mask)[0]
 
-    tracks_2d = []
+    tracks_224 = []
     for idx in valid_indices:
         x1_norm = float(x_ui[idx, 0] / w)
         y1_norm = float(y_ui[idx, 0] / h)
         x2_norm = float(x_ui[idx, 1] / w)
         y2_norm = float(y_ui[idx, 1] / h)
-        tracks_2d.append([x1_norm, y1_norm, x2_norm, y2_norm])
+        tracks_224.append([x1_norm, y1_norm, x2_norm, y2_norm])
 
-    return tracks_2d
+    # Save a debug overlay image to disk
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.imshow(frames_224[0])
+        for idx in valid_indices:
+            color = "#00D4FF"
+            ax.plot(x_ui[idx, :], y_ui[idx, :], color=color, linewidth=1.5, alpha=0.8)
+            ax.scatter(
+                x_ui[idx, -1],
+                y_ui[idx, -1],
+                color=color,
+                s=8,
+                zorder=3,
+                edgecolors="none",
+            )
+        ax.set_xlim(0, w)
+        ax.set_ylim(h, 0)
+        ax.axis("off")
+        ax.set_title("VGGT Vectorized Trajectories Overlay (Debug)")
+        plt.savefig("/tmp/vggt_debug.png", bbox_inches="tight", dpi=150)
+        plt.savefig("vggt_debug.png", bbox_inches="tight", dpi=150)
+        plt.close(fig)
+        print(
+            "Debug trajectory overlay saved successfully to /tmp/vggt_debug.png and vggt_debug.png"
+        )
+    except Exception as debug_err:
+        print(f"Failed to generate debug tracks plot: {debug_err}")
+
+    return tracks_224
 
 
 def get_segment_masks(annotations: dict, pil_frame: Image):
@@ -494,15 +490,7 @@ async def process_frame(payload: FramePayload):
         print(f"Point cloud completed at {perf_counter() - start}")
 
         # 4. VGGT Point Trajectory Tracks
-        # Duplicate history frames if only one exists
-        if len(payload.history_frames) < 2:
-            payload.history_frames = [payload.frame, payload.frame]
-        wp_flat, seed_pixels_2d, wp_frame2, conf_flat, frame_1 = get_vggt_point_tracks(
-            payload.history_frames
-        )
-        response["vggt_tracks"] = get_vggt_2d_tracks_from_3d(
-            wp_flat, seed_pixels_2d, wp_frame2, conf_flat, frame_1, combined_mask=None
-        )
+        response["vggt_tracks"] = get_vggt_point_tracks(payload.history_frames)
         print(f"VGGT completed at {perf_counter() - start}")
 
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
@@ -526,16 +514,8 @@ async def process_frame(payload: FramePayload):
             response["task_isolated_features"]["sam_mask"] = sam_mask.tolist()
 
             # Process vectors (directions for explaining movement in isolated zone)
-            response["task_isolated_features"]["vggt_local"] = (
-                get_vggt_2d_tracks_from_3d(
-                    wp_flat,
-                    seed_pixels_2d,
-                    wp_frame2,
-                    conf_flat,
-                    frame_1,
-                    combined_mask=combined_mask,
-                )
-            )
+            # ToDo: get this working after the global vggt is working.
+            response["task_isolated_features"]["vggt_local"] = []
 
             # DINO: Apply mask to get focused attention subspace
             dino_array = np.array(response["dino_attn"])
