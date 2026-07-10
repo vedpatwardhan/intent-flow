@@ -150,7 +150,7 @@ cached_clip_sim = None
 cached_sam_mask = None
 cached_point_cloud = []
 cached_vggt_tracks = []
-cached_task_isolated_features = {}
+cached_task_isolated_features = None
 
 
 @app.websocket("/ws")
@@ -417,7 +417,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     async def run_colab_query(payload_data):
                         global colab_is_processing
-                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks
+                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
                         try:
                             async with httpx.AsyncClient() as client:
                                 r = await client.post(
@@ -432,6 +432,17 @@ async def websocket_endpoint(websocket: WebSocket):
                                     cached_sam_mask = res_data.get("sam_mask")
                                     cached_point_cloud = res_data.get("point_cloud")
                                     cached_vggt_tracks = res_data.get("vggt_tracks")
+                                    cached_task_isolated_features = res_data.get(
+                                        "task_isolated_features"
+                                    )
+                                    if cached_task_isolated_features:
+                                        print(
+                                            f"[server.py] Received task_isolated_features from Colab: {list(cached_task_isolated_features.keys())}"
+                                        )
+                                    else:
+                                        print(
+                                            "[server.py] No task_isolated_features in Colab response"
+                                        )
                         except Exception as e:
                             import traceback
 

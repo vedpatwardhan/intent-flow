@@ -478,6 +478,7 @@ async def process_frame(payload: FramePayload):
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
         annotations = payload.ui_annotations
         if annotations and (annotations.get("crops") or annotations.get("segments")):
+            print("Annotations Found.")
 
             # Create binary mask from crops and segments for DINO/PointNeXt focusing
             combined_mask = np.zeros((14, 14), dtype=np.float32)
