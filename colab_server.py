@@ -255,13 +255,10 @@ def get_filtered_point_cloud(
     return pointnext_isolated
 
 
-def get_vggt_point_tracks(
-    history_frames: list[str], combined_mask: np.ndarray = None
-) -> list:
+def get_vggt_point_tracks_base(history_frames: list[str]) -> tuple:
     """
-    Passes historical image frames into the VGGT backbone, extracts coordinates,
-    and returns the global (unfiltered) or task-isolated 2D tracks as a list of [x1_norm, y1_norm, x2_norm, y2_norm].
-    All processing is forced at 224x224 for ViT positional embedding alignment.
+    Runs the VGGT model on the historical sequence and returns intermediate outputs:
+    (pt_flat, seeds_flat, wp_frame2, base_mask, frames_np, seq_len, h, w)
     """
     if len(history_frames) < 2:
         history_frames = [history_frames[0], history_frames[0]]
@@ -313,40 +310,48 @@ def get_vggt_point_tracks(
     ix = seeds_flat[:, 0].astype(np.int32)
     iy = seeds_flat[:, 1].astype(np.int32)
 
-    # Filter 1: Strip out empty black background regions (use the 224x224 frame!)
+    # Filter 1: Strip out empty black background regions
     rgb_values = frames_np[0][iy, ix]
     foreground_mask = np.any(rgb_values > 15, axis=1)
 
     # Filter 2: Ignore low-confidence depth regions
     confidence_mask = conf_flat > 0.3
 
-    # Combine filters (optionally applying task workspace mask)
-    if combined_mask is not None:
-        mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
-        my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
-        workspace_mask = combined_mask[my, mx] > 0.0
-        final_valid_mask = foreground_mask & confidence_mask & workspace_mask
-    else:
-        final_valid_mask = foreground_mask & confidence_mask
+    base_mask = foreground_mask & confidence_mask
+    return pt_flat, seeds_flat, wp_frame2, base_mask, frames_np, seq_len, h, w
 
-    pt_flat = pt_flat[final_valid_mask]
-    seeds_flat = seeds_flat[final_valid_mask]
 
-    num_valid_seeds = seeds_flat.shape[0]
+def get_vggt_2d_tracks_from_mask(
+    pt_flat: np.ndarray,
+    seeds_flat: np.ndarray,
+    wp_frame2: np.ndarray,
+    valid_mask: np.ndarray,
+    seq_len: int,
+    h: int,
+    w: int,
+) -> list:
+    """
+    Computes local window feature matching from the filtered valid_mask
+    and returns the 2D trajectory tracks.
+    """
+    pt_flat_filtered = pt_flat[valid_mask]
+    seeds_flat_filtered = seeds_flat[valid_mask]
+
+    num_valid_seeds = seeds_flat_filtered.shape[0]
     if num_valid_seeds == 0:
         return []
 
     x_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
     y_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
 
-    x_ui[:, 0] = seeds_flat[:, 0]
-    y_ui[:, 0] = seeds_flat[:, 1]
+    x_ui[:, 0] = seeds_flat_filtered[:, 0]
+    y_ui[:, 0] = seeds_flat_filtered[:, 1]
 
     search_radius = 20
 
     for idx in range(num_valid_seeds):
-        sx, sy = int(seeds_flat[idx, 0]), int(seeds_flat[idx, 1])
-        p1_3d = pt_flat[idx, 0, :]  # Absolute 3D position in Frame 1
+        sx, sy = int(seeds_flat_filtered[idx, 0]), int(seeds_flat_filtered[idx, 1])
+        p1_3d = pt_flat_filtered[idx, 0, :]  # Absolute 3D position in Frame 1
 
         # Define local search window boundaries inside Frame 2
         x_start = max(0, sx - search_radius)
@@ -462,7 +467,12 @@ async def process_frame(payload: FramePayload):
         print(f"Point cloud completed at {perf_counter() - start}")
 
         # 4. VGGT Point Trajectory Tracks
-        response["vggt_tracks"] = get_vggt_point_tracks(payload.history_frames)
+        pt_flat, seeds_flat, wp_frame2, base_mask, frames_np, seq_len, h, w = (
+            get_vggt_point_tracks_base(payload.history_frames)
+        )
+        response["vggt_tracks"] = get_vggt_2d_tracks_from_mask(
+            pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h, w
+        )
         print(f"VGGT completed at {perf_counter() - start}")
 
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
@@ -486,8 +496,14 @@ async def process_frame(payload: FramePayload):
             response["task_isolated_features"]["sam_mask"] = sam_mask.tolist()
 
             # Process vectors (directions for explaining movement in isolated zone)
-            response["task_isolated_features"]["vggt_local"] = get_vggt_point_tracks(
-                payload.history_frames, combined_mask=combined_mask
+            mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
+            my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
+            workspace_mask = combined_mask[my, mx] > 0.0
+            local_valid_mask = base_mask & workspace_mask
+            response["task_isolated_features"]["vggt_local"] = (
+                get_vggt_2d_tracks_from_mask(
+                    pt_flat, seeds_flat, wp_frame2, local_valid_mask, seq_len, h, w
+                )
             )
 
             # DINO: Apply mask to get focused attention subspace
