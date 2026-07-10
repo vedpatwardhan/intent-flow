@@ -295,8 +295,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     rgb[:, :, 0] = np.clip(rgb[:, :, 0] + 50, 0, 255)
 
                 img = Image.fromarray(rgb)
-                # Resizing to 160x160 ensures low latency and fits the UI grid perfectly
-                img_resized = img.resize((160, 160))
+                # Resizing to 480x480 for higher resolution UI display
+                img_resized = img.resize((480, 480))
                 buf = io.BytesIO()
                 img_resized.save(buf, format="JPEG", quality=75)
                 frames[name] = "data:image/jpeg;base64," + base64.b64encode(
@@ -377,9 +377,22 @@ async def websocket_endpoint(websocket: WebSocket):
                 and needs_colab_processing
                 and not colab_is_processing
             ):
-                base64_frame = frames.get(active_camera, "")
-                if base64_frame:
-                    frame_history.append(base64_frame)
+                # Retrieve the active camera's rendered image and resize to 224x224 for Colab processing
+                sim.renderer.update_scene(sim.data, camera=active_camera)
+                rgb_active = sim.renderer.render()
+                if attack_active:
+                    rgb_active = rgb_active.copy()
+                    rgb_active[:, :, 0] = np.clip(rgb_active[:, :, 0] + 50, 0, 255)
+                img_active = Image.fromarray(rgb_active)
+                img_224 = img_active.resize((224, 224))
+                buf_224 = io.BytesIO()
+                img_224.save(buf_224, format="JPEG", quality=75)
+                base64_frame_224 = "data:image/jpeg;base64," + base64.b64encode(
+                    buf_224.getvalue()
+                ).decode("utf-8")
+
+                if base64_frame_224:
+                    frame_history.append(base64_frame_224)
                     colab_is_processing = True
                     needs_colab_processing = False
                     last_colab_query_time = current_time
@@ -410,7 +423,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             colab_is_processing = False
 
                     post_payload = {
-                        "frame": base64_frame,
+                        "frame": base64_frame_224,
                         "click_x": click_x,
                         "click_y": click_y,
                         "click_type": click_type,

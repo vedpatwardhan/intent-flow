@@ -45,7 +45,7 @@ class GR1MuJoCoBase:
         self.frame_indices = {cam: 0 for cam in self.cam_names}
 
         # Renderer
-        self.res = (224, 224)
+        self.res = (480, 480)
         self.renderer = mujoco.Renderer(
             self.model, height=self.res[1], width=self.res[0]
         )
