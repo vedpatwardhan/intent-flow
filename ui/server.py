@@ -371,11 +371,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             current_time = asyncio.get_event_loop().time()
             # Query Colab server for advanced frame processing (DINO, CLIP, SAM, VGGT)
-            if (
-                colab_url
-                and needs_colab_processing
-                and not colab_is_processing
-            ):
+            if colab_url and needs_colab_processing and not colab_is_processing:
                 # Retrieve the active camera's rendered image and resize to 224x224 for Colab processing
                 sim.renderer.update_scene(sim.data, camera=active_camera)
                 rgb_active = sim.renderer.render()
