@@ -12,6 +12,18 @@ const getJetRGB = (v) => {
 
 const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, color, renderType }) => {
   const canvasRef = React.useRef(null);
+  const prevDataRef = React.useRef({ featureData: null, maskData: null });
+
+  const hasDataChanged = React.useMemo(() => {
+    const prev = prevDataRef.current;
+    const featureChanged = JSON.stringify(prev.featureData) !== JSON.stringify(featureData);
+    const maskChanged = JSON.stringify(prev.maskData) !== JSON.stringify(maskData);
+    return featureChanged || maskChanged;
+  }, [featureData, maskData]);
+
+  React.useEffect(() => {
+    prevDataRef.current = { featureData, maskData };
+  }, [featureData, maskData]);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -198,7 +210,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       }
     };
     img.src = frame;
-  }, [frame, featureData, maskData, renderType, color]);
+  }, [frame, hasDataChanged, renderType, color]);
 
   if (!featureData || (Array.isArray(featureData) && featureData.length === 0)) {
     return (
