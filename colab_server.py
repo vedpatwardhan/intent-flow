@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from torchvision import transforms
-from vggt.models import VGGT
+from vggt.models.vggt import VGGT
 
 # Align paths to allow imports from repository root
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
