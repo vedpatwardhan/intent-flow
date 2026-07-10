@@ -33,6 +33,52 @@ export default function App() {
     activeCamRef.current = activeCam;
   }, [activeCam]);
 
+  // Cleanup caches based on recent cameras sliding window
+  useEffect(() => {
+    setDinoAttnCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+    setClipSimCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+    setSamMaskCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+    setPointCloudCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+    setVggtTracksCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+    setTaskIsolatedFeaturesCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(cam => {
+        if (!recentCameras.includes(cam)) delete updated[cam];
+      });
+      return updated;
+    });
+  }, [recentCameras]);
+
   useEffect(() => {
     connectWS();
     return () => {
@@ -70,65 +116,22 @@ export default function App() {
         });
 
         if (data.dino_attn !== undefined) {
-          setDinoAttnCache(prev => {
-            const updated = { ...prev, [currentCam]: data.dino_attn };
-            // Remove entries for cameras not in recentCameras
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setDinoAttnCache(prev => ({ ...prev, [currentCam]: data.dino_attn }));
         }
         if (data.clip_sim !== undefined) {
-          setClipSimCache(prev => {
-            const updated = { ...prev, [currentCam]: data.clip_sim };
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setClipSimCache(prev => ({ ...prev, [currentCam]: data.clip_sim }));
         }
         if (data.sam_mask !== undefined) {
-          setSamMaskCache(prev => {
-            const updated = { ...prev, [currentCam]: data.sam_mask };
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setSamMaskCache(prev => ({ ...prev, [currentCam]: data.sam_mask }));
         }
         if (data.point_cloud !== undefined) {
-          setPointCloudCache(prev => {
-            const updated = { ...prev, [currentCam]: data.point_cloud };
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setPointCloudCache(prev => ({ ...prev, [currentCam]: data.point_cloud }));
         }
         if (data.vggt_tracks !== undefined) {
-          setVggtTracksCache(prev => {
-            const updated = { ...prev, [currentCam]: data.vggt_tracks };
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setVggtTracksCache(prev => ({ ...prev, [currentCam]: data.vggt_tracks }));
         }
         if (data.task_isolated_features !== undefined) {
-          setTaskIsolatedFeaturesCache(prev => {
-            const updated = { ...prev, [currentCam]: data.task_isolated_features };
-            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
-            Object.keys(updated).forEach(cam => {
-              if (!recent.includes(cam)) delete updated[cam];
-            });
-            return updated;
-          });
+          setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
         }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
