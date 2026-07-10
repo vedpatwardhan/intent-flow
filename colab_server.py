@@ -476,10 +476,8 @@ async def process_frame(payload: FramePayload):
         print(f"VGGT completed at {perf_counter() - start}")
 
         # 5. Task-Isolated Feature Extraction (based on UI annotations and click points)
-        if payload.ui_annotations and (
-            annotations.get("crops") or annotations.get("segments")
-        ):
-            annotations = payload.ui_annotations
+        annotations = payload.ui_annotations
+        if annotations and (annotations.get("crops") or annotations.get("segments")):
 
             # Create binary mask from crops and segments for DINO/PointNeXt focusing
             combined_mask = np.zeros((14, 14), dtype=np.float32)
