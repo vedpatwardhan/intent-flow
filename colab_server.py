@@ -268,14 +268,11 @@ def get_vggt_point_tracks(history_frames: list[str]) -> list:
     frames_np = [decode_base64_image(f) for f in history_frames]
 
     seq_len = len(frames_np)
-    h, w = 224, 224
+    h, w = frames_np[0].shape[:2]
 
     tensor_list = []
-    frames_224 = []
     for f in frames_np:
-        resized = cv2.resize(f, (w, h))
-        frames_224.append(resized)
-        t = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
+        t = torch.from_numpy(f).permute(2, 0, 1).float() / 255.0
         tensor_list.append(t)
 
     video_tensor = torch.stack(tensor_list, dim=0).unsqueeze(0).to(device)
@@ -315,7 +312,7 @@ def get_vggt_point_tracks(history_frames: list[str]) -> list:
     iy = seeds_flat[:, 1].astype(np.int32)
 
     # Filter 1: Strip out empty black background regions (use the 224x224 frame!)
-    rgb_values = frames_224[0][iy, ix]
+    rgb_values = frames_np[0][iy, ix]
     foreground_mask = np.any(rgb_values > 15, axis=1)
 
     # Filter 2: Ignore low-confidence depth regions
@@ -375,39 +372,6 @@ def get_vggt_point_tracks(history_frames: list[str]) -> list:
         x2_norm = float(x_ui[idx, 1] / w)
         y2_norm = float(y_ui[idx, 1] / h)
         tracks_224.append([x1_norm, y1_norm, x2_norm, y2_norm])
-
-    # Save a debug overlay image to disk
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.imshow(frames_224[0])
-        for idx in valid_indices:
-            color = "#00D4FF"
-            ax.plot(x_ui[idx, :], y_ui[idx, :], color=color, linewidth=1.5, alpha=0.8)
-            ax.scatter(
-                x_ui[idx, -1],
-                y_ui[idx, -1],
-                color=color,
-                s=8,
-                zorder=3,
-                edgecolors="none",
-            )
-        ax.set_xlim(0, w)
-        ax.set_ylim(h, 0)
-        ax.axis("off")
-        ax.set_title("VGGT Vectorized Trajectories Overlay (Debug)")
-        plt.savefig("/tmp/vggt_debug.png", bbox_inches="tight", dpi=150)
-        plt.savefig("vggt_debug.png", bbox_inches="tight", dpi=150)
-        plt.close(fig)
-        print(
-            "Debug trajectory overlay saved successfully to /tmp/vggt_debug.png and vggt_debug.png"
-        )
-    except Exception as debug_err:
-        print(f"Failed to generate debug tracks plot: {debug_err}")
 
     return tracks_224
 
