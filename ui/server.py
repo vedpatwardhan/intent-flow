@@ -170,6 +170,8 @@ async def websocket_endpoint(websocket: WebSocket):
     cube_id = sim.model.body("cube").id
 
     step_count = 0
+    is_moving = False
+    moving_check_steps = 0
 
     try:
         while True:
@@ -185,14 +187,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif payload.get("type") == "ik_command":
                     phase = payload["phase"]
                     sim._handle_ik_pickup_logic(phase=phase)
+                    needs_colab_processing = True
 
                 elif payload.get("type") == "reset":
                     sim.reset_env(lock_posture=True)
                     needs_colab_processing = True
+                    is_moving = False
 
                 elif payload.get("type") == "wild_randomize":
                     sim.wild_reset()
                     needs_colab_processing = True
+                    is_moving = False
 
                 elif payload.get("type") == "combostoc_noise":
                     group = payload["group"]
@@ -265,23 +270,41 @@ async def websocket_endpoint(websocket: WebSocket):
                     act_norm = np.full(32, np.nan, dtype=np.float32)
                     act_norm[idx] = val
                     sim.process_target_32(act_norm)
+                    is_moving = True
+                    moving_check_steps = 0
 
             except asyncio.TimeoutError:
                 pass
 
-            # Step physics
-            sim.sync_ctrl_to_qpos(sim.last_target_q)
-            sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
-            sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-            ]
-            sim.data.qvel[:6] = 0.0
+            # Step physics 16 times per tick
             import mujoco
 
-            mujoco.mj_step(sim.model, sim.data)
+            for _ in range(16):
+                sim.sync_ctrl_to_qpos(sim.last_target_q)
+                sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
+                sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]
+                sim.data.qvel[:6] = 0.0
+                mujoco.mj_step(sim.model, sim.data)
+
+            # Check if slider movement completed
+            if is_moving:
+                moving_check_steps += 1
+                max_error = 0.0
+                for i in sim.active_joints_this_command:
+                    j_id = sim.protocol_joint_ids[i]
+                    if j_id != -1:
+                        q_idx = sim.model.jnt_qposadr[j_id]
+                        error = abs(sim.data.qpos[q_idx] - sim.last_target_q[q_idx])
+                        if error > max_error:
+                            max_error = error
+                if max_error < 0.02 or moving_check_steps > 30:
+                    is_moving = False
+                    needs_colab_processing = True
 
             # Render and encode all 5 cameras for the UI grid
             frames = {}

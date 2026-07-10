@@ -255,10 +255,12 @@ def get_filtered_point_cloud(
     return pointnext_isolated
 
 
-def get_vggt_point_tracks(history_frames: list[str]) -> list:
+def get_vggt_point_tracks(
+    history_frames: list[str], combined_mask: np.ndarray = None
+) -> list:
     """
     Passes historical image frames into the VGGT backbone, extracts coordinates,
-    and returns the global (unfiltered) 2D tracks as a list of [x1_norm, y1_norm, x2_norm, y2_norm].
+    and returns the global (unfiltered) or task-isolated 2D tracks as a list of [x1_norm, y1_norm, x2_norm, y2_norm].
     All processing is forced at 224x224 for ViT positional embedding alignment.
     """
     if len(history_frames) < 2:
@@ -318,8 +320,14 @@ def get_vggt_point_tracks(history_frames: list[str]) -> list:
     # Filter 2: Ignore low-confidence depth regions
     confidence_mask = conf_flat > 0.3
 
-    # Combine filters (ignoring the task workspace mask for global tracks)
-    final_valid_mask = foreground_mask & confidence_mask
+    # Combine filters (optionally applying task workspace mask)
+    if combined_mask is not None:
+        mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
+        my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
+        workspace_mask = combined_mask[my, mx] > 0.0
+        final_valid_mask = foreground_mask & confidence_mask & workspace_mask
+    else:
+        final_valid_mask = foreground_mask & confidence_mask
 
     pt_flat = pt_flat[final_valid_mask]
     seeds_flat = seeds_flat[final_valid_mask]
@@ -362,7 +370,7 @@ def get_vggt_point_tracks(history_frames: list[str]) -> list:
         y_ui[idx, 1] = y_start + match_local_y
 
     distances = np.hypot(x_ui[:, 1] - x_ui[:, 0], y_ui[:, 1] - y_ui[:, 0])
-    motion_mask = (distances > 1.5) & (distances < float(search_radius))
+    motion_mask = (distances > 4.0) & (distances < float(search_radius))
     valid_indices = np.where(motion_mask)[0]
 
     tracks_224 = []
@@ -478,8 +486,9 @@ async def process_frame(payload: FramePayload):
             response["task_isolated_features"]["sam_mask"] = sam_mask.tolist()
 
             # Process vectors (directions for explaining movement in isolated zone)
-            # ToDo: get this working after the global vggt is working.
-            response["task_isolated_features"]["vggt_local"] = []
+            response["task_isolated_features"]["vggt_local"] = get_vggt_point_tracks(
+                payload.history_frames, combined_mask=combined_mask
+            )
 
             # DINO: Apply mask to get focused attention subspace
             dino_array = np.array(response["dino_attn"])
