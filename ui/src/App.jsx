@@ -24,6 +24,7 @@ export default function App() {
   const [pointCloudCache, setPointCloudCache] = useState({});
   const [vggtTracksCache, setVggtTracksCache] = useState({});
   const [taskIsolatedFeaturesCache, setTaskIsolatedFeaturesCache] = useState({});
+  const [recentCameras, setRecentCameras] = useState([]);
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
@@ -61,23 +62,73 @@ export default function App() {
         if (data.joints) setJoints(data.joints);
         if (data.skills) setSkills(data.skills);
         const currentCam = activeCamRef.current;
+
+        // Update recent cameras list with sliding window of max 2
+        setRecentCameras(prev => {
+          const updated = [currentCam, ...prev.filter(cam => cam !== currentCam)];
+          return updated.slice(0, 2);
+        });
+
         if (data.dino_attn !== undefined) {
-          setDinoAttnCache(prev => ({ ...prev, [currentCam]: data.dino_attn }));
+          setDinoAttnCache(prev => {
+            const updated = { ...prev, [currentCam]: data.dino_attn };
+            // Remove entries for cameras not in recentCameras
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
         if (data.clip_sim !== undefined) {
-          setClipSimCache(prev => ({ ...prev, [currentCam]: data.clip_sim }));
+          setClipSimCache(prev => {
+            const updated = { ...prev, [currentCam]: data.clip_sim };
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
         if (data.sam_mask !== undefined) {
-          setSamMaskCache(prev => ({ ...prev, [currentCam]: data.sam_mask }));
+          setSamMaskCache(prev => {
+            const updated = { ...prev, [currentCam]: data.sam_mask };
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
         if (data.point_cloud !== undefined) {
-          setPointCloudCache(prev => ({ ...prev, [currentCam]: data.point_cloud }));
+          setPointCloudCache(prev => {
+            const updated = { ...prev, [currentCam]: data.point_cloud };
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
         if (data.vggt_tracks !== undefined) {
-          setVggtTracksCache(prev => ({ ...prev, [currentCam]: data.vggt_tracks }));
+          setVggtTracksCache(prev => {
+            const updated = { ...prev, [currentCam]: data.vggt_tracks };
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
         if (data.task_isolated_features !== undefined) {
-          setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
+          setTaskIsolatedFeaturesCache(prev => {
+            const updated = { ...prev, [currentCam]: data.task_isolated_features };
+            const recent = [currentCam, ...Object.keys(prev).filter(cam => cam !== currentCam)].slice(0, 2);
+            Object.keys(updated).forEach(cam => {
+              if (!recent.includes(cam)) delete updated[cam];
+            });
+            return updated;
+          });
         }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
@@ -172,7 +223,7 @@ export default function App() {
               MuJoCo (Local)
             </div>
           </div>
-          <button 
+          <button
             onClick={() => { if (wsRef.current) wsRef.current.close(); }}
             className={`btn-conn ${connectionStatus === 'connected' ? 'connected' : 'disconnected'}`}
           >
