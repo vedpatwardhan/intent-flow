@@ -344,6 +344,9 @@ def get_segment_masks(annotations: dict, pil_frame: Image):
     click_pts = [[seg["x"], seg["y"]] for seg in segments]
     num_pts = len(click_pts)
 
+    if len(segments) == 0:
+        return np.zeros((14, 14), dtype=np.float32)
+
     # Prepare inputs
     inputs = models["sam_processor"](
         images=[pil_frame] * num_pts,

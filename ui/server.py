@@ -370,10 +370,9 @@ async def websocket_endpoint(websocket: WebSocket):
             }
 
             current_time = asyncio.get_event_loop().time()
-            # Temporarily disabled /process endpoint calls to focus on UI drawing & snapping
+            # Query Colab server for advanced frame processing (DINO, CLIP, SAM, VGGT)
             if (
-                False
-                and colab_url
+                colab_url
                 and needs_colab_processing
                 and not colab_is_processing
             ):
