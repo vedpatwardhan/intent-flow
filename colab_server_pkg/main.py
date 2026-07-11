@@ -22,6 +22,7 @@ from colab_server_pkg.feature_extractor import (
     get_vggt_point_tracks_base,
     get_vggt_2d_tracks_from_mask,
     get_segment_masks,
+    extract_features_common,
 )
 from colab_server_pkg.stage3_endpoints import (
     Stage3StepPayload,
@@ -116,6 +117,38 @@ def load_pretrained_models():
     vggt_model.eval()
     models["vggt"] = vggt_model
 
+    print("Loading PointNeXt...")
+    try:
+        from openpoints.models import build_model_from_cfg
+        from easydict import EasyDict
+
+        cfg = EasyDict(
+            {
+                "model": {
+                    "NAME": "BaseSeg",
+                    "encoder_args": {
+                        "NAME": "PointNextEncoder",
+                        "blocks": [1, 1, 1, 1, 1, 1],
+                        "strides": [1, 2, 2, 2, 2, 1],
+                        "width": 32,
+                        "in_channels": 4,  # x, y, z, intensity
+                        "sa_layers": 3,
+                        "sa_use_res": True,
+                    },
+                    "decoder_args": {"NAME": "PointNextDecoder"},
+                    "cls_args": {
+                        "NAME": "PointNextHead",
+                        "num_classes": 384,
+                    },
+                }
+            }
+        )
+        models["pointnext"] = build_model_from_cfg(cfg).to(device)
+        models["pointnext"].eval()
+    except Exception as e:
+        print(f"Warning: Failed to load PointNeXt model ({e}). Using mock/fallback.")
+        models["pointnext"] = None
+
     print("All available models initialized successfully.")
 
 
@@ -123,97 +156,41 @@ def load_pretrained_models():
 async def process_frame(payload: FramePayload):
     try:
         start = perf_counter()
-        frame = decode_base64_image(payload.frame)
-        h, w, _ = frame.shape
-        pil_frame = Image.fromarray(frame)
+        features = extract_features_common(
+            payload.frame,
+            payload.history_frames,
+            payload.text_prompt,
+            payload.ui_annotations,
+        )
 
         response = {
-            "dino_attn": [],
-            "clip_sim": [],
+            "dino_attn": features["dino_attn"].tolist(),
+            "clip_sim": features["clip_sim"].tolist(),
+            "point_cloud": features["point_cloud"].tolist(),
+            "vggt_tracks": features["vggt_tracks"],
             "sam_mask": "",
-            "vggt_tracks": [],
-            "point_cloud": [],
             "task_isolated_features": {
-                "dino_subspace": [],
-                "vggt_local": [],
-                "pointnext_isolated": [],
+                "dino_subspace": features["task_isolated_features"][
+                    "dino_subspace"
+                ].tolist(),
+                "vggt_local": features["task_isolated_features"]["vggt_local"],
+                "pointnext_isolated": np.array(
+                    features["task_isolated_features"]["pointnext_isolated"]
+                ).tolist(),
+                "sam_mask": np.array(
+                    features["task_isolated_features"]["sam_mask"]
+                ).tolist(),
+                "sam_mask_224": np.array(
+                    features["task_isolated_features"]["sam_mask_224"]
+                ).tolist(),
+                "combined_mask_224": np.array(
+                    features["task_isolated_features"]["combined_mask_224"]
+                ).tolist(),
                 "tactile_active": [],
             },
         }
 
-        response["dino_attn"] = get_dino_attn_map(frame).tolist()
-        print(f"DINO completed at {perf_counter() - start}")
-
-        response["clip_sim"] = get_clip_cosine_similarity(
-            payload.text_prompt, pil_frame
-        ).tolist()
-        print(f"CLIP completed at {perf_counter() - start}")
-
-        point_cloud, depth_map, xs, ys, xs_proj, ys_proj, zs_proj, colors = (
-            get_point_cloud(pil_frame, frame)
-        )
-        response["point_cloud"] = point_cloud.tolist()
-        print(f"Point cloud completed at {perf_counter() - start}")
-
-        pt_flat, seeds_flat, wp_frame2, base_mask, frames_np, seq_len, h, w = (
-            get_vggt_point_tracks_base(payload.history_frames)
-        )
-        response["vggt_tracks"] = get_vggt_2d_tracks_from_mask(
-            pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h, w
-        )
-        print(f"VGGT completed at {perf_counter() - start}")
-
-        annotations = payload.ui_annotations
-        if annotations and (annotations.get("crops") or annotations.get("segments")):
-            print("Annotations Found.")
-            combined_mask = np.zeros((14, 14), dtype=np.float32)
-            combined_mask_224 = np.zeros((224, 224), dtype=np.float32)
-
-            for crop in annotations.get("crops", []):
-                x_start = int((crop["x"] / 224) * 14)
-                y_start = int((crop["y"] / 224) * 14)
-                x_end = int(((crop["x"] + crop["width"]) / 224) * 14)
-                y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
-                combined_mask[y_start:y_end, x_start:x_end] = 1.0
-
-                cx = int(crop["x"])
-                cy = int(crop["y"])
-                cw = int(crop["width"])
-                ch_val = int(crop["height"])
-                combined_mask_224[cy : cy + ch_val, cx : cx + cw] = 1.0
-
-            sam_mask, sam_mask_224 = get_segment_masks(annotations, pil_frame)
-            combined_mask = np.maximum(combined_mask, sam_mask)
-            combined_mask_224 = np.maximum(combined_mask_224, sam_mask_224)
-
-            response["task_isolated_features"]["sam_mask"] = sam_mask.tolist()
-            response["task_isolated_features"]["sam_mask_224"] = sam_mask_224.tolist()
-            response["task_isolated_features"][
-                "combined_mask_224"
-            ] = combined_mask_224.tolist()
-
-            mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
-            my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
-            workspace_mask = combined_mask[my, mx] > 0.0
-            local_valid_mask = base_mask & workspace_mask
-            response["task_isolated_features"]["vggt_local"] = (
-                get_vggt_2d_tracks_from_mask(
-                    pt_flat, seeds_flat, wp_frame2, local_valid_mask, seq_len, h, w
-                )
-            )
-
-            dino_array = np.array(response["dino_attn"])
-            masked_dino = dino_array * combined_mask
-            response["task_isolated_features"]["dino_subspace"] = masked_dino.tolist()
-
-            pointnext_isolated = get_filtered_point_cloud(
-                xs, ys, combined_mask, xs_proj, ys_proj, zs_proj, colors
-            )
-            response["task_isolated_features"][
-                "pointnext_isolated"
-            ] = pointnext_isolated.tolist()
-
-        print(f"Time taken {perf_counter() - start}")
+        print(f"Time taken {perf_counter() - start:.4f}s")
         return response
 
     except Exception as e:
@@ -227,6 +204,7 @@ async def process_frame(payload: FramePayload):
 
 @app.post("/stage3/step")
 async def stage3_step(payload: Stage3StepPayload):
+    # Called from the server.py on every step of every epoch
     return await handle_stage3_step(payload)
 
 

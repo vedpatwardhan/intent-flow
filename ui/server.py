@@ -156,6 +156,7 @@ cached_task_isolated_features = None
 async def run_stage3_training_loop(
     websocket, sim, colab_url, text_prompt, ui_annotations
 ):
+    # Called from the websocket endpoint
     if not colab_url:
         print("[Training Error] Colab URL is not set. Cannot run training.")
         await websocket.send_text(
@@ -182,17 +183,18 @@ async def run_stage3_training_loop(
         f"[Training] Starting Stage 3 training sandbox: {num_episodes} episodes, {max_steps} steps."
     )
 
-    for episode in range(num_episodes):
+    for ep_idx in range(num_episodes):
         sim.reset_env(lock_posture=True)
         frame_history = []
 
+        # Reflected in the progress bar on the UI
         await websocket.send_text(
             json.dumps(
                 {
                     "type": "training_progress",
-                    "status": f"Episode {episode + 1}/{num_episodes} in progress...",
-                    "progress": float(episode) / num_episodes,
-                    "episode": episode + 1,
+                    "status": f"Episode {ep_idx + 1}/{num_episodes} in progress...",
+                    "progress": float(ep_idx) / num_episodes,
+                    "episode": ep_idx + 1,
                     "total_episodes": num_episodes,
                 }
             )
@@ -218,6 +220,9 @@ async def run_stage3_training_loop(
                 frame_history.pop(0)
                 frame_history.append(base64_frame)
 
+            # Computes distance between fingers and cube
+            # ToDo: Needs to be generalized for other tasks,
+            # where the user configures tactile forces in the UI
             index_pos = sim.data.xpos[index_id]
             thumb_pos = sim.data.xpos[thumb_id]
             cube_pos = sim.data.xpos[cube_id]
@@ -372,10 +377,11 @@ async def run_stage3_training_loop(
                 if r.status_code == 200:
                     res = r.json()
                     print(
-                        f"[Training] Distill completed for Episode {episode+1}. Loss: {res.get('ram_loss')}"
+                        f"[Training] Distill completed for Episode {ep_idx + 1}."
+                        f" Loss: {res.get('ram_loss')}"
                     )
         except Exception as e:
-            print(f"[Training Error] Episode {episode+1} distill failed: {e}")
+            print(f"[Training Error] Episode {ep_idx + 1} distill failed: {e}")
 
     await websocket.send_text(
         json.dumps(
@@ -511,6 +517,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     is_moving = True
                     moving_check_steps = 0
 
+                # Entrypoint --> called from the UI
                 elif payload.get("type") == "start_training":
                     print("Starting Stage 3 training loop...")
                     await run_stage3_training_loop(

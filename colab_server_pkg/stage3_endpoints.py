@@ -145,16 +145,12 @@ def ensure_stage3_models():
         state.stage3_models["action_adapter"].load_state_dict(
             checkpoint["action_adapter"]
         )
+        state.stage3_models["action_down_proj"].load_state_dict(
+            checkpoint["action_down_proj"]
+        )
         state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
         state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
-        if "action_down_proj" in checkpoint:
-            state.stage3_models["action_down_proj"].load_state_dict(
-                checkpoint["action_down_proj"]
-            )
-        if "flow_matcher" in checkpoint:
-            state.stage3_models["flow_matcher"].load_state_dict(
-                checkpoint["flow_matcher"]
-            )
+        state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
 
     state.stage3_optimizer = torch.optim.AdamW(
         list(state.stage3_models["flow_matcher"].parameters())
@@ -170,10 +166,13 @@ def ensure_stage3_models():
 
 
 async def handle_stage3_step(payload: Stage3StepPayload):
+    # Called on every step of every epoch
     try:
+        # instantiates all models and loads parameters from checkpoints
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
+        # get all global and filtered features
         obs_dict = extract_stage3_obs_features(payload)
 
         with torch.no_grad():

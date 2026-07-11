@@ -36,7 +36,7 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
         device
     )
     with torch.no_grad():
-        text_feat = models["clip"].get_text_features(**inputs_text)
+        text_feat_raw = models["clip"].get_text_features(**inputs_text)
         vision_out = models["clip"].vision_model(**inputs_vision)
         norm_states = models["clip"].vision_model.post_layernorm(
             vision_out.last_hidden_state
@@ -44,14 +44,14 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
         patches = norm_states[0, 1:]
         patches_projected = models["clip"].visual_projection(patches)
 
-        text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
+        text_feat = text_feat_raw / text_feat_raw.norm(dim=-1, keepdim=True)
         patches_projected = patches_projected / patches_projected.norm(
             dim=-1, keepdim=True
         )
         sim = torch.matmul(patches_projected, text_feat.T).view(14, 14).cpu().numpy()
         sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
 
-    return sim_norm
+    return sim_norm, text_feat_raw.squeeze(0).cpu()
 
 
 def get_point_cloud(pil_frame: Image, frame: np.ndarray):
@@ -287,62 +287,154 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
     return sam_combined_mask, sam_combined_mask_224
 
 
-def extract_stage3_obs_features(payload):
-    frame = decode_base64_image(payload.frame)
+def extract_features_common(frame_str, history_frames, text_prompt, ui_annotations):
+    frame = decode_base64_image(frame_str)
     pil_frame = Image.fromarray(frame)
-    h_img, w_img = pil_frame.height, pil_frame.width
+    h, w, _ = frame.shape
 
     dino_attn = get_dino_attn_map(frame)
+    clip_sim, text_feat = get_clip_cosine_similarity(text_prompt, pil_frame)
+    point_cloud, depth_map, xs, ys, xs_proj, ys_proj, zs_proj, colors = get_point_cloud(
+        pil_frame, frame
+    )
+    pt_flat, seeds_flat, wp_frame2, base_mask, _, seq_len, _, _ = (
+        get_vggt_point_tracks_base(history_frames)
+    )
+    vggt_tracks = get_vggt_2d_tracks_from_mask(
+        pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h, w
+    )
 
-    annotations = payload.ui_annotations
     combined_mask = np.zeros((14, 14), dtype=np.float32)
-    if annotations and (annotations.get("crops") or annotations.get("segments")):
-        for crop in annotations.get("crops", []):
+    combined_mask_224 = np.zeros((224, 224), dtype=np.float32)
+    sam_mask = np.zeros((14, 14), dtype=np.float32)
+    sam_mask_224 = np.zeros((224, 224), dtype=np.float32)
+    vggt_local = []
+    dino_subspace = np.zeros((14, 14), dtype=np.float32)
+    pointnext_isolated = []
+
+    if ui_annotations and (
+        ui_annotations.get("crops") or ui_annotations.get("segments")
+    ):
+        for crop in ui_annotations.get("crops", []):
             x_start = int((crop["x"] / 224) * 14)
             y_start = int((crop["y"] / 224) * 14)
             x_end = int(((crop["x"] + crop["width"]) / 224) * 14)
             y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
             combined_mask[y_start:y_end, x_start:x_end] = 1.0
 
-        sam_mask, _ = get_segment_masks(annotations, pil_frame)
+            cx = int(crop["x"])
+            cy = int(crop["y"])
+            cw = int(crop["width"])
+            ch_val = int(crop["height"])
+            combined_mask_224[cy : cy + ch_val, cx : cx + cw] = 1.0
+
+        sam_mask, sam_mask_224 = get_segment_masks(ui_annotations, pil_frame)
         combined_mask = np.maximum(combined_mask, sam_mask)
+        combined_mask_224 = np.maximum(combined_mask_224, sam_mask_224)
 
-    dino_subspace = dino_attn * combined_mask
-    vision_feat = torch.tensor(dino_subspace.flatten()[:384], dtype=torch.float32)
-    if len(vision_feat) < 384:
-        vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
+        mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
+        my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
+        workspace_mask = combined_mask[my, mx] > 0.0
+        local_valid_mask = base_mask & workspace_mask
+        vggt_local = get_vggt_2d_tracks_from_mask(
+            pt_flat, seeds_flat, wp_frame2, local_valid_mask, seq_len, h, w
+        )
 
-    point_cloud, _, xs, ys, xs_proj, ys_proj, zs_proj, colors = get_point_cloud(
-        pil_frame, frame
-    )
-    if annotations and (annotations.get("crops") or annotations.get("segments")):
+        dino_subspace = dino_attn * combined_mask
         pointnext_isolated = get_filtered_point_cloud(
             xs, ys, combined_mask, xs_proj, ys_proj, zs_proj, colors
         )
-        pt_feat = torch.tensor(pointnext_isolated.flatten()[:384], dtype=torch.float32)
+
+    return {
+        "dino_attn": dino_attn,
+        "clip_sim": clip_sim,
+        "text_feat": text_feat,
+        "point_cloud": point_cloud,
+        "vggt_tracks": vggt_tracks,
+        "task_isolated_features": {
+            "dino_subspace": dino_subspace,
+            "vggt_local": vggt_local,
+            "pointnext_isolated": pointnext_isolated,
+            "sam_mask": sam_mask,
+            "sam_mask_224": sam_mask_224,
+            "combined_mask_224": combined_mask_224,
+        },
+    }
+
+
+def run_pointnext_model(point_cloud_np):
+    """
+    Run PointNeXt encoder on point cloud [NumPoints, >=3] to extract 384-dim feature token.
+    """
+    if models.get("pointnext") is None or len(point_cloud_np) == 0:
+        fallback = torch.tensor(
+            np.array(point_cloud_np).flatten()[:384], dtype=torch.float32
+        )
+        if len(fallback) < 384:
+            fallback = torch.cat([fallback, torch.zeros(384 - len(fallback))])
+        return fallback
+
+    try:
+        cloud_data = np.array(point_cloud_np)
+        if cloud_data.shape[1] < 4:
+            # Pad intensity with zeros if shape is [N, 3] or similar
+            pad = np.zeros((cloud_data.shape[0], 4 - cloud_data.shape[1]))
+            cloud_data = np.concatenate([cloud_data, pad], axis=1)
+        else:
+            cloud_data = cloud_data[:, :4]
+
+        pc_t = (
+            torch.tensor(cloud_data, dtype=torch.float32, device=device)
+            .unsqueeze(0)
+            .transpose(1, 2)
+        )
+        with torch.no_grad():
+            feat = models["pointnext"](pc_t)
+            if feat.dim() > 2:
+                feat = feat.mean(dim=-1)  # Global pooling over points
+            return feat.squeeze(0).cpu()
+    except Exception as e:
+        print(f"Error running PointNeXt model: {e}")
+        fallback = torch.tensor(
+            np.array(point_cloud_np).flatten()[:384], dtype=torch.float32
+        )
+        if len(fallback) < 384:
+            fallback = torch.cat([fallback, torch.zeros(384 - len(fallback))])
+        return fallback
+
+
+def extract_stage3_obs_features(payload):
+    features = extract_features_common(
+        payload.frame,
+        payload.history_frames,
+        payload.text_prompt,
+        payload.ui_annotations,
+    )
+
+    dino_attn = features["dino_attn"]
+    vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32)
+    if len(vision_feat) < 384:
+        vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
+
+    pointnext_isolated = features["task_isolated_features"]["pointnext_isolated"]
+    if len(pointnext_isolated) > 0:
+        pt_feat = run_pointnext_model(pointnext_isolated)
     else:
-        pt_feat = torch.tensor(point_cloud.flatten()[:384], dtype=torch.float32)
+        pt_feat = run_pointnext_model(features["point_cloud"])
 
     if len(pt_feat) < 384:
         pt_feat = torch.cat([pt_feat, torch.zeros(384 - len(pt_feat))])
 
-    pt_flat, seeds_flat, wp_frame2, base_mask, _, seq_len, h_img, w_img = (
-        get_vggt_point_tracks_base(payload.history_frames)
-    )
-    if annotations and (annotations.get("crops") or annotations.get("segments")):
-        mx = np.clip(((seeds_flat[:, 0] / w_img) * 14).astype(np.int32), 0, 13)
-        my = np.clip(((seeds_flat[:, 1] / h_img) * 14).astype(np.int32), 0, 13)
-        workspace_mask = combined_mask[my, mx] > 0.0
-        local_valid_mask = base_mask & workspace_mask
-        vggt_tracks = get_vggt_2d_tracks_from_mask(
-            pt_flat, seeds_flat, wp_frame2, local_valid_mask, seq_len, h_img, w_img
+    vggt_local = features["task_isolated_features"]["vggt_local"]
+    if len(vggt_local) > 0:
+        vggt_feat = torch.tensor(
+            np.array(vggt_local).flatten()[:768], dtype=torch.float32
         )
     else:
-        vggt_tracks = get_vggt_2d_tracks_from_mask(
-            pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h_img, w_img
+        vggt_feat = torch.tensor(
+            np.array(features["vggt_tracks"]).flatten()[:768], dtype=torch.float32
         )
 
-    vggt_feat = torch.tensor(np.array(vggt_tracks).flatten()[:768], dtype=torch.float32)
     if len(vggt_feat) < 768:
         vggt_feat = torch.cat([vggt_feat, torch.zeros(768 - len(vggt_feat))])
 
@@ -358,20 +450,25 @@ def extract_stage3_obs_features(payload):
     if len(proprio) < 24:
         proprio = torch.cat([proprio, torch.zeros(24 - len(proprio))])
 
-    inputs_text = models["clip_processor"](
-        text=[payload.text_prompt], return_tensors="pt", padding=True
-    ).to(device)
-    with torch.no_grad():
-        text_emb = models["clip"].get_text_features(**inputs_text).squeeze(0).cpu()
-    text_feat = text_emb[:512]
-    if len(text_feat) < 512:
-        text_feat = torch.cat([text_feat, torch.zeros(512 - len(text_feat))])
+    text_feat_raw = features["text_feat"][:512]
+    if len(text_feat_raw) < 512:
+        text_feat_raw = torch.cat(
+            [text_feat_raw, torch.zeros(512 - len(text_feat_raw))]
+        )
 
-    return {
+    obs_dict = {
+        # Adapter formatted inputs moved to target device
         "vision": vision_feat.unsqueeze(0).to(device),
         "pointnext": pt_feat.unsqueeze(0).to(device),
         "vggt": vggt_feat.unsqueeze(0).to(device),
         "tactile": tactile_grid.unsqueeze(0).to(device),
         "proprioception": proprio.unsqueeze(0).to(device),
-        "text": text_feat.unsqueeze(0).unsqueeze(0).to(device),
+        "text": text_feat_raw.unsqueeze(0).unsqueeze(0).to(device),
+        # Raw extracted representations (forwarded cleanly to preserve context)
+        "dino_attn": features["dino_attn"],
+        "clip_sim": features["clip_sim"],
+        "point_cloud": features["point_cloud"],
+        "vggt_tracks": features["vggt_tracks"],
+        "task_isolated_features": features["task_isolated_features"],
     }
+    return obs_dict
