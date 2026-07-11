@@ -153,6 +153,244 @@ cached_vggt_tracks = []
 cached_task_isolated_features = None
 
 
+async def run_stage3_training_loop(
+    websocket, sim, colab_url, text_prompt, ui_annotations
+):
+    if not colab_url:
+        print("[Training Error] Colab URL is not set. Cannot run training.")
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "training_progress",
+                    "status": "Error: Colab URL is not set.",
+                    "progress": 0.0,
+                    "episode": 0,
+                    "total_episodes": 0,
+                }
+            )
+        )
+        return
+
+    index_id = sim.model.body("R_index_tip_link").id
+    thumb_id = sim.model.body("R_thumb_tip_link").id
+    cube_id = sim.model.body("cube").id
+
+    num_episodes = 5
+    max_steps = 20
+
+    print(
+        f"[Training] Starting Stage 3 training sandbox: {num_episodes} episodes, {max_steps} steps."
+    )
+
+    for episode in range(num_episodes):
+        sim.reset_env(lock_posture=True)
+        frame_history = []
+
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "training_progress",
+                    "status": f"Episode {episode + 1}/{num_episodes} in progress...",
+                    "progress": float(episode) / num_episodes,
+                    "episode": episode + 1,
+                    "total_episodes": num_episodes,
+                }
+            )
+        )
+
+        episode_reward = 0.0
+
+        for step in range(max_steps):
+            # Capture observation
+            sim.renderer.update_scene(sim.data, camera="world_center")
+            rgb = sim.renderer.render()
+            img = Image.fromarray(rgb)
+            img_224 = img.resize((224, 224))
+            buf = io.BytesIO()
+            img_224.save(buf, format="JPEG", quality=75)
+            base64_frame = "data:image/jpeg;base64," + base64.b64encode(
+                buf.getvalue()
+            ).decode("utf-8")
+
+            if len(frame_history) < 2:
+                frame_history.append(base64_frame)
+            else:
+                frame_history.pop(0)
+                frame_history.append(base64_frame)
+
+            index_pos = sim.data.xpos[index_id]
+            thumb_pos = sim.data.xpos[thumb_id]
+            cube_pos = sim.data.xpos[cube_id]
+
+            d_index = float(np.linalg.norm(index_pos - cube_pos))
+            d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+
+            touch_index = max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
+            touch_thumb = max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
+
+            tactile_grid = [[0.0] * 4 for _ in range(4)]
+            tactile_grid[0][0] = touch_index
+            tactile_grid[1][1] = touch_thumb
+
+            current_obs = {
+                "frame": base64_frame,
+                "history_frames": list(frame_history),
+                "proprioception": sim.get_state_32()[:24].tolist(),
+                "tactile": tactile_grid,
+                "text_prompt": text_prompt or "grasp cube",
+                "ui_annotations": ui_annotations
+                or {"crops": [], "vectors": [], "segments": []},
+                "is_easy_task": False,
+            }
+
+            action_taken = None
+            try:
+                async with httpx.AsyncClient() as client:
+                    r = await client.post(
+                        f"{colab_url}/stage3/step", json=current_obs, timeout=15.0
+                    )
+                    if r.status_code == 200:
+                        res = r.json()
+                        action_taken = res.get("action")
+            except Exception as e:
+                print(f"[Training Error] Step {step} Colab step query failed: {e}")
+                break
+
+            if action_taken is None:
+                print("[Training Error] No action returned from Colab.")
+                break
+
+            # Execute actions
+            action_np = np.array(action_taken, dtype=np.float32)
+            action_32 = action_np[:32]
+            action_rad = sim.unscaler.unscale_action(action_32)
+
+            for _ in range(2):
+                for i, j_id in enumerate(sim.protocol_joint_ids):
+                    if j_id != -1:
+                        q_idx = sim.model.jnt_qposadr[j_id]
+                        sim.last_target_q[q_idx] = action_rad[i]
+                        if i in sim.coupling_map:
+                            for distal_idx in sim.coupling_map[i]:
+                                sim.last_target_q[distal_idx] = action_rad[i]
+
+                sim.sync_ctrl_to_qpos(sim.last_target_q)
+                sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
+                sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]
+                sim.data.qvel[:6] = 0.0
+
+                import mujoco
+
+                mujoco.mj_step(sim.model, sim.data)
+
+            # Get next observation
+            sim.renderer.update_scene(sim.data, camera="world_center")
+            rgb_next = sim.renderer.render()
+            img_next = Image.fromarray(rgb_next)
+            img_next_224 = img_next.resize((224, 224))
+            buf_next = io.BytesIO()
+            img_next_224.save(buf_next, format="JPEG", quality=75)
+            base64_frame_next = "data:image/jpeg;base64," + base64.b64encode(
+                buf_next.getvalue()
+            ).decode("utf-8")
+
+            frame_history_next = list(frame_history)
+            if len(frame_history_next) < 2:
+                frame_history_next.append(base64_frame_next)
+            else:
+                frame_history_next.pop(0)
+                frame_history_next.append(base64_frame_next)
+
+            index_pos = sim.data.xpos[index_id]
+            thumb_pos = sim.data.xpos[thumb_id]
+            cube_pos = sim.data.xpos[cube_id]
+            d_index = float(np.linalg.norm(index_pos - cube_pos))
+            d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+            touch_index_next = (
+                max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
+            )
+            touch_thumb_next = (
+                max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
+            )
+            tactile_grid_next = [[0.0] * 4 for _ in range(4)]
+            tactile_grid_next[0][0] = touch_index_next
+            tactile_grid_next[1][1] = touch_thumb_next
+
+            next_obs = {
+                "frame": base64_frame_next,
+                "history_frames": frame_history_next,
+                "proprioception": sim.get_state_32()[:24].tolist(),
+                "tactile": tactile_grid_next,
+                "text_prompt": text_prompt or "grasp cube",
+                "ui_annotations": ui_annotations
+                or {"crops": [], "vectors": [], "segments": []},
+                "is_easy_task": False,
+            }
+
+            physics_state = sim.get_physics_state()
+            step_reward = -physics_state["target_dist"]
+            episode_reward += step_reward
+
+            # Report calibration
+            calibrate_payload = {
+                "current_obs": current_obs,
+                "action_taken": action_taken,
+                "next_obs": next_obs,
+            }
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{colab_url}/stage3/calibrate",
+                        json=calibrate_payload,
+                        timeout=15.0,
+                    )
+            except Exception as e:
+                print(f"[Training Error] Step {step} Colab calibrate failed: {e}")
+
+        # Distillation
+        touch_count = 0
+        if touch_index_next > 0.5:
+            touch_count += 2
+        if touch_thumb_next > 0.5:
+            touch_count += 2
+
+        final_reward = float(touch_count >= 4)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    f"{colab_url}/stage3/distill",
+                    json={"reward": final_reward},
+                    timeout=20.0,
+                )
+                if r.status_code == 200:
+                    res = r.json()
+                    print(
+                        f"[Training] Distill completed for Episode {episode+1}. Loss: {res.get('ram_loss')}"
+                    )
+        except Exception as e:
+            print(f"[Training Error] Episode {episode+1} distill failed: {e}")
+
+    await websocket.send_text(
+        json.dumps(
+            {
+                "type": "training_progress",
+                "status": "Training Completed Successfully!",
+                "progress": 1.0,
+                "episode": num_episodes,
+                "total_episodes": num_episodes,
+            }
+        )
+    )
+    print("[Training] Stage 3 training sandbox finished.")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
@@ -272,6 +510,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     sim.process_target_32(act_norm)
                     is_moving = True
                     moving_check_steps = 0
+
+                elif payload.get("type") == "start_training":
+                    print("Starting Stage 3 training loop...")
+                    await run_stage3_training_loop(
+                        websocket, sim, colab_url, text_prompt, ui_annotations
+                    )
 
             except asyncio.TimeoutError:
                 pass

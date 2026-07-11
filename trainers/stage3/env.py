@@ -31,6 +31,19 @@ class GR1Stage3Env(GR1MuJoCoBase):
         self.thumb_id = self.model.body("R_thumb_tip_link").id
         self.cube_id = self.model.body("cube").id
 
+    def action_32_to_qpos(self, action):
+        action_32 = action[:32]
+        action_rad = self.unscaler.unscale_action(action_32)
+        qpos = self.data.qpos.copy()
+        for i, j_id in enumerate(self.protocol_joint_ids):
+            if j_id != -1:
+                q_idx = self.model.jnt_qposadr[j_id]
+                qpos[q_idx] = action_rad[i]
+                if i in self.coupling_map:
+                    for distal_idx in self.coupling_map[i]:
+                        qpos[distal_idx] = action_rad[i]
+        return qpos
+
     def reset(self):
         self.reset_env(lock_posture=True)
         self.step_count = 0
