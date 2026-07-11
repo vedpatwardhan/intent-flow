@@ -101,7 +101,10 @@ export default function EncoderDiagnostics({
   activeCam,
   onCameraChange,
   onInteraction,
-  taskIsolatedFeatures
+  taskIsolatedFeatures,
+  isTraining,
+  trainingProgress,
+  trainingStatus
 }) {
   const [inputText, setInputText] = useState('cube block');
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // Default right_shoulder_pitch
@@ -448,6 +451,42 @@ export default function EncoderDiagnostics({
                 Update
               </button>
             </form>
+            <hr className="separator" style={{ margin: '6px 0' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Stage 3 Training Sandbox:</span>
+              {isTraining ? (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--accent-cyan)' }}>
+                    <span>{trainingStatus}</span>
+                    <span>{Math.round(trainingProgress * 100)}%</span>
+                  </div>
+                  <div style={{ width: '100%', background: '#09090d', borderRadius: '4px', height: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
+                    <div
+                      style={{ background: 'var(--accent-cyan)', height: '100%', width: `${trainingProgress * 100}%`, transition: 'all 0.3s' }}
+                    ></div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => onInteraction({ type: 'start_training' })}
+                  style={{
+                    background: 'var(--accent-cyan-dim)',
+                    border: '1px solid rgba(6, 182, 212, 0.3)',
+                    color: 'var(--accent-cyan)',
+                    padding: '6px 12px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    width: '100%',
+                    transition: 'all 0.2s',
+                    textAlign: 'center'
+                  }}
+                >
+                  Start Stage 3 Training
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Joint Management Sliders card */}
@@ -461,6 +500,7 @@ export default function EncoderDiagnostics({
               <select
                 value={selectedJointIdx}
                 onChange={(e) => setSelectedJointIdx(parseInt(e.target.value))}
+                disabled={isTraining}
                 style={{
                   flexGrow: 1,
                   maxWidth: '210px',
@@ -485,6 +525,7 @@ export default function EncoderDiagnostics({
               </select>
               <button
                 onClick={addSlider}
+                disabled={isTraining}
                 style={{
                   background: 'var(--accent-cyan-dim)',
                   border: '1px solid rgba(6, 182, 212, 0.3)',
@@ -493,7 +534,7 @@ export default function EncoderDiagnostics({
                   borderRadius: '4px',
                   fontSize: '11px',
                   fontWeight: 600,
-                  cursor: 'pointer',
+                  cursor: isTraining ? 'default' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '2px',
@@ -532,11 +573,13 @@ export default function EncoderDiagnostics({
                             background: 'none',
                             border: 'none',
                             color: 'var(--accent-red)',
-                            cursor: 'pointer',
+                            cursor: isTraining ? 'default' : 'pointer',
+                            opacity: isTraining ? 0.3 : 1,
                             padding: '2px',
                             display: 'flex',
                             alignItems: 'center'
                           }}
+                          disabled={isTraining}
                         >
                           <Trash2 size={11} />
                         </button>
@@ -549,6 +592,7 @@ export default function EncoderDiagnostics({
                       step="0.05"
                       value={currentVal}
                       onChange={(e) => handleSliderChange(idx, e.target.value)}
+                      disabled={isTraining}
                       style={{
                         width: '100%',
                         height: '3px',
@@ -584,6 +628,7 @@ export default function EncoderDiagnostics({
                     key={i}
                     onClick={() => triggerIKPhase(i)}
                     className="btn-phase btn-phase-action"
+                    disabled={isTraining}
                     style={{ padding: '6px', fontSize: '9px', textAlign: 'center', justifyContent: 'center' }}
                   >
                     {phaseName}
@@ -595,6 +640,7 @@ export default function EncoderDiagnostics({
                 <button
                   onClick={triggerRandomize}
                   className="btn-phase btn-phase-action"
+                  disabled={isTraining}
                   style={{ padding: '6px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-amber)' }}
                 >
                   <Shuffle size={10} />
@@ -603,6 +649,7 @@ export default function EncoderDiagnostics({
                 <button
                   onClick={triggerReset}
                   className="btn-phase btn-phase-action"
+                  disabled={isTraining}
                   style={{ padding: '6px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-red)' }}
                 >
                   <RotateCcw size={10} />

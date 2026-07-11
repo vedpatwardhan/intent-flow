@@ -44,6 +44,9 @@ export default function App() {
   const [vggtTracksCache, setVggtTracksCache] = useState({});
   const [taskIsolatedFeaturesCache, setTaskIsolatedFeaturesCache] = useState({});
   const [recentCameras, setRecentCameras] = useState([]);
+  const [isTraining, setIsTraining] = useState(false);
+  const [trainingProgress, setTrainingProgress] = useState(0.0);
+  const [trainingStatus, setTrainingStatus] = useState('');
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
@@ -188,6 +191,11 @@ export default function App() {
         if (data.task_isolated_features !== undefined) {
           setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
         }
+        if (data.type === "training_progress") {
+          setIsTraining(data.progress < 1.0);
+          setTrainingProgress(data.progress);
+          setTrainingStatus(data.status);
+        }
       } catch (err) {
         console.error('Error parsing WS frame:', err);
       }
@@ -298,6 +306,9 @@ export default function App() {
             onUserCommand={handleInteraction}
             onComboStocChange={handleComboStocChange}
             onTriggerAttack={handleTriggerAttack}
+            isTraining={isTraining}
+            trainingProgress={trainingProgress}
+            trainingStatus={trainingStatus}
           />
 
           {/* Center Column: Grid View of 5 Cameras */}
@@ -336,6 +347,9 @@ export default function App() {
           onCameraChange={setActiveCam}
           onInteraction={handleInteraction}
           taskIsolatedFeatures={taskIsolatedFeaturesCache[activeCam]}
+          isTraining={isTraining}
+          trainingProgress={trainingProgress}
+          trainingStatus={trainingStatus}
         />
       )}
       {activePage === 'skills' && (
