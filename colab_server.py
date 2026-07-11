@@ -389,14 +389,16 @@ def get_vggt_2d_tracks_from_mask(
     return tracks_224
 
 
-def get_segment_masks(annotations: dict, pil_frame: Image):
+def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
     # Process segments (click points for surfaces) using batched SAM 2 on the GPU
     segments = annotations.get("segments", [])
     click_pts = [[seg["x"], seg["y"]] for seg in segments]
     num_pts = len(click_pts)
 
     if len(segments) == 0:
-        return np.zeros((14, 14), dtype=np.float32)
+        return np.zeros((14, 14), dtype=np.float32), np.zeros(
+            (224, 224), dtype=np.float32
+        )
 
     # Prepare inputs
     inputs = models["sam_processor"](
@@ -409,10 +411,13 @@ def get_segment_masks(annotations: dict, pil_frame: Image):
     with torch.inference_mode():
         outputs = models["sam"](**inputs)
 
-        # Downscale batched logits directly to 14x14 on the GPU
+        # Downscale batched logits directly to 14x14 and 224x224 on the GPU
         pred_masks = outputs.pred_masks[:, 0, 0].unsqueeze(1)
         resized_masks = torch.nn.functional.interpolate(
             pred_masks, size=(14, 14), mode="bilinear", align_corners=False
+        )
+        resized_masks_224 = torch.nn.functional.interpolate(
+            pred_masks, size=(224, 224), mode="bilinear", align_corners=False
         )
 
         # Get grid masks, reduce along the batch dimension
@@ -421,7 +426,12 @@ def get_segment_masks(annotations: dict, pil_frame: Image):
         )
         sam_combined_mask = np.maximum.reduce(sam_grid_masks, axis=0)
 
-    return sam_combined_mask
+        sam_grid_masks_224 = (
+            (resized_masks_224.squeeze(1) > 0.0).cpu().numpy().astype(np.float32)
+        )
+        sam_combined_mask_224 = np.maximum.reduce(sam_grid_masks_224, axis=0)
+
+    return sam_combined_mask, sam_combined_mask_224
 
 
 @app.post("/process")
@@ -479,8 +489,9 @@ async def process_frame(payload: FramePayload):
         if annotations and (annotations.get("crops") or annotations.get("segments")):
             print("Annotations Found.")
 
-            # Create binary mask from crops and segments for DINO/PointNeXt focusing
+            # Create binary masks (both 14x14 and 224x224) from crops and segments for DINO/PointNeXt focusing
             combined_mask = np.zeros((14, 14), dtype=np.float32)
+            combined_mask_224 = np.zeros((224, 224), dtype=np.float32)
 
             # Process crops (patches)
             for crop in annotations.get("crops", []):
@@ -491,9 +502,22 @@ async def process_frame(payload: FramePayload):
                 y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
                 combined_mask[y_start:y_end, x_start:x_end] = 1.0
 
-            sam_mask = get_segment_masks(annotations, pil_frame)
+                # Crop coordinates on 224x224 canvas
+                cx = int(crop["x"])
+                cy = int(crop["y"])
+                cw = int(crop["width"])
+                ch_val = int(crop["height"])
+                combined_mask_224[cy : cy + ch_val, cx : cx + cw] = 1.0
+
+            sam_mask, sam_mask_224 = get_segment_masks(annotations, pil_frame)
             combined_mask = np.maximum(combined_mask, sam_mask)
+            combined_mask_224 = np.maximum(combined_mask_224, sam_mask_224)
+
             response["task_isolated_features"]["sam_mask"] = sam_mask.tolist()
+            response["task_isolated_features"]["sam_mask_224"] = sam_mask_224.tolist()
+            response["task_isolated_features"][
+                "combined_mask_224"
+            ] = combined_mask_224.tolist()
 
             # Process vectors (directions for explaining movement in isolated zone)
             mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)

@@ -8,6 +8,25 @@ import EncoderDiagnostics from './components/EncoderDiagnostics';
 import SkillComposer from './components/SkillComposer';
 import { Cpu, RefreshCw, Grid, PlayCircle, Eye, GitCommit } from 'lucide-react';
 
+const base64ToBlob = (base64Str, contentType = 'image/jpeg') => {
+  const parts = base64Str.split(';base64,');
+  const base64Data = parts[1] || parts[0];
+  const sliceSize = 1024;
+  const byteCharacters = atob(base64Data);
+  const byteArrays = [];
+
+  for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+    const slice = byteCharacters.slice(offset, offset + sliceSize);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    byteArrays.push(byteArray);
+  }
+  return new Blob(byteArrays, { type: contentType });
+};
+
 export default function App() {
   const [activePage, setActivePage] = useState('command'); // 'command', 'trajectories', 'encoders', 'skills'
   const [frames, setFrames] = useState(null);
@@ -28,6 +47,11 @@ export default function App() {
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
+  const framesRef = useRef(null);
+
+  useEffect(() => {
+    framesRef.current = frames;
+  }, [frames]);
 
   useEffect(() => {
     activeCamRef.current = activeCam;
@@ -82,7 +106,17 @@ export default function App() {
   useEffect(() => {
     connectWS();
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
+      if (framesRef.current) {
+        Object.values(framesRef.current).forEach(url => {
+          if (url.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+          }
+        });
+      }
     };
   }, []);
 
@@ -99,7 +133,28 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.frames) setFrames(data.frames);
+        if (data.frames) {
+          setFrames(prevFrames => {
+            if (prevFrames) {
+              Object.values(prevFrames).forEach(url => {
+                if (url.startsWith('blob:')) {
+                  URL.revokeObjectURL(url);
+                }
+              });
+            }
+            const newFrames = {};
+            Object.entries(data.frames).forEach(([camId, base64Str]) => {
+              try {
+                const blob = base64ToBlob(base64Str);
+                newFrames[camId] = URL.createObjectURL(blob);
+              } catch (e) {
+                console.error("Error converting frame to blob:", e);
+                newFrames[camId] = base64Str;
+              }
+            });
+            return newFrames;
+          });
+        }
         if (data.energy !== undefined) {
           setEnergy(data.energy);
           setEnergyHistory(prev => [...prev.slice(1), data.energy]);

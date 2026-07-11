@@ -33,14 +33,20 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
     const width = 240;
     const height = 240;
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, width, height);
-
-    if (!frame) return;
+    if (!frame) {
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
 
     const img = new Image();
     img.onload = () => {
+      // Clear and paint background black atomically before drawing
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, width, height);
+
       // Draw original frame
       ctx.drawImage(img, 0, 0, width, height);
 
@@ -54,16 +60,19 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
         maskCtx.fillStyle = '#000';
         maskCtx.fillRect(0, 0, width, height);
 
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = 14;
-        tempCanvas.height = 14;
-        const tempCtx = tempCanvas.getContext('2d');
-        const imgData = tempCtx.createImageData(14, 14);
+        const isHighRes = maskData.length === 224;
+        const resSize = isHighRes ? 224 : 14;
 
-        for (let r = 0; r < 14; r++) {
-          for (let c = 0; c < 14; c++) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = resSize;
+        tempCanvas.height = resSize;
+        const tempCtx = tempCanvas.getContext('2d');
+        const imgData = tempCtx.createImageData(resSize, resSize);
+
+        for (let r = 0; r < resSize; r++) {
+          for (let c = 0; c < resSize; c++) {
             const val = maskData[r]?.[c] || 0.0;
-            const idx = (r * 14 + c) * 4;
+            const idx = (r * resSize + c) * 4;
             if (val > 0.05) {
               imgData.data[idx] = 255;
               imgData.data[idx + 1] = 255;
@@ -79,7 +88,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
         }
         tempCtx.putImageData(imgData, 0, 0);
         maskCtx.imageSmoothingEnabled = true;
-        maskCtx.drawImage(tempCanvas, 0, 0, 14, 14, 0, 0, width, height);
+        maskCtx.drawImage(tempCanvas, 0, 0, resSize, resSize, 0, 0, width, height);
 
         const maskImageData = maskCtx.getImageData(0, 0, width, height);
         const mainImageData = ctx.getImageData(0, 0, width, height);
@@ -295,7 +304,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           title="DINOv3 Spatial Attention"
           frame={frame}
           featureData={isolatedFeatures?.dino_subspace}
-          maskData={isolatedFeatures?.dino_subspace}
+          maskData={isolatedFeatures?.combined_mask_224}
           icon={Eye}
           color="var(--accent-amber)"
           renderType="heatmap"
@@ -304,7 +313,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           title="VGGT Trajectory Tracks"
           frame={frame}
           featureData={isolatedFeatures?.vggt_local}
-          maskData={isolatedFeatures?.dino_subspace}
+          maskData={isolatedFeatures?.combined_mask_224}
           icon={Move}
           color="var(--accent-cyan)"
           renderType="tracks"
@@ -313,7 +322,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           title="PointNeXt 3D Cloud"
           frame={frame}
           featureData={isolatedFeatures?.pointnext_isolated}
-          maskData={isolatedFeatures?.dino_subspace}
+          maskData={isolatedFeatures?.combined_mask_224}
           icon={Grid}
           color="var(--accent-purple)"
           renderType="pointcloud"
@@ -322,7 +331,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           title="Tactile Features"
           frame={frame}
           featureData={isolatedFeatures?.tactile_active}
-          maskData={isolatedFeatures?.dino_subspace}
+          maskData={isolatedFeatures?.combined_mask_224}
           icon={Target}
           color="var(--accent-red)"
         />
