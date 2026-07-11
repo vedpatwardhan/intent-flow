@@ -248,7 +248,7 @@ export default function EncoderDiagnostics({
       <svg viewBox="0 0 240 240" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 2 1 L 8 5 L 2 9" fill="none" stroke="var(--accent-amber)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M 2 1 L 8 5 L 2 9" fill="none" stroke="var(--accent-cyan)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </marker>
         </defs>
         {vggtTracks.map((pt, idx) => {
@@ -272,12 +272,12 @@ export default function EncoderDiagnostics({
                 y1={y1}
                 x2={targetX}
                 y2={targetY}
-                stroke="var(--accent-amber)"
+                stroke="var(--accent-cyan)"
                 strokeWidth="2"
                 opacity="0.8"
                 markerEnd="url(#arrow)"
               />
-              <circle cx={x1} cy={y1} r="2.5" fill="var(--accent-amber)" opacity="0.6" />
+              <circle cx={x1} cy={y1} r="2.5" fill="var(--accent-cyan)" opacity="0.6" />
             </g>
           );
         })}
@@ -702,7 +702,7 @@ export default function EncoderDiagnostics({
             }}>
 
               {/* DINOv3 Attn Map */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-amber)' }}>
                 <div className="panel-header" style={{ marginBottom: '2px' }}>
                   <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-amber)' }}>
                     <Target size={11} />
@@ -722,9 +722,9 @@ export default function EncoderDiagnostics({
               </div>
 
               {/* CLIP Attention Heatmap */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-red)' }}>
                 <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)' }}>
+                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-red)' }}>
                     <ImageIcon size={11} />
                     CLIP Cosine Similarity
                   </span>
@@ -737,14 +737,14 @@ export default function EncoderDiagnostics({
                   {renderHeatmapOverlay(clipSim, 'jet')}
                 </div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Token: <code style={{ color: 'var(--accent-cyan)' }}>"{inputText}"</code>
+                  Token: <code style={{ color: 'var(--accent-red)' }}>"{inputText}"</code>
                 </div>
               </div>
 
               {/* VGGT Point Tracks */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-cyan)' }}>
                 <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-amber)' }}>
+                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)' }}>
                     <Move size={11} />
                     VGGT Trajectory Tracks
                   </span>
@@ -762,9 +762,9 @@ export default function EncoderDiagnostics({
               </div>
 
               {/* PointNeXt 3D Cloud */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-purple)' }}>
                 <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)' }}>
+                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-purple)' }}>
                     <Target size={11} />
                     PointNeXt 3D Cloud
                   </span>

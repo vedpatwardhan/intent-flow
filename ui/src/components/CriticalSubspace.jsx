@@ -10,6 +10,12 @@ const getJetRGB = (v) => {
   return [Math.round(r), Math.round(g), Math.round(b)];
 };
 
+const getCSSVariableValue = (variableName) => {
+  if (typeof window === 'undefined') return '#000';
+  const val = window.getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+  return val || '#000';
+};
+
 const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, color, renderType }) => {
   const canvasRef = React.useRef(null);
   const prevDataRef = React.useRef({ featureData: null, maskData: null });
@@ -32,6 +38,10 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
     const ctx = canvas.getContext('2d');
     const width = 240;
     const height = 240;
+
+    const resolvedColor = color.startsWith('var(')
+      ? getCSSVariableValue(color.slice(4, -1))
+      : color;
 
     if (!frame) {
       ctx.clearRect(0, 0, width, height);
@@ -135,7 +145,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       }
 
       if (renderType === 'tracks' && featureData && featureData.length > 0) {
-        ctx.strokeStyle = color;
+        ctx.strokeStyle = resolvedColor;
         ctx.lineWidth = 2;
         ctx.globalAlpha = 0.8;
 
@@ -156,7 +166,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           ctx.lineTo(targetX, targetY);
           ctx.stroke();
 
-          ctx.fillStyle = color;
+          ctx.fillStyle = resolvedColor;
           ctx.beginPath();
           ctx.arc(x1, y1, 3, 0, Math.PI * 2);
           ctx.fill();

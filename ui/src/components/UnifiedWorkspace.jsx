@@ -19,8 +19,8 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
 
   const tools = [
     { id: 'select', label: 'Select', icon: MousePointer, color: 'var(--accent-primary, #6366f1)' },
-    { id: 'segment', label: 'SAM Segment', icon: Crosshair, color: 'var(--accent-cyan)' },
-    { id: 'vector', label: 'Motion Vector', icon: Navigation, color: 'var(--accent-amber)' },
+    { id: 'segment', label: 'SAM Segment', icon: Crosshair, color: 'var(--accent-purple)' },
+    { id: 'vector', label: 'Motion Vector', icon: Navigation, color: 'var(--accent-cyan)' },
     { id: 'crop', label: 'Target Crop', icon: Target, color: 'var(--accent-green)' }
   ];
 
@@ -305,18 +305,18 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
     // Draw existing annotations
     annotations.segments.forEach((seg, idx) => {
       const isSelected = selectedAnnotation?.type === 'segments' && selectedAnnotation?.index === idx;
-      ctx.strokeStyle = isSelected ? '#ef4444' : '#06b6d4';
+      ctx.strokeStyle = isSelected ? '#ef4444' : '#a855f7';
       ctx.lineWidth = isSelected ? 4 : 3;
       ctx.beginPath();
       ctx.arc(seg.x, seg.y, 10, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = isSelected ? 'rgba(239, 68, 68, 0.4)' : 'rgba(6, 182, 212, 0.3)';
+      ctx.fillStyle = isSelected ? 'rgba(239, 68, 68, 0.4)' : 'rgba(168, 85, 247, 0.3)';
       ctx.fill();
     });
 
     annotations.vectors.forEach((vec, idx) => {
       const isSelected = selectedAnnotation?.type === 'vectors' && selectedAnnotation?.index === idx;
-      drawArrow(ctx, vec.start[0], vec.start[1], vec.end[0], vec.end[1], isSelected ? '#ef4444' : '#f59e0b', isSelected);
+      drawArrow(ctx, vec.start[0], vec.start[1], vec.end[0], vec.end[1], isSelected ? '#ef4444' : '#06b6d4', isSelected);
     });
 
     annotations.crops.forEach((crop, idx) => {
@@ -331,7 +331,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
     // Draw current drawing state
     if (isDrawing) {
       if (activeTool === 'vector') {
-        drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, '#f59e0b');
+        drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, '#06b6d4');
       } else if (activeTool === 'crop') {
         ctx.strokeStyle = '#10b981';
         ctx.lineWidth = 3;

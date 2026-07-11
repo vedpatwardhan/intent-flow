@@ -23,6 +23,8 @@
   --accent-red-dim: rgba(239, 68, 68, 0.15);
   --accent-amber: #f59e0b;
   --accent-amber-dim: rgba(245, 158, 11, 0.15);
+  --accent-purple: #a855f7;
+  --accent-purple-dim: rgba(168, 85, 247, 0.15);
 }
 
 body {
