@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sys
+import traceback
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from PIL import Image
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from gr1_config import COMPACT_WIRE_JOINTS
 from gr1_protocol import StandardScaler
 from simulation_base import GR1MuJoCoBase
+import mujoco
 
 
 class GR1SimulationServer(GR1MuJoCoBase):
@@ -33,8 +35,6 @@ class GR1SimulationServer(GR1MuJoCoBase):
         print(
             f"🎯 Executing IK Pickup Phase {phase} (Global ID: {self.current_phase})..."
         )
-
-        import mujoco
 
         cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "cube_joint")
         cube_pos = self.data.qpos[
@@ -237,8 +237,22 @@ async def run_stage3_training_loop(
             tactile_grid[0][0] = touch_index
             tactile_grid[1][1] = touch_thumb
 
+            # Capture all 5 camera views for multi-view processing
+            frames_all_views = {}
+            for cam_name in sim.cam_names:
+                sim.renderer.update_scene(sim.data, camera=cam_name)
+                rgb_cam = sim.renderer.render()
+                img_cam = Image.fromarray(rgb_cam)
+                img_cam_224 = img_cam.resize((224, 224))
+                buf_cam = io.BytesIO()
+                img_cam_224.save(buf_cam, format="JPEG", quality=75)
+                frames_all_views[cam_name] = (
+                    "data:image/jpeg;base64,"
+                    + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
+                )
+
             current_obs = {
-                "frame": base64_frame,
+                "frames": frames_all_views,
                 "history_frames": list(frame_history),
                 "proprioception": sim.get_state_32()[:24].tolist(),
                 "tactile": tactile_grid,
@@ -289,27 +303,28 @@ async def run_stage3_training_loop(
                 ]
                 sim.data.qvel[:6] = 0.0
 
-                import mujoco
-
                 mujoco.mj_step(sim.model, sim.data)
 
-            # Get next observation
-            sim.renderer.update_scene(sim.data, camera="world_center")
-            rgb_next = sim.renderer.render()
-            img_next = Image.fromarray(rgb_next)
-            img_next_224 = img_next.resize((224, 224))
-            buf_next = io.BytesIO()
-            img_next_224.save(buf_next, format="JPEG", quality=75)
-            base64_frame_next = "data:image/jpeg;base64," + base64.b64encode(
-                buf_next.getvalue()
-            ).decode("utf-8")
+            # Get next observation - capture all 5 camera views
+            frames_all_views_next = {}
+            for cam_name in sim.cam_names:
+                sim.renderer.update_scene(sim.data, camera=cam_name)
+                rgb_cam_next = sim.renderer.render()
+                img_cam_next = Image.fromarray(rgb_cam_next)
+                img_cam_next_224 = img_cam_next.resize((224, 224))
+                buf_cam_next = io.BytesIO()
+                img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
+                frames_all_views_next[cam_name] = (
+                    "data:image/jpeg;base64,"
+                    + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
+                )
 
             frame_history_next = list(frame_history)
             if len(frame_history_next) < 2:
-                frame_history_next.append(base64_frame_next)
+                frame_history_next.append(frames_all_views_next["world_center"])
             else:
                 frame_history_next.pop(0)
-                frame_history_next.append(base64_frame_next)
+                frame_history_next.append(frames_all_views_next["world_center"])
 
             index_pos = sim.data.xpos[index_id]
             thumb_pos = sim.data.xpos[thumb_id]
@@ -327,7 +342,7 @@ async def run_stage3_training_loop(
             tactile_grid_next[1][1] = touch_thumb_next
 
             next_obs = {
-                "frame": base64_frame_next,
+                "frames": frames_all_views_next,
                 "history_frames": frame_history_next,
                 "proprioception": sim.get_state_32()[:24].tolist(),
                 "tactile": tactile_grid_next,
@@ -528,8 +543,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 pass
 
             # Step physics 16 times per tick
-            import mujoco
-
             for _ in range(16):
                 sim.sync_ctrl_to_qpos(sim.last_target_q)
                 sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
@@ -695,8 +708,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                             "[server.py] No task_isolated_features in Colab response"
                                         )
                         except Exception as e:
-                            import traceback
-
                             print("Colab communication error:")
                             traceback.print_exc()
                         finally:

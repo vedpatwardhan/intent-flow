@@ -404,12 +404,30 @@ def run_pointnext_model(point_cloud_np):
 
 
 def extract_stage3_obs_features(payload):
-    features = extract_features_common(
-        payload.frame,
-        payload.history_frames,
-        payload.text_prompt,
-        payload.ui_annotations,
+    # Handle multi-view frames
+    frames_dict = (
+        payload.frames
+        if hasattr(payload, "frames")
+        else {"world_center": payload.frame}
     )
+
+    # Process each view and extract features
+    view_features = {}
+    for view_name, frame_str in frames_dict.items():
+        features = extract_features_common(
+            frame_str,
+            payload.history_frames,
+            payload.text_prompt,
+            payload.ui_annotations,
+        )
+        view_features[view_name] = features
+
+    # Aggregate features across views (use world_center as primary for now)
+    primary_view = "world_center"
+    if primary_view not in view_features:
+        primary_view = list(view_features.keys())[0]
+
+    features = view_features[primary_view]
 
     dino_attn = features["dino_attn"]
     vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32)
@@ -464,6 +482,8 @@ def extract_stage3_obs_features(payload):
         "tactile": tactile_grid.unsqueeze(0).to(device),
         "proprioception": proprio.unsqueeze(0).to(device),
         "text": text_feat_raw.unsqueeze(0).unsqueeze(0).to(device),
+        # Multi-view features dictionary
+        "view_features": view_features,
         # Raw extracted representations (forwarded cleanly to preserve context)
         "dino_attn": features["dino_attn"],
         "clip_sim": features["clip_sim"],
