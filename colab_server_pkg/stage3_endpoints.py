@@ -175,13 +175,18 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # get all global and filtered features
         obs_dict = extract_stage3_obs_features(payload)
 
+        # ToDo: Need an additional stage to construct all the goal states
+        # by rearranging the masks
         with torch.no_grad():
+            # ToDo: Needs to run for all views as well as the masks
+            # get all adapter representations
             vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
             txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
             pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
             vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
             tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
 
+            # merge all modalities to get a single latent representation
             modality_dict = {
                 "vision": vis_tok,
                 "text": txt_tok,
@@ -192,27 +197,34 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             }
             s_t = state.stage3_models["msat"](modality_dict)
 
-            if len(state.stage3_memory.short_term) >= 2:
-                s_t = s_t + state.stage3_memory.gist.to(device)
+            # ToDo: the flow matcher functions need to be rewritten, there's no
+            # target available at the start and s_target should instead be
+            # the task-specific representation
+            s_target = torch.zeros_like(s_t)
 
-            if len(state.stage3_memory.anchors) > 0:
-                s_target = state.stage3_memory.anchors[-1].to(device)
-            else:
-                s_target = s_t.clone()
-
-            active_policy, active_node_key = state.stage3_models[
-                "gnn_library"
-            ].route_or_spawn(s_t, state.stage3_models["flow_matcher"])
-
-        a_candidate = active_policy.sample_with_steering(s_t, s_target, num_steps=10)
+        a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
+            s_t, s_target, num_steps=10
+        )
         a_candidate = a_candidate.clone().detach().requires_grad_(True)
         eta = 0.1
 
         for k in range(5):
+            # Get the action representation
             z_action = state.stage3_models["action_adapter"](a_candidate)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
+
+            # Predict next latent state
             s_next_pred = state.stage3_models["predictor"](s_t, z_action_16)
+
+            # ToDo: need the additional attention layer to get task-space representation
             energy = torch.mean((s_next_pred - s_target) ** 2)
+
+            # ToDo: Use the gradient to steer the candidate at all denoising steps
+            # rather than just subtracting it from the candidate action,
+            # something like this:
+            # a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
+            #     s_t, s_target, steering_timelines=eta * grad_a
+            # )
             grad_a = torch.autograd.grad(energy, a_candidate, retain_graph=True)[0]
             with torch.no_grad():
                 a_candidate = a_candidate - eta * grad_a
@@ -220,15 +232,16 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         final_action = a_candidate.detach()
 
+        # ToDo: This is not how BadWorld is supposed to work
         if payload.is_easy_task:
             with torch.no_grad():
                 final_action = state.stage3_models[
                     "attacker"
-                ].generate_perturbed_context(active_policy, s_t, s_target, final_action)
+                ].generate_perturbed_context(state.stage3_models["flow_matcher"], s_t, s_target, final_action)
 
         return {
             "action": final_action.squeeze(0).cpu().numpy().tolist(),
-            "active_node_key": active_node_key,
+            "active_node_key": state.stage3_models["flow_matcher"],
         }
     except Exception as e:
         import traceback
