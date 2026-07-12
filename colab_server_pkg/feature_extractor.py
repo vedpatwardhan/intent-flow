@@ -351,6 +351,7 @@ def extract_features_common(frame_str, history_frames, text_prompt, ui_annotatio
         "text_feat": text_feat,
         "point_cloud": point_cloud,
         "vggt_tracks": vggt_tracks,
+        "pil_frame": pil_frame,
         "task_isolated_features": {
             "dino_subspace": dino_subspace,
             "vggt_local": vggt_local,

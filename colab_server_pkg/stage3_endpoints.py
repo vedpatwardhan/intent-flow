@@ -4,7 +4,13 @@ import numpy as np
 from pydantic import BaseModel
 from typing import List
 from fastapi import HTTPException
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
+import cv2
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import traceback
 import torch
 import torch.nn.functional as F
@@ -58,7 +64,8 @@ class Stage3DistillPayload(BaseModel):
 def construct_goal_states(obs_dict, ui_annotations):
     """
     Construct goal state representations by rearranging crops/segments according to arrows.
-    For 2 patches with 1 arrow, generates 4 positional variants (left, right, top, bottom).
+    Uses OpenCV inpainting to erase the moving patch's original position, and applies a light
+    Gaussian blur to the background. Works with both rectangular crops and circular segment masks.
     """
     view_features = obs_dict.get("view_features", {})
     if not view_features:
@@ -69,129 +76,131 @@ def construct_goal_states(obs_dict, ui_annotations):
         primary_view = list(view_features.keys())[0]
 
     features = view_features[primary_view]
-    task_isolated = features.get("task_isolated_features", {})
-    combined_mask_224 = task_isolated.get("combined_mask_224", np.zeros((224, 224)))
-
-    # Get the primary frame
-    frames_dict = obs_dict.get("view_features", {})
-    if not frames_dict:
+    pil_frame = features.get("pil_frame")
+    if pil_frame is None:
         return []
 
-    # Extract crops from annotations
+    img_w, img_h = pil_frame.size
+
     crops = ui_annotations.get("crops", [])
+    segments = ui_annotations.get("segments", [])
     vectors = ui_annotations.get("vectors", [])
 
-    if len(crops) < 2:
-        # If no crops defined, use the combined mask region
-        mask_indices = np.where(combined_mask_224 > 0)
-        if len(mask_indices[0]) == 0:
-            return []
+    use_crops = len(crops) >= 2
+    use_segments = not use_crops and len(segments) >= 2
 
-        y_min, y_max = mask_indices[0].min(), mask_indices[0].max()
-        x_min, x_max = mask_indices[1].min(), mask_indices[1].max()
+    if use_crops:
+        p0_anno, p1_anno = crops[0], crops[1]
+        is_crop = True
+    elif use_segments:
+        p0_anno, p1_anno = segments[0], segments[1]
+        is_crop = False
+    else:
+        # Default mock patches (crops fallback)
+        p0_anno = {
+            "x": int(224 * 0.3),
+            "y": int(224 * 0.4),
+            "width": int(224 * 0.15),
+            "height": int(224 * 0.15),
+        }
+        p1_anno = {
+            "x": int(224 * 0.55),
+            "y": int(224 * 0.4),
+            "width": int(224 * 0.15),
+            "height": int(224 * 0.15),
+        }
+        is_crop = True
 
-        # Create two crops from the mask region
-        crops = [
-            {
-                "x": x_min,
-                "y": y_min,
-                "width": (x_max - x_min) // 2,
-                "height": y_max - y_min,
-            },
-            {
-                "x": x_min + (x_max - x_min) // 2,
-                "y": y_min,
-                "width": (x_max - x_min) // 2,
-                "height": y_max - y_min,
-            },
-        ]
+    # Helper to extract patch and its binary alpha mask
+    def extract_info(anno, is_c):
+        scale_x = img_w / 224.0
+        scale_y = img_h / 224.0
+        if is_c:
+            x = int(anno["x"] * scale_x)
+            y = int(anno["y"] * scale_y)
+            w = int(anno["width"] * scale_x)
+            h = int(anno["height"] * scale_y)
+            patch = pil_frame.crop((x, y, x + w, y + h))
+            mask = Image.new("L", patch.size, 255)
+        else:
+            cx = int(anno["x"] * scale_x)
+            cy = int(anno["y"] * scale_y)
+            r = int(25 * scale_x)
+            x = max(0, cx - r)
+            y = max(0, cy - r)
+            w = min(img_w - x, 2 * r)
+            h = min(img_h - y, 2 * r)
+            patch = pil_frame.crop((x, y, x + w, y + h))
+            mask = Image.new("L", (w, h), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255)
+        return patch, mask, x, y, w, h
 
-    # Get the primary frame from the first view
-    primary_frame_str = None
-    for view_name, frame_str in frames_dict.items():
-        if primary_frame_str is None:
-            primary_frame_str = frame_str
-            break
+    patch1, mask1, x1, y1, w1, h1 = extract_info(p0_anno, is_crop)
+    patch2, mask2, x2, y2, w2, h2 = extract_info(p1_anno, is_crop)
 
-    if primary_frame_str is None:
-        return []
+    # Decide direction based on arrow vector
+    scale_x = img_w / 224.0
+    scale_y = img_h / 224.0
+    if vectors and len(vectors) > 0:
+        vec = vectors[0]
+        start_x = vec["start"][0] * scale_x
+        start_y = vec["start"][1] * scale_y
 
-    frame = decode_base64_image(primary_frame_str)
-    pil_frame = Image.fromarray(frame)
+        ctr0_x = x1 + w1 / 2.0
+        ctr0_y = y1 + h1 / 2.0
+        ctr1_x = x2 + w2 / 2.0
+        ctr1_y = y2 + h2 / 2.0
 
-    # Extract the two crop regions
-    crop_regions = []
-    for crop in crops[:2]:  # Limit to 2 crops for single skill
-        x, y, w, h = crop["x"], crop["y"], crop["width"], crop["height"]
-        crop_region = pil_frame.crop((x, y, x + w, y + h))
-        crop_regions.append(crop_region)
+        d0_start = (ctr0_x - start_x) ** 2 + (ctr0_y - start_y) ** 2
+        d1_start = (ctr1_x - start_x) ** 2 + (ctr1_y - start_y) ** 2
 
-    if len(crop_regions) < 2:
-        return []
+        if d1_start < d0_start:
+            patch1, mask1, x1, y1, w1, h1, patch2, mask2, x2, y2, w2, h2 = (
+                patch2,
+                mask2,
+                x2,
+                y2,
+                w2,
+                h2,
+                patch1,
+                mask1,
+                x1,
+                y1,
+                w1,
+                h1,
+            )
 
-    # Generate 4 positional arrangements
-    goal_states = []
+    # Inpaint original moving patch location
+    try:
+        cv_img = cv2.cvtColor(np.array(pil_frame), cv2.COLOR_RGB2BGR)
+        inpaint_mask = np.zeros(cv_img.shape[:2], dtype=np.uint8)
+        cv2.rectangle(inpaint_mask, (x1, y1), (x1 + w1, y1 + h1), 255, -1)
+        inpainted_cv = cv2.inpaint(
+            cv_img, inpaint_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA
+        )
+        inpainted_rgb = cv2.cvtColor(inpainted_cv, cv2.COLOR_BGR2RGB)
+        clean_bg = Image.fromarray(inpainted_rgb)
+    except Exception as e:
+        print(f"Inpainting failed in construct_goal_states: {e}")
+        clean_bg = pil_frame
+
+    blurred_bg = clean_bg.filter(ImageFilter.GaussianBlur(radius=2))
+
     arrangements = [
-        ("left_right", 0, 1),  # crop0 left of crop1
-        ("right_left", 1, 0),  # crop1 left of crop0
-        ("top_bottom", 0, 1),  # crop0 above crop1
-        ("bottom_top", 1, 0),  # crop1 above crop0
+        ("left", x2 - w1, y2 + (h2 - h1) // 2),
+        ("right", x2 + w2, y2 + (h2 - h1) // 2),
+        ("top", x2 + (w2 - w1) // 2, y2 - h1),
+        ("bottom", x2 + (w2 - w1) // 2, y2 + h2),
     ]
 
-    canvas_size = 224
-    gap = 20
-
-    for arrangement_name, first_idx, second_idx in arrangements:
-        canvas = Image.new("RGB", (canvas_size, canvas_size), (0, 0, 0))
-
-        crop1 = crop_regions[first_idx]
-        crop2 = crop_regions[second_idx]
-
-        w1, h1 = crop1.size
-        w2, h2 = crop2.size
-
-        if arrangement_name in ["left_right", "right_left"]:
-            # Horizontal arrangement
-            total_width = w1 + w2 + gap
-            scale = min((canvas_size - gap) / total_width, 1.0)
-
-            w1_scaled = int(w1 * scale)
-            h1_scaled = int(h1 * scale)
-            w2_scaled = int(w2 * scale)
-            h2_scaled = int(h2 * scale)
-
-            crop1_resized = crop1.resize((w1_scaled, h1_scaled))
-            crop2_resized = crop2.resize((w2_scaled, h2_scaled))
-
-            x1 = (canvas_size - w1_scaled - w2_scaled - gap) // 2
-            x2 = x1 + w1_scaled + gap
-            y1 = (canvas_size - h1_scaled) // 2
-            y2 = (canvas_size - h2_scaled) // 2
-
-            canvas.paste(crop1_resized, (x1, y1))
-            canvas.paste(crop2_resized, (x2, y2))
-
-        else:  # top_bottom, bottom_top
-            # Vertical arrangement
-            total_height = h1 + h2 + gap
-            scale = min((canvas_size - gap) / total_height, 1.0)
-
-            w1_scaled = int(w1 * scale)
-            h1_scaled = int(h1 * scale)
-            w2_scaled = int(w2 * scale)
-            h2_scaled = int(h2 * scale)
-
-            crop1_resized = crop1.resize((w1_scaled, h1_scaled))
-            crop2_resized = crop2.resize((w2_scaled, h2_scaled))
-
-            x1 = (canvas_size - w1_scaled) // 2
-            x2 = (canvas_size - w2_scaled) // 2
-            y1 = (canvas_size - h1_scaled - h2_scaled - gap) // 2
-            y2 = y1 + h1_scaled + gap
-
-            canvas.paste(crop1_resized, (x1, y1))
-            canvas.paste(crop2_resized, (x2, y2))
-
+    goal_states = []
+    for name, x1_new, y1_new in arrangements:
+        canvas = blurred_bg.copy()
+        canvas.paste(patch2, (x2, y2), mask2)
+        x1_clip = max(0, min(x1_new, img_w - w1))
+        y1_clip = max(0, min(y1_new, img_h - h1))
+        canvas.paste(patch1, (x1_clip, y1_clip), mask1)
         goal_states.append(canvas)
 
     return goal_states
@@ -341,6 +350,108 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Construct goal states from crops/segments/arrows
         goal_images = construct_goal_states(obs_dict, payload.ui_annotations)
+
+        # Save debug visualization plots just like in temp.py
+        # Decode all 5 views
+        camera_names = [
+            "world_center",
+            "world_top",
+            "world_left",
+            "world_right",
+            "world_wrist",
+        ]
+        decoded_images = {}
+        for cam in camera_names:
+            if cam in payload.frames:
+                try:
+                    decoded_images[cam] = Image.fromarray(
+                        decode_base64_image(payload.frames[cam])
+                    )
+                except Exception as e:
+                    print(f"Error decoding {cam} in handle_stage3_step: {e}")
+                    decoded_images[cam] = Image.new("RGB", (224, 224), (0, 0, 0))
+            else:
+                decoded_images[cam] = Image.new("RGB", (224, 224), (0, 0, 0))
+
+        # 1. 6-subplot plot
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        axes = axes.flatten()
+        for idx, cam in enumerate(camera_names):
+            axes[idx].imshow(decoded_images[cam])
+            axes[idx].set_title(cam)
+            axes[idx].axis("off")
+
+        axes[5].imshow(decoded_images[primary_view])
+        axes[5].set_title(f"Annotations & Patches ({primary_view})")
+        axes[5].axis("on")
+
+        annotations = payload.ui_annotations or {}
+        img_w, img_h = decoded_images[primary_view].size
+        scale_x = img_w / 224.0
+        scale_y = img_h / 224.0
+
+        crops = annotations.get("crops", [])
+        for crop in crops:
+            rect = patches.Rectangle(
+                (crop["x"] * scale_x, crop["y"] * scale_y),
+                crop["width"] * scale_x,
+                crop["height"] * scale_y,
+                linewidth=2,
+                edgecolor="lime",
+                facecolor="none",
+            )
+            axes[5].add_patch(rect)
+
+        segments = annotations.get("segments", [])
+        for seg in segments:
+            x = seg.get("x", 0) * scale_x
+            y = seg.get("y", 0) * scale_y
+            axes[5].plot(x, y, marker="x", color="red", markersize=8, markeredgewidth=2)
+
+        vectors = annotations.get("vectors", [])
+        for vec in vectors:
+            start_x = vec["start"][0] * scale_x
+            start_y = vec["start"][1] * scale_y
+            end_x = vec["end"][0] * scale_x
+            end_y = vec["end"][1] * scale_y
+            axes[5].annotate(
+                "",
+                xy=(end_x, end_y),
+                xytext=(start_x, start_y),
+                arrowprops=dict(
+                    arrowstyle="->", color="cyan", lw=2.5, mutation_scale=15
+                ),
+            )
+
+        plt.tight_layout()
+        output_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "debug_stage3_step.png"
+        )
+        plt.savefig(output_path)
+        plt.close()
+
+        # 2. 2x2 goal states plot
+        if goal_images:
+            fig_goals, axes_goals = plt.subplots(2, 2, figsize=(10, 10))
+            axes_goals = axes_goals.flatten()
+            names = ["left", "right", "top", "bottom"]
+            for idx, (name, img) in enumerate(zip(names, goal_images)):
+                axes_goals[idx].imshow(img)
+                axes_goals[idx].set_title(
+                    f"Goal State: Patch 1 on {name.capitalize()} of Patch 2"
+                )
+                axes_goals[idx].axis("off")
+            plt.tight_layout()
+            goals_output_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                "debug_goal_states.png",
+            )
+            plt.savefig(goals_output_path)
+            plt.close()
+
+        # Temporary early return for visual debugging of stage3 step
+        return {"action": [0.0] * 32, "active_node_key": "mock_node"}
 
         # Extract encoder representations for goal states
         goal_latents = []
