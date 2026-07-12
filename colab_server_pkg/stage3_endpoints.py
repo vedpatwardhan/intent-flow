@@ -86,15 +86,9 @@ def construct_goal_states(obs_dict, ui_annotations):
     segments = ui_annotations.get("segments", [])
     vectors = ui_annotations.get("vectors", [])
 
-    use_crops = len(crops) >= 2
-    use_segments = not use_crops and len(segments) >= 2
-
-    if use_crops:
-        p0_anno, p1_anno = crops[0], crops[1]
-        is_crop = True
-    elif use_segments:
-        p0_anno, p1_anno = segments[0], segments[1]
-        is_crop = False
+    active_annos = crops + segments
+    if len(active_annos) >= 2:
+        p0_anno, p1_anno = active_annos[0], active_annos[1]
     else:
         # Default mock patches (crops fallback)
         p0_anno = {
@@ -109,16 +103,16 @@ def construct_goal_states(obs_dict, ui_annotations):
             "width": int(224 * 0.15),
             "height": int(224 * 0.15),
         }
-        is_crop = True
 
     task_isolated = features.get("task_isolated_features", {})
     sam_mask_224 = task_isolated.get("sam_mask_224", None)
 
     # Helper to extract patch and its binary alpha mask
-    def extract_info(anno, is_c):
+    def extract_info(anno):
         scale_x = img_w / 224.0
         scale_y = img_h / 224.0
-        if is_c:
+        is_crop_type = "width" in anno
+        if is_crop_type:
             x = int(anno["x"] * scale_x)
             y = int(anno["y"] * scale_y)
             w = int(anno["width"] * scale_x)
@@ -202,14 +196,12 @@ def construct_goal_states(obs_dict, ui_annotations):
                 h = min(img_h - y, 2 * r)
                 patch = pil_frame.crop((x, y, x + w, y + h))
                 mask = Image.new("L", (w, h), 0)
-                from PIL import ImageDraw
-
                 draw = ImageDraw.Draw(mask)
                 draw.ellipse((cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255)
         return patch, mask, x, y, w, h
 
-    patch1, mask1, x1, y1, w1, h1 = extract_info(p0_anno, is_crop)
-    patch2, mask2, x2, y2, w2, h2 = extract_info(p1_anno, is_crop)
+    patch1, mask1, x1, y1, w1, h1 = extract_info(p0_anno)
+    patch2, mask2, x2, y2, w2, h2 = extract_info(p1_anno)
 
     # Decide direction based on arrow vector
     scale_x = img_w / 224.0
@@ -463,21 +455,19 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             vectors = annotations.get("vectors", [])
             img_w, img_h = decoded_images[primary_view].size
 
-            use_crops = len(crops) >= 2
-            use_segments = not use_crops and len(segments) >= 2
-
-            if use_crops or use_segments:
-                p0_anno = crops[0] if use_crops else segments[0]
-                p1_anno = crops[1] if use_crops else segments[1]
-                is_c = use_crops
+            active_annos = crops + segments
+            if len(active_annos) >= 2:
+                p0_anno = active_annos[0]
+                p1_anno = active_annos[1]
 
                 task_isolated = obs_dict.get("task_isolated_features", {})
                 sam_mask_224 = task_isolated.get("sam_mask_224", None)
 
-                def get_coords(anno, is_c):
+                def get_coords(anno):
                     scale_x = img_w / 224.0
                     scale_y = img_h / 224.0
-                    if is_c:
+                    is_crop_type = "width" in anno
+                    if is_crop_type:
                         x = int(anno["x"] * scale_x)
                         y = int(anno["y"] * scale_y)
                         w = int(anno["width"] * scale_x)
@@ -565,8 +555,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             )
                     return x, y, w, h, mask
 
-                x1, y1, w1, h1, mask1 = get_coords(p0_anno, is_c)
-                x2, y2, w2, h2, mask2 = get_coords(p1_anno, is_c)
+                x1, y1, w1, h1, mask1 = get_coords(p0_anno)
+                x2, y2, w2, h2, mask2 = get_coords(p1_anno)
 
                 # Swap based on vector direction
                 if vectors and len(vectors) > 0:

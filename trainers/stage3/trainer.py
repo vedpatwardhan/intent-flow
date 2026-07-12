@@ -222,6 +222,7 @@ def train_stage3(config, use_subset=False):
     )
 
     from trainers.stage3.env import GR1Stage3Env
+
     env = GR1Stage3Env(action_dim=config["model"]["action_dim"])
     criterion = nn.MSELoss()
     bce = nn.BCELoss()
