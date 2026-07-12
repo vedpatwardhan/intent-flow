@@ -43,7 +43,7 @@ from trainers.stage3.trainer import GNNSkillLibrary, HybridMemoryTriad
 
 class Stage3StepPayload(BaseModel):
     frames: dict  # Multi-view frames: {camera_name: base64_image}
-    history_frames: List[str]
+    history_frames: List[dict[str, str]]
     proprioception: List[float]
     tactile: List[List[float]]
     text_prompt: str
@@ -111,6 +111,9 @@ def construct_goal_states(obs_dict, ui_annotations):
         }
         is_crop = True
 
+    task_isolated = features.get("task_isolated_features", {})
+    sam_mask_224 = task_isolated.get("sam_mask_224", None)
+
     # Helper to extract patch and its binary alpha mask
     def extract_info(anno, is_c):
         scale_x = img_w / 224.0
@@ -123,17 +126,86 @@ def construct_goal_states(obs_dict, ui_annotations):
             patch = pil_frame.crop((x, y, x + w, y + h))
             mask = Image.new("L", patch.size, 255)
         else:
-            cx = int(anno["x"] * scale_x)
-            cy = int(anno["y"] * scale_y)
-            r = int(25 * scale_x)
-            x = max(0, cx - r)
-            y = max(0, cy - r)
-            w = min(img_w - x, 2 * r)
-            h = min(img_h - y, 2 * r)
-            patch = pil_frame.crop((x, y, x + w, y + h))
-            mask = Image.new("L", (w, h), 0)
-            draw = ImageDraw.Draw(mask)
-            draw.ellipse((cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255)
+            # Try to query the high-quality SAM segment mask
+            if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
+                try:
+                    import cv2
+
+                    mask_np_224 = (
+                        np.array(sam_mask_224)
+                        if isinstance(sam_mask_224, torch.Tensor)
+                        else sam_mask_224
+                    )
+                    mask_uint8 = (mask_np_224 > 0).astype(np.uint8) * 255
+                    num_labels, labels = cv2.connectedComponents(mask_uint8)
+
+                    cx_scaled = min(223, max(0, int(anno["x"])))
+                    cy_scaled = min(223, max(0, int(anno["y"])))
+                    lbl = labels[cy_scaled, cx_scaled]
+
+                    if lbl == 0:
+                        # Scan a small local window if exact click landed on a zero edge
+                        window = labels[
+                            max(0, cy_scaled - 5) : min(224, cy_scaled + 6),
+                            max(0, cx_scaled - 5) : min(224, cx_scaled + 6),
+                        ]
+                        non_zero = window[window > 0]
+                        if len(non_zero) > 0:
+                            lbl = non_zero[0]
+
+                    if lbl > 0:
+                        segment_mask_224 = (labels == lbl).astype(np.float32)
+                        mask_pil = Image.fromarray(
+                            (segment_mask_224 * 255).astype(np.uint8)
+                        )
+                        mask_resized = mask_pil.resize((img_w, img_h), Image.NEAREST)
+                        mask_np = np.array(mask_resized)
+
+                        indices = np.argwhere(mask_np > 0)
+                        y_min, x_min = indices.min(axis=0)
+                        y_max, x_max = indices.max(axis=0)
+
+                        x = int(x_min)
+                        y = int(y_min)
+                        w = int(x_max - x_min + 1)
+                        h = int(y_max - y_min + 1)
+
+                        patch = pil_frame.crop((x, y, x + w, y + h))
+                        mask = mask_resized.crop((x, y, x + w, y + h))
+                    else:
+                        raise ValueError("No matching component label found")
+                except Exception as e:
+                    print(f"Fallback to circle due to components error: {e}")
+                    cx = int(anno["x"] * scale_x)
+                    cy = int(anno["y"] * scale_y)
+                    r = int(25 * scale_x)
+                    x = max(0, cx - r)
+                    y = max(0, cy - r)
+                    w = min(img_w - x, 2 * r)
+                    h = min(img_h - y, 2 * r)
+                    patch = pil_frame.crop((x, y, x + w, y + h))
+                    mask = Image.new("L", (w, h), 0)
+                    from PIL import ImageDraw
+
+                    draw = ImageDraw.Draw(mask)
+                    draw.ellipse(
+                        (cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255
+                    )
+            else:
+                # Fallback circle around click point
+                cx = int(anno["x"] * scale_x)
+                cy = int(anno["y"] * scale_y)
+                r = int(25 * scale_x)
+                x = max(0, cx - r)
+                y = max(0, cy - r)
+                w = min(img_w - x, 2 * r)
+                h = min(img_h - y, 2 * r)
+                patch = pil_frame.crop((x, y, x + w, y + h))
+                mask = Image.new("L", (w, h), 0)
+                from PIL import ImageDraw
+
+                draw = ImageDraw.Draw(mask)
+                draw.ellipse((cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255)
         return patch, mask, x, y, w, h
 
     patch1, mask1, x1, y1, w1, h1 = extract_info(p0_anno, is_crop)
@@ -381,7 +453,161 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             axes[idx].set_title(cam)
             axes[idx].axis("off")
 
-        axes[5].imshow(decoded_images[primary_view])
+        # Compute semi-transparent color overlays for segment maps and patches
+        primary_view = camera_names[0]
+        try:
+            overlay_img = decoded_images[primary_view].copy().convert("RGBA")
+            annotations = payload.ui_annotations or {}
+            crops = annotations.get("crops", [])
+            segments = annotations.get("segments", [])
+            vectors = annotations.get("vectors", [])
+            img_w, img_h = decoded_images[primary_view].size
+
+            use_crops = len(crops) >= 2
+            use_segments = not use_crops and len(segments) >= 2
+
+            if use_crops or use_segments:
+                p0_anno = crops[0] if use_crops else segments[0]
+                p1_anno = crops[1] if use_crops else segments[1]
+                is_c = use_crops
+
+                task_isolated = obs_dict.get("task_isolated_features", {})
+                sam_mask_224 = task_isolated.get("sam_mask_224", None)
+
+                def get_coords(anno, is_c):
+                    scale_x = img_w / 224.0
+                    scale_y = img_h / 224.0
+                    if is_c:
+                        x = int(anno["x"] * scale_x)
+                        y = int(anno["y"] * scale_y)
+                        w = int(anno["width"] * scale_x)
+                        h = int(anno["height"] * scale_y)
+                        mask = Image.new("L", (w, h), 255)
+                    else:
+                        if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
+                            try:
+                                mask_np_224 = (
+                                    np.array(sam_mask_224)
+                                    if isinstance(sam_mask_224, torch.Tensor)
+                                    else sam_mask_224
+                                )
+                                mask_uint8 = (mask_np_224 > 0).astype(np.uint8) * 255
+                                num_labels, labels = cv2.connectedComponents(mask_uint8)
+
+                                cx_scaled = min(223, max(0, int(anno["x"])))
+                                cy_scaled = min(223, max(0, int(anno["y"])))
+                                lbl = labels[cy_scaled, cx_scaled]
+
+                                if lbl == 0:
+                                    window = labels[
+                                        max(0, cy_scaled - 5) : min(224, cy_scaled + 6),
+                                        max(0, cx_scaled - 5) : min(224, cx_scaled + 6),
+                                    ]
+                                    non_zero = window[window > 0]
+                                    if len(non_zero) > 0:
+                                        lbl = non_zero[0]
+
+                                if lbl > 0:
+                                    segment_mask_224 = (labels == lbl).astype(
+                                        np.float32
+                                    )
+                                    mask_pil = Image.fromarray(
+                                        (segment_mask_224 * 255).astype(np.uint8)
+                                    )
+                                    mask_resized = mask_pil.resize(
+                                        (img_w, img_h), Image.NEAREST
+                                    )
+                                    mask_np = np.array(mask_resized)
+
+                                    indices = np.argwhere(mask_np > 0)
+                                    y_min, x_min = indices.min(axis=0)
+                                    y_max, x_max = indices.max(axis=0)
+
+                                    x = int(x_min)
+                                    y = int(y_min)
+                                    w = int(x_max - x_min + 1)
+                                    h = int(y_max - y_min + 1)
+                                    mask = mask_resized.crop((x, y, x + w, y + h))
+                                else:
+                                    raise ValueError(
+                                        "No matching component label found"
+                                    )
+                            except Exception as e:
+                                print(
+                                    f"Fallback to circle due to components error: {e}"
+                                )
+                                cx = int(anno["x"] * scale_x)
+                                cy = int(anno["y"] * scale_y)
+                                r = int(25 * scale_x)
+                                x = max(0, cx - r)
+                                y = max(0, cy - r)
+                                w = min(img_w - x, 2 * r)
+                                h = min(img_h - y, 2 * r)
+                                mask = Image.new("L", (w, h), 0)
+                                draw = ImageDraw.Draw(mask)
+                                draw.ellipse(
+                                    (cx - r - x, cy - r - y, cx + r - x, cy + r - y),
+                                    fill=255,
+                                )
+                        else:
+                            cx = int(anno["x"] * scale_x)
+                            cy = int(anno["y"] * scale_y)
+                            r = int(25 * scale_x)
+                            x = max(0, cx - r)
+                            y = max(0, cy - r)
+                            w = min(img_w - x, 2 * r)
+                            h = min(img_h - y, 2 * r)
+                            mask = Image.new("L", (w, h), 0)
+                            draw = ImageDraw.Draw(mask)
+                            draw.ellipse(
+                                (cx - r - x, cy - r - y, cx + r - x, cy + r - y),
+                                fill=255,
+                            )
+                    return x, y, w, h, mask
+
+                x1, y1, w1, h1, mask1 = get_coords(p0_anno, is_c)
+                x2, y2, w2, h2, mask2 = get_coords(p1_anno, is_c)
+
+                # Swap based on vector direction
+                if vectors and len(vectors) > 0:
+                    vec = vectors[0]
+                    scale_x = img_w / 224.0
+                    scale_y = img_h / 224.0
+                    start_x = vec["start"][0] * scale_x
+                    start_y = vec["start"][1] * scale_y
+                    ctr0_x = x1 + w1 / 2.0
+                    ctr0_y = y1 + h1 / 2.0
+                    ctr1_x = x2 + w2 / 2.0
+                    ctr1_y = y2 + h2 / 2.0
+                    d0_start = (ctr0_x - start_x) ** 2 + (ctr0_y - start_y) ** 2
+                    d1_start = (ctr1_x - start_x) ** 2 + (ctr1_y - start_y) ** 2
+                    if d1_start < d0_start:
+                        x1, y1, w1, h1, mask1, x2, y2, w2, h2, mask2 = (
+                            x2,
+                            y2,
+                            w2,
+                            h2,
+                            mask2,
+                            x1,
+                            y1,
+                            w1,
+                            h1,
+                            mask1,
+                        )
+
+                # Paste overlays
+                # Patch 1 (moving): semi-transparent cyan
+                cyan_color = Image.new("RGBA", (w1, h1), (0, 255, 255, 80))
+                overlay_img.paste(cyan_color, (x1, y1), mask1)
+
+                # Patch 2 (fixed): semi-transparent magenta
+                magenta_color = Image.new("RGBA", (w2, h2), (255, 0, 255, 80))
+                overlay_img.paste(magenta_color, (x2, y2), mask2)
+        except Exception as e:
+            print(f"Error drawing overlays: {e}")
+            overlay_img = decoded_images[primary_view]
+
+        axes[5].imshow(overlay_img)
         axes[5].set_title(f"Annotations & Patches ({primary_view})")
         axes[5].axis("on")
 
@@ -451,7 +677,16 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             plt.close()
 
         # Temporary early return for visual debugging of stage3 step
-        return {"action": [0.0] * 32, "active_node_key": "mock_node"}
+        combined_mask_224 = obs_dict["task_isolated_features"]["combined_mask_224"]
+        return {
+            "action": [0.0] * 32,
+            "active_node_key": "mock_node",
+            "combined_mask_224": (
+                combined_mask_224.tolist()
+                if isinstance(combined_mask_224, np.ndarray)
+                else list(combined_mask_224)
+            ),
+        }
 
         # Extract encoder representations for goal states
         goal_latents = []

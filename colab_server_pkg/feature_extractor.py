@@ -287,10 +287,25 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
     return sam_combined_mask, sam_combined_mask_224
 
 
-def extract_features_common(frame_str, history_frames, text_prompt, ui_annotations):
+def extract_features_common(
+    frame_str, history_frames, text_prompt, ui_annotations, view_name="world_center"
+):
     frame = decode_base64_image(frame_str)
     pil_frame = Image.fromarray(frame)
     h, w, _ = frame.shape
+
+    # Extract history frames specific to the active view_name from the dict history representation
+    view_history = []
+    for h_f in history_frames:
+        if isinstance(h_f, dict):
+            if view_name in h_f:
+                view_history.append(h_f[view_name])
+            elif "world_center" in h_f:
+                view_history.append(h_f["world_center"])
+            elif len(h_f) > 0:
+                view_history.append(list(h_f.values())[0])
+        else:
+            view_history.append(h_f)
 
     dino_attn = get_dino_attn_map(frame)
     clip_sim, text_feat = get_clip_cosine_similarity(text_prompt, pil_frame)
@@ -298,7 +313,7 @@ def extract_features_common(frame_str, history_frames, text_prompt, ui_annotatio
         pil_frame, frame
     )
     pt_flat, seeds_flat, wp_frame2, base_mask, _, seq_len, _, _ = (
-        get_vggt_point_tracks_base(history_frames)
+        get_vggt_point_tracks_base(view_history)
     )
     vggt_tracks = get_vggt_2d_tracks_from_mask(
         pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h, w
@@ -420,6 +435,7 @@ def extract_stage3_obs_features(payload):
             payload.history_frames,
             payload.text_prompt,
             payload.ui_annotations,
+            view_name=view_name,
         )
         view_features[view_name] = features
 
