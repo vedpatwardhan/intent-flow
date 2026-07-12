@@ -27,6 +27,8 @@ FROZEN_JOINTS = {
     "head_pitch_joint": 0.0,
     "head_roll_joint": 0.0,
     "head_yaw_joint": 0.0,
+    "left_wrist_pitch_joint": -0.61,
+    "right_wrist_pitch_joint": -0.61,
 }
 
 # Joints that are temporarily locked to a specific pose ONLY during IK demonstations
@@ -34,6 +36,8 @@ FROZEN_JOINTS = {
 # These remain ACTIVE in the VLA action space with full range.
 IK_POSTURE_LOCKS = {
     "R_thumb_proximal_yaw_joint": -1.676,  # Normalized -1.0
+    "left_shoulder_roll_joint": 0.8,
+    "right_shoulder_roll_joint": -0.8,
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
