@@ -205,20 +205,6 @@ async def run_stage3_training_loop(
         for step in range(max_steps):
             # Capture observation
             sim.renderer.update_scene(sim.data, camera="world_center")
-            rgb = sim.renderer.render()
-            img = Image.fromarray(rgb)
-            img_224 = img.resize((224, 224))
-            buf = io.BytesIO()
-            img_224.save(buf, format="JPEG", quality=75)
-            base64_frame = "data:image/jpeg;base64," + base64.b64encode(
-                buf.getvalue()
-            ).decode("utf-8")
-
-            if len(frame_history) < 2:
-                frame_history.append(base64_frame)
-            else:
-                frame_history.pop(0)
-                frame_history.append(base64_frame)
 
             # Computes distance between fingers and cube
             # ToDo: Needs to be generalized for other tasks,
@@ -250,6 +236,12 @@ async def run_stage3_training_loop(
                     "data:image/jpeg;base64,"
                     + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
                 )
+
+            if len(frame_history) < 2:
+                frame_history.append(frames_all_views)
+            else:
+                frame_history.pop(0)
+                frame_history.append(frames_all_views)
 
             current_obs = {
                 "frames": frames_all_views,
