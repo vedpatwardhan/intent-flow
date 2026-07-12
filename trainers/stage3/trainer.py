@@ -18,7 +18,6 @@ from models.adapters import (
 )
 from models.msat import MultiStreamActionTransformer
 from models.jepa_predictor import JepaPredictor
-from trainers.stage3.env import GR1Stage3Env
 from trainers.stage3.denoiser import ComboStocFlowMatcher
 from trainers.stage3.discriminator import TrajectoryDiscriminator
 from trainers.stage3.attacker import BadWorldAttacker
@@ -222,6 +221,7 @@ def train_stage3(config, use_subset=False):
         lr=config["stage3"]["lr"],
     )
 
+    from trainers.stage3.env import GR1Stage3Env
     env = GR1Stage3Env(action_dim=config["model"]["action_dim"])
     criterion = nn.MSELoss()
     bce = nn.BCELoss()
