@@ -184,7 +184,8 @@ async def run_stage3_training_loop(
     )
 
     for ep_idx in range(num_episodes):
-        sim.reset_env(lock_posture=True)
+        if ep_idx > 0:
+            sim.reset_env(lock_posture=True)
         frame_history = []
 
         # Reflected in the progress bar on the UI
