@@ -794,7 +794,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         print(
             f"Observation Latent Shapes: {[obs_latents[view_name].shape for view_name in obs_latents]}"
         )
-        print(f"Goal Views: {goal_latents.keys()}")
+        print(
+            f"Goal Views: {goal_latents.keys()} --> {[len(goal_latents[view_name]) for view_name in goal_latents]}"
+        )
         print(
             f"Goal Latent Shapes: {[goal_latents[view_name][0].shape for view_name in goal_latents]}"
         )
@@ -802,9 +804,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         return {
             "action": [0.0] * 32,
             "active_node_key": "mock_node",
-            "combined_mask_224": obs_dict["task_isolated_features"][
-                "combined_mask_224"
-            ],
         }
 
         with torch.no_grad():
