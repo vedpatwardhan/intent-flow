@@ -77,6 +77,7 @@ class Stage2SFTSimplified(pl.LightningModule):
         tactile = batch["tactile"]
         proprioception = batch["proprioception"]
         actions = batch["actions"]  # Expected Shape: [B, Horizon, Action_Dim]
+        embodiment_id = batch["embodiment_id"]
 
         batch_size = vision.size(0)
         horizon = vision.size(1)
@@ -131,8 +132,10 @@ class Stage2SFTSimplified(pl.LightningModule):
         s_0 = self.msat(modality_dict)
 
         # --- 3. Flow Matching Trajectory Chunk Optimization ---
-        a_trajectory = actions[:, :pred_horizon, :]  # Shape: [B, pred_horizon, 58]
-        cfm_loss = self.flow_matcher.get_cfm_loss(a_trajectory, s_0, s_target)
+        a_trajectory = actions[:, :pred_horizon, :]  # Shape: [B, pred_horizon, D]
+        cfm_loss = self.flow_matcher.get_cfm_loss(
+            a_trajectory, s_0, s_target, embodiment_id
+        )
 
         # --- 4. Global Trajectory Alignment Bounding (CASA) ---
         z_s = s_0 / (s_0.norm(dim=-1, keepdim=True) + 1e-8)

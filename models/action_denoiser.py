@@ -85,7 +85,9 @@ class ActionVelocityField(nn.Module):
         super().__init__()
         self.action_dim = action_dim
         self.time_mlp = ComboStocTimeEmbedding(action_dim=action_dim, time_dim=time_dim)
-        cond_dim = state_dim * 2 + action_dim * time_dim
+
+        self.embodiment_embedding = nn.Embedding(num_embeddings=3, embedding_dim=32)
+        cond_dim = state_dim * 2 + action_dim * time_dim + 32
 
         self.block1 = SpatialTemporalDiTBlock(
             joint_dim=action_dim, cond_dim=cond_dim, hidden_dim=hidden_dim
@@ -104,7 +106,7 @@ class ActionVelocityField(nn.Module):
             nn.Linear(hidden_dim, action_dim),
         )
 
-    def forward(self, x_t, t, s_t, s_target):
+    def forward(self, x_t, t, s_t, s_target, embodiment_id):
         B, H, _ = x_t.shape
 
         t_embed = self.time_mlp(t)  # [B, H, action_dim, time_dim]
@@ -112,8 +114,8 @@ class ActionVelocityField(nn.Module):
         # Mean pool temporal coordinates across sequence window to unify conditioning context
         t_flat = t_embed.mean(dim=1).view(B, -1)  # [B, action_dim * time_dim]
 
-        # [B, state_dim + state_dim + action_dim * time_dim]
-        cond = torch.cat([s_t, s_target, t_flat], dim=-1)
+        emb_feat = self.embodiment_embedding(embodiment_id)  # [B, 32]
+        cond = torch.cat([s_t, s_target, t_flat, emb_feat], dim=-1)
 
         macro_anchors = self.block1(x_t, cond)
         motion_primitives = self.block2(macro_anchors, cond)
@@ -130,7 +132,7 @@ class CLAPFlowMatcher(nn.Module):
         )
         self.action_dim = action_dim
 
-    def get_cfm_loss(self, x_1, s_t, s_target):
+    def get_cfm_loss(self, x_1, s_t, s_target, embodiment_id):
         B, H, D = x_1.shape
         x_0 = torch.randn_like(x_1)
 
@@ -140,20 +142,21 @@ class CLAPFlowMatcher(nn.Module):
         x_t = t * x_1 + (1.0 - t) * x_0
         target_velocity = x_1 - x_0
 
-        pred_velocity = self.velocity_field(x_t, t, s_t, s_target)
+        pred_velocity = self.velocity_field(x_t, t, s_t, s_target, embodiment_id)
         return torch.mean((pred_velocity - target_velocity) ** 2)
 
     @torch.no_grad()
-    def sample(self, s_t, s_target, horizon=7, num_steps=10):
-        # Strict execution contract matching the validation split boundaries
+    def sample(self, s_t, s_target, embodiment_id=None, horizon=7, num_steps=10):
         B = s_t.size(0)
+        if embodiment_id is None:
+            embodiment_id = torch.ones(B, dtype=torch.long, device=s_t.device)
         x_t = torch.randn(B, horizon, self.action_dim, device=s_t.device)
         dt = 1.0 / num_steps
 
         for i in range(num_steps):
             t_val = i * dt
             t = torch.full((B, horizon, self.action_dim), t_val, device=s_t.device)
-            v_t = self.velocity_field(x_t, t, s_t, s_target)
+            v_t = self.velocity_field(x_t, t, s_t, s_target, embodiment_id)
             x_t = x_t + v_t * dt
 
         return x_t

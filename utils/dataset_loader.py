@@ -90,6 +90,14 @@ class PretrainingDataset(Dataset):
         file_path = os.path.join(self.data_dir, fname)
         data = torch.load(file_path, map_location="cpu")
 
+        # 0 = Aloha, 1 = T-Rex, 2 = GR1 (Reserved for Stage 3)
+        if "aloha" in fname.lower():
+            emb_id = 0
+        elif "trex" in fname.lower():
+            emb_id = 1
+        else:
+            emb_id = 1  # Treat generic multi-DoF variant indices as default
+
         total_len = data["vision"].shape[0]
         end_idx = start_idx + self.window_size
 
@@ -125,6 +133,7 @@ class PretrainingDataset(Dataset):
                 "proprioception": proprio_padded[start_idx:end_idx],
                 "actions": actions_padded[start_idx:end_idx],
                 "text": data["text"],
+                "embodiment_id": torch.tensor(emb_id, dtype=torch.long),
             }
         else:
             padding_len = self.window_size - total_len
@@ -142,6 +151,7 @@ class PretrainingDataset(Dataset):
                 "proprioception": pad_tensor(proprio_padded),
                 "actions": pad_tensor(actions_padded),
                 "text": data["text"],
+                "embodiment_id": torch.tensor(emb_id, dtype=torch.long),
             }
 
         # Generate random masking indices
