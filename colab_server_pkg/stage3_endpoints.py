@@ -862,69 +862,84 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         s_target = s_target.detach()
         embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
 
-        # Generate action candidate with StepNFT exploration and ComboStoc timelines
-        a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
+        # BadWorld
+        # Generate 4 unique worst-case variations of our current belief state vector
+        ensemble_size = 4
+        mock_action_slice = torch.randn(1, joint_dim, device=device)
+        s_t_ensemble = state.stage3_models[
+            "attacker"
+        ].generate_stochastic_ensemble_pass(
+            state.stage3_models["flow_matcher"],
             s_t,
             s_target,
-            embodiment_id=embodiment_id,
+            mock_action_slice,
+            ensemble_size=ensemble_size,
+        )  # Output Shape: [4, 512]
+
+        # Expand targets and identifiers to evaluate the entire parallel batch together
+        s_target_expanded = s_target.expand(ensemble_size, -1)
+        embodiment_id_expanded = embodiment_id.expand(ensemble_size)
+        steering_timelines_expanded = steering_timelines.expand(ensemble_size, -1)
+
+        # Generate action candidate with StepNFT exploration and ComboStoc timelines
+        a_candidates = state.stage3_models["flow_matcher"].sample_with_steering(
+            s_t_ensemble,
+            s_target_expanded,
+            embodiment_id=embodiment_id_expanded,
             horizon=horizon,
             num_steps=10,
-            steering_timelines=steering_timelines,
+            steering_timelines=steering_timelines_expanded,
             step_nft_scale=0.05,
-        )
+        )  # Output Shape: [4, 8, 58]
         eta = 0.01
 
-        # Guidance mask (shape: [1, 464])
-        t_j = 1.0 - steering_timelines
+        # Guidance mask (shape: [4, 464])
+        t_j = 1.0 - steering_timelines_expanded
 
         for k in range(5):
-            a_candidate = a_candidate.clone().detach().requires_grad_(True)
+            a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
             # Flatten step layouts to match ActionAdapter's footprint contract
-            a_flat = a_candidate.view(1, -1)  # Shape: [1, 464]
+            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [4, 464]
 
             # Get the action representation and next latent state
             z_action = state.stage3_models["action_adapter"](a_flat)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
-            s_next_pred = state.stage3_models["predictor"](s_t, z_action_16)
 
+            s_t_expanded_for_pred = s_t.expand(ensemble_size, -1)
+            s_next_pred = state.stage3_models["predictor"](
+                s_t_expanded_for_pred, z_action_16
+            )
+
+            # [4, 1, 512]
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
-            s_target_expanded = s_target.unsqueeze(1)
+
+            # Batch expanded target vector
+            s_target_expanded_loop = s_target.expand(ensemble_size, -1).unsqueeze(1)
 
             s_goal_pred, _ = state.stage3_models["goal_attention"](
-                s_next_pred_expanded, s_target_expanded, s_target_expanded
+                s_next_pred_expanded, s_target_expanded_loop, s_target_expanded_loop
             )
             s_goal_pred = s_goal_pred.squeeze(1)
 
-            # Compute energy (distance to goal)
-            energy = torch.mean((s_goal_pred - s_target) ** 2)
-
-            # Compute gradient relative to the unrolled candidate
-            grad_a = torch.autograd.grad(energy, a_candidate)[0]
+            # Compute energy and gradient (distance to goal)
+            energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
+            grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
             # Masked Energy Guidance matching 3D coordinates
             with torch.no_grad():
-                # Reshape guidance token mask back to [1, 8, 58] dynamically
-                a_candidate = a_candidate - eta * grad_a * t_j.view_as(grad_a)
+                # Reshape guidance token mask back to [4, 8, 58] dynamically
+                a_candidates = a_candidates - eta * grad_a * t_j.view_as(grad_a)
 
-            a_candidate = a_candidate.clone().detach()
+            a_candidates = a_candidates.clone().detach()
 
         # Extract only the immediate multi-step prediction slice if needed,
         # or output the unrolled trajectory block back to your motor script loader!
-        final_action = a_candidate.detach()
-
-        # BadWorld attack for easy tasks
-        if payload.is_easy_task:
-            with torch.no_grad():
-                final_action = state.stage3_models[
-                    "attacker"
-                ].generate_perturbed_context(
-                    state.stage3_models["flow_matcher"], s_t, s_target, final_action
-                )
+        final_actions = a_candidates.detach()
 
         return {
-            "action": final_action.squeeze(0).cpu().numpy().tolist(),
-            "active_node_key": state.stage3_models["flow_matcher"],
+            "action": final_actions.cpu().numpy().tolist(),
+            "active_node_key": "skill_0",
         }
     except Exception as e:
         traceback.print_exc()
