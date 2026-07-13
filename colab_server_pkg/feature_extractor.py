@@ -507,9 +507,9 @@ def extract_stage3_obs_features(payload):
         if hasattr(payload, "frames")
         else {"world_center": payload.frame}
     )
+    obs_dict = {}
 
     # Process each view and extract features
-    view_features = {}
     for view_name, frame_str in frames_dict.items():
         features = extract_features_common(
             frame_str,
@@ -518,21 +518,15 @@ def extract_stage3_obs_features(payload):
             payload.ui_annotations,
             view_name=view_name,
         )
-        view_features[view_name] = features
+        obs_dict[view_name] = extract_single_view_stage3_obs_features(
+            frame_str,
+            payload.history_frames,
+            payload.text_prompt,
+            payload.ui_annotations,
+            payload.tactile,
+            payload.proprioception,
+            view_name=view_name,
+        )
+        obs_dict[view_name]["features"] = features
 
-    # Aggregate features across views (use world_center as primary for now)
-    primary_view = "world_center"
-    if primary_view not in view_features:
-        primary_view = list(view_features.keys())[0]
-
-    obs_dict = extract_single_view_stage3_obs_features(
-        frames_dict[primary_view],
-        payload.history_frames,
-        payload.text_prompt,
-        payload.ui_annotations,
-        payload.tactile,
-        payload.proprioception,
-        view_name=primary_view,
-    )
-    obs_dict["view_features"] = view_features
     return obs_dict

@@ -98,15 +98,12 @@ def construct_goal_states(obs_dict, ui_annotations):
     Uses OpenCV inpainting to erase the moving patch's original position, and applies a light
     Gaussian blur to the background. Works with both rectangular crops and circular segment masks.
     """
-    view_features = obs_dict.get("view_features", {})
-    if not view_features or not ui_annotations:
+    if not obs_dict or not ui_annotations:
         return {}
 
     goal_states_by_view = {}
     for view_name, view_annos in ui_annotations.items():
-        if view_name not in view_features:
-            continue
-        features = view_features[view_name]
+        features = obs_dict[view_name]["features"]
         pil_frame = features.get("pil_frame")
         if pil_frame is None:
             continue
@@ -739,8 +736,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         save_stage3_debug_plots(payload, obs_dict, goal_images)
 
         # Extract encoder representations for goal states
-        goal_latents = []
+        goal_latents = {}
+        obs_latents = {}
         for view_name, images in goal_images.items():
+            goal_latents[view_name] = []
             for goal_img in images:
                 # Encode PIL goal_img to base64 string
                 buffered = io.BytesIO()
@@ -761,14 +760,26 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 # Pass features through respective adapters and MSAT under torch.no_grad()
                 with torch.no_grad():
                     goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                    goal_latents.append(goal_latent)
+                    goal_latents[view_name].append(goal_latent)
 
-        # Fuse goal latents by averaging across all combinations
-        if goal_latents:
-            s_target = torch.stack(goal_latents, dim=0).mean(dim=0)
-        else:
-            with torch.no_grad():
-                s_target = encode_obs_to_latent(obs_dict, state)
+            obs_latents[view_name] = encode_obs_to_latent(obs_dict[view_name], state)
+
+        print(f"Observation Views: {obs_latents.keys()}")
+        print(
+            f"Observation Latent Shapes: {[obs_latents[view_name].shape for view_name in obs_latents]}"
+        )
+        print(f"Goal Views: {goal_latents.keys()}")
+        print(
+            f"Goal Latent Shapes: {[goal_latents[view_name].shape for view_name in goal_latents]}"
+        )
+
+        return {
+            "action": [0.0] * 32,
+            "active_node_key": "mock_node",
+            "combined_mask_224": obs_dict["task_isolated_features"][
+                "combined_mask_224"
+            ],
+        }
 
         with torch.no_grad():
             # Multi-view fusion: extract features from all views
