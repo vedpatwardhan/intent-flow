@@ -764,31 +764,31 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Extract encoder representations for goal states
         goal_latents = {}
         obs_latents = {}
-        for view_name, images in goal_images.items():
-            goal_latents[view_name] = []
-            for goal_img in images:
-                # Encode PIL goal_img to base64 string
-                buffered = io.BytesIO()
-                goal_img.save(buffered, format="JPEG")
-                goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-                # Extract goal observation features using the low-level single-view function directly
-                goal_obs_dict = extract_single_view_stage3_obs_features(
-                    goal_img_str,
-                    payload.history_frames,
-                    payload.text_prompt,
-                    payload.ui_annotations,
-                    payload.tactile,
-                    payload.proprioception,
-                    view_name=view_name,
-                )
-
-                # Pass features through respective adapters and MSAT under torch.no_grad()
-                with torch.no_grad():
-                    goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                    goal_latents[view_name].append(goal_latent)
-
+        for view_name, image in obs_dict.items():
             obs_latents[view_name] = encode_obs_to_latent(obs_dict[view_name], state)
+            if view_name in goal_images:
+                goal_latents[view_name] = []
+                for goal_img in goal_images[view_name]:
+                    # Encode PIL goal_img to base64 string
+                    buffered = io.BytesIO()
+                    goal_img.save(buffered, format="JPEG")
+                    goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+                    # Extract goal observation features using the low-level single-view function directly
+                    goal_obs_dict = extract_single_view_stage3_obs_features(
+                        goal_img_str,
+                        payload.history_frames,
+                        payload.text_prompt,
+                        payload.ui_annotations,
+                        payload.tactile,
+                        payload.proprioception,
+                        view_name=view_name,
+                    )
+
+                    # Pass features through respective adapters and MSAT under torch.no_grad()
+                    with torch.no_grad():
+                        goal_latent = encode_obs_to_latent(goal_obs_dict, state)
+                        goal_latents[view_name].append(goal_latent)
 
         print(f"Observation Views: {obs_latents.keys()}")
         print(
@@ -796,7 +796,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         )
         print(f"Goal Views: {goal_latents.keys()}")
         print(
-            f"Goal Latent Shapes: {[goal_latents[view_name].shape for view_name in goal_latents]}"
+            f"Goal Latent Shapes: {[goal_latents[view_name][0].shape for view_name in goal_latents]}"
         )
 
         return {
