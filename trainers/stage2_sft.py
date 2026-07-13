@@ -42,7 +42,15 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.pt_adapter = PointNeXtAdapter(d_in=384)
         self.vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"])
         self.tactile_adapter = TactileAdapter()
-        self.action_adapter = ActionAdapter(d_in=config["model"]["action_dim"])
+
+        # For the global CASA loss: expects the entire unrolled trajectory chunk (e.g., 7 * 58 = 406)
+        trajectory_dim = (config["model"]["horizon"] - 1) * config["model"][
+            "action_dim"
+        ]
+        self.action_adapter = ActionAdapter(d_in=trajectory_dim)
+
+        # For the diagnostics loop: expects a single step slice (e.g., 58)
+        self.single_action_adapter = ActionAdapter(d_in=config["model"]["action_dim"])
         self.state_adapter = ActionAdapter(d_in=config["model"]["state_dim"])
 
         self.msat = MultiStreamActionTransformer(
@@ -68,18 +76,13 @@ class Stage2SFTSimplified(pl.LightningModule):
         vggt = batch["vggt"]
         tactile = batch["tactile"]
         proprioception = batch["proprioception"]
-        actions = batch["actions"]
+        actions = batch["actions"]  # Expected Shape: [B, Horizon, Action_Dim]
 
         batch_size = vision.size(0)
         horizon = vision.size(1)
+        pred_horizon = horizon - 1  # Deterministic validation window slice
 
-        step_losses = []
-        casa_losses = []
-        dyn_losses = []
-        no_op_ratios = []
-        drifts = []
-
-        # Compute s_target (goal configuration state) at the end of the window (horizon - 1)
+        # --- 1. Goal Configuration State (s_target) ---
         t_target = horizon - 1
         vis_tok_tgt = self.vis_adapter(vision[:, t_target, :])
         txt_tok_tgt = self.txt_adapter(text.squeeze(1))
@@ -98,104 +101,101 @@ class Stage2SFTSimplified(pl.LightningModule):
         }
         s_target = self.msat(modality_dict_tgt)
 
-        # Iterate step-by-step to compute CFM + CASA alignment
-        for t in range(horizon - 1):
-            # ComboStoc: Asynchronous multi-stream masking so we're can deal with
-            # sensor failures, occlusions and lazy modality dominance.
-            noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
-            mask_vis = (
-                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
-            ).float()
-            mask_pt = (
-                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
-            ).float()
-            mask_tac = (
-                torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
-            ).float()
+        # --- 2. Baseline Configuration State (s_0) ---
+        noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
+        mask_vis = (
+            torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
+        ).float()
+        mask_pt = (
+            torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
+        ).float()
+        mask_tac = (
+            torch.rand(batch_size, 1, 1, device=self.device) > noise_ratio
+        ).float()
 
-            vis_tok = self.vis_adapter(vision[:, t, :]) * mask_vis
-            txt_tok = self.txt_adapter(text.squeeze(1))
-            pt_tok = self.pt_adapter(pointnext[:, t, :]) * mask_pt
-            vggt_tok = self.vggt_adapter(vggt[:, t, :])
-            tactile_emb = self.tactile_adapter(tactile[:, t, :, :]) * mask_tac
-            proprio_tok = self.state_adapter(proprioception[:, t, :])
+        vis_tok = self.vis_adapter(vision[:, 0, :]) * mask_vis
+        txt_tok = self.txt_adapter(text.squeeze(1))
+        pt_tok = self.pt_adapter(pointnext[:, 0, :]) * mask_pt
+        vggt_tok = self.vggt_adapter(vggt[:, 0, :])
+        tactile_emb = self.tactile_adapter(tactile[:, 0, :, :]) * mask_tac
+        proprio_tok = self.state_adapter(proprioception[:, 0, :])
 
-            modality_dict = {
-                "vision": vis_tok,
-                "text": txt_tok,
-                "pointnext": pt_tok,
-                "vggt": vggt_tok,
-                "tactile": tactile_emb,
-                "proprioception": proprio_tok,
-            }
-            s_t = self.msat(modality_dict)
+        modality_dict = {
+            "vision": vis_tok,
+            "text": txt_tok,
+            "pointnext": pt_tok,
+            "vggt": vggt_tok,
+            "tactile": tactile_emb,
+            "proprioception": proprio_tok,
+        }
+        s_0 = self.msat(modality_dict)
 
-            # Ground truth joint target at step t
-            a_target = actions[:, t, :]
+        # --- 3. Flow Matching Trajectory Chunk Optimization ---
+        a_trajectory = actions[:, :pred_horizon, :]  # Shape: [B, pred_horizon, 58]
+        cfm_loss = self.flow_matcher.get_cfm_loss(a_trajectory, s_0, s_target)
 
-            # CFM Loss with dual-state conditioning
-            cfm_loss = self.flow_matcher.get_cfm_loss(a_target, s_t, s_target)
+        # --- 4. Global Trajectory Alignment Bounding (CASA) ---
+        z_s = s_0 / (s_0.norm(dim=-1, keepdim=True) + 1e-8)
 
-            # CASA Contrastive Alignment (InfoNCE)
-            # Projects target action and state into unified latent alignment space
-            z_s = s_t / (s_t.norm(dim=-1, keepdim=True) + 1e-8)
-            z_a = self.action_adapter(a_target)
-            z_a = z_a / (z_a.norm(dim=-1, keepdim=True) + 1e-8)
+        # Enforce exact flattened shape mapping for the action trajectory chunk
+        a_flat = a_trajectory.reshape(
+            batch_size, pred_horizon * self.config["model"]["action_dim"]
+        )
+        z_a = self.action_adapter(a_flat)
+        z_a = z_a / (z_a.norm(dim=-1, keepdim=True) + 1e-8)
 
-            # InfoNCE Similarity Matrix
-            sim_matrix = torch.matmul(z_s, z_a.T) / 0.07  # temperature=0.07
-            labels = torch.arange(batch_size, device=self.device)
-            casa_loss = F.cross_entropy(sim_matrix, labels)
-            casa_losses.append(casa_loss)
+        sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
+        labels = torch.arange(batch_size, device=self.device)
+        casa_loss = F.cross_entropy(sim_matrix, labels)
 
-            step_losses.append(cfm_loss)
+        # --- 5. Sequential World Model Diagnostics via Predictor ---
+        with torch.no_grad():
+            s_sequence = []
+            z_actions = []
 
-            # --- STAGE 2 DYNAMICS DIAGNOSTICS ---
-            with torch.no_grad():
-                # Get next ground-truth state embedding without masking
-                vis_tok_next = self.vis_adapter(vision[:, t + 1, :])
-                txt_tok_next = self.txt_adapter(text.squeeze(1))
-                pt_tok_next = self.pt_adapter(pointnext[:, t + 1, :])
-                vggt_tok_next = self.vggt_adapter(vggt[:, t + 1, :])
-                tactile_emb_next = self.tactile_adapter(tactile[:, t + 1, :, :])
-                proprio_tok_next = self.state_adapter(proprioception[:, t + 1, :])
+            for t in range(1, horizon):
+                # Target Future Steps State Extractions
+                vis_tok_n = self.vis_adapter(vision[:, t, :])
+                txt_tok_n = self.txt_adapter(text.squeeze(1))
+                pt_tok_n = self.pt_adapter(pointnext[:, t, :])
+                vggt_tok_n = self.vggt_adapter(vggt[:, t, :])
+                tactile_emb_n = self.tactile_adapter(tactile[:, t, :, :])
+                proprio_tok_n = self.state_adapter(proprioception[:, t, :])
 
-                modality_dict_next = {
-                    "vision": vis_tok_next,
-                    "text": txt_tok_next,
-                    "pointnext": pt_tok_next,
-                    "vggt": vggt_tok_next,
-                    "tactile": tactile_emb_next,
-                    "proprioception": proprio_tok_next,
+                modality_dict_n = {
+                    "vision": vis_tok_n,
+                    "text": txt_tok_n,
+                    "pointnext": pt_tok_n,
+                    "vggt": vggt_tok_n,
+                    "tactile": tactile_emb_n,
+                    "proprioception": proprio_tok_n,
                 }
-                s_next = self.msat(modality_dict_next)
+                s_sequence.append(self.msat(modality_dict_n))
 
-                # Predict future state
-                z_latent = self.action_adapter(a_target)
-                z_latent_16 = self.action_down_proj(z_latent)
-                s_next_pred = self.predictor(s_t, z_latent_16)
+                # Slices out single steps to run physical diagnostics frame-by-frame
+                # Swap out 'self.state_adapter' for 'self.single_action_adapter'
+                z_act = self.single_action_adapter(a_trajectory[:, t - 1, :])
+                z_actions.append(self.action_down_proj(z_act))
 
-                # Transition MSE loss
-                dyn_loss = F.mse_loss(s_next_pred, s_next).item()
-                dyn_losses.append(dyn_loss)
+            s_ground_truth_seq = torch.stack(
+                s_sequence, dim=1
+            )  # [B, pred_horizon, latent_dim]
+            z_actions_seq = torch.stack(z_actions, dim=1)  # [B, pred_horizon, 16]
 
-                # No-Op Loss Ratio
-                no_op_loss = F.mse_loss(s_t, s_next).item()
-                no_op_ratios.append(dyn_loss / max(no_op_loss, 1e-6))
+            # Deterministic rollout execution call
+            s_pred_seq = self.predictor.rollout(s_0, z_actions_seq)
+            dyn_loss = F.mse_loss(s_pred_seq, s_ground_truth_seq).item()
 
-                # Action Perturbation Drift
-                z_random = torch.randn_like(z_latent_16)
-                s_next_pred_rand = self.predictor(s_t, z_random)
-                drift = F.mse_loss(s_next_pred, s_next_pred_rand).item()
-                drifts.append(drift)
+            no_op_loss = F.mse_loss(
+                s_0.unsqueeze(1).expand(-1, pred_horizon, -1), s_ground_truth_seq
+            ).item()
+            noop_ratio = dyn_loss / max(no_op_loss, 1e-6)
 
-        mean_step_loss = torch.stack(step_losses).mean()
-        mean_casa_loss = torch.stack(casa_losses).mean()
-        mean_dyn_loss = sum(dyn_losses) / len(dyn_losses)
-        mean_noop = sum(no_op_ratios) / len(no_op_ratios)
-        mean_drift = sum(drifts) / len(drifts)
+            z_random = torch.randn_like(z_actions_seq)
+            s_pred_rand = self.predictor.rollout(s_0, z_random)
+            drift = F.mse_loss(s_pred_seq, s_pred_rand).item()
 
-        return mean_step_loss, mean_casa_loss, mean_dyn_loss, mean_noop, mean_drift
+        return cfm_loss, casa_loss, dyn_loss, noop_ratio, drift
 
     def training_step(self, batch, batch_idx):
         loss_cfm, loss_casa, loss_dyn, noop, drift = self(batch)
@@ -239,6 +239,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             + list(self.tactile_adapter.parameters())
             + list(self.state_adapter.parameters())
             + list(self.action_adapter.parameters())
+            + list(self.single_action_adapter.parameters())
             + list(self.action_down_proj.parameters())
             + list(self.msat.parameters())
             + list(self.flow_matcher.parameters())

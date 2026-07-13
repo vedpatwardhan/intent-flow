@@ -1,19 +1,16 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class ComboStocTimeEmbedding(nn.Module):
-    """
-    Vectorized multi-dimensional time embedding layer that preserves individual
-    joint timeline steps without structural python loop execution bottlenecks.
-    """
+    """Strict 3D grid time embedding layer with no fallback shapes."""
 
     def __init__(self, action_dim, time_dim):
         super().__init__()
         self.action_dim = action_dim
         self.time_dim = time_dim
 
-        # Parallel group projection: maps action_dim channels independently
         self.vectorized_proj1 = nn.Conv1d(
             in_channels=action_dim,
             out_channels=action_dim * (time_dim // 2),
@@ -28,78 +25,76 @@ class ComboStocTimeEmbedding(nn.Module):
             groups=action_dim,
         )
 
-        # Combined timing representation reduction layer
-        self.reduction = nn.Linear(action_dim * time_dim, time_dim)
-
     def forward(self, t):
-        # 1. Device and shape alignment wrapper
-        if t.size(-1) == 1:
-            t = t.repeat(1, self.action_dim)
+        # Strict Input Contract: [B, H, action_dim]
+        B, H, D = t.shape
 
-        # Ensure correct shape configuration for grouped Conv1D processing: [B, ActionDim, 1]
-        t_input = t.unsqueeze(-1)
+        # Flatten sequence length into batch dimension to process via Conv1D channels
+        t_input = t.reshape(B * H, D).unsqueeze(-1)  # [B*H, D, 1]
 
-        # 2. Fully vectorized parallel channel computation
         h = self.vectorized_proj1(t_input)
         h = self.act(h)
-        h = self.vectorized_proj2(h)  # [B, ActionDim * TimeDim, 1]
+        h = self.vectorized_proj2(h)  # [B*H, D * TimeDim, 1]
 
-        # Reshape and flatten channel features securely
-        flat_embed = h.squeeze(-1)
-        return self.reduction(flat_embed)
+        # Reshape back to separate sequence and time features natively
+        time_features = h.view(B, H, self.action_dim, self.time_dim)
+        return time_features  # Output: [B, H, action_dim, time_dim]
 
 
-class HierarchicalDiTBlock(nn.Module):
-    """
-    A true hierarchical block that refines the continuous trajectory state
-    conditioned on cross-modal tokens and multi-timeline coordinates.
-    """
+class SpatialTemporalDiTBlock(nn.Module):
+    """Strict hierarchical sequence block executing over explicit 3D layouts."""
 
-    def __init__(self, in_dim, cond_dim, hidden_dim):
+    def __init__(self, joint_dim, cond_dim, hidden_dim):
         super().__init__()
-        self.in_proj = nn.Linear(in_dim, hidden_dim)
+        self.in_proj = nn.Linear(joint_dim, hidden_dim)
         self.mod_layer = nn.Sequential(
             nn.Linear(cond_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
-        self.norm = nn.LayerNorm(hidden_dim)
-        self.out_proj = nn.Linear(hidden_dim, in_dim)
+        self.temporal_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim, num_heads=4, batch_first=True
+        )
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, joint_dim)
 
     def forward(self, x, cond):
-        h_x = self.in_proj(x)
-        modulation = self.mod_layer(cond)
-        h = self.norm(h_x + modulation)
-        return x + self.out_proj(h)
+        # x: [B, H, joint_dim], cond: [B, cond_dim]
+        B, H, _ = x.shape
+
+        h_x = self.in_proj(x)  # [B, H, hidden_dim]
+
+        # Explicit unsqueeze and broadcast across sequence steps without generic dimensions
+        modulation = self.mod_layer(cond).view(B, 1, -1).expand(-1, H, -1)
+
+        h_modulated = self.norm1(h_x + modulation)
+        attn_out, _ = self.temporal_attn(h_modulated, h_modulated, h_modulated)
+
+        h_x = h_x + attn_out
+        h_out = self.norm2(h_x + modulation)
+        return x + self.out_proj(h_out)
 
 
 class ActionVelocityField(nn.Module):
-    """
-    Hierarchical Block Diffusion Network with explicit sequential block chaining:
-    - Block 1 (Macro Anchors) ──► Block 2 (Primitives) ──► Block 3 (Trajectories)
-    """
+    """Continuous flow field network with deterministic sequence dimensions."""
 
     def __init__(
-        self, action_dim=12, state_dim=512, time_dim=64, hidden_dim=256, config=None
+        self, action_dim=58, state_dim=512, time_dim=16, hidden_dim=256, config=None
     ):
         super().__init__()
-        dit_config = config.get("stage2", {}) if config else {}
-        h_dim_1 = dit_config.get("dit_hidden_dim_1", hidden_dim)
-        h_dim_2 = dit_config.get("dit_hidden_dim_2", hidden_dim)
-        h_dim_3 = dit_config.get("dit_hidden_dim_3", hidden_dim)
-
+        self.action_dim = action_dim
         self.time_mlp = ComboStocTimeEmbedding(action_dim=action_dim, time_dim=time_dim)
-        cond_dim = state_dim * 2 + time_dim
+        cond_dim = state_dim * 2 + action_dim * time_dim
 
-        # Structural blocks mapping to EAR / IAR pipeline paradigms
-        self.block1 = HierarchicalDiTBlock(
-            in_dim=action_dim, cond_dim=cond_dim, hidden_dim=h_dim_1
+        self.block1 = SpatialTemporalDiTBlock(
+            joint_dim=action_dim, cond_dim=cond_dim, hidden_dim=hidden_dim
         )
-        self.block2 = HierarchicalDiTBlock(
-            in_dim=action_dim, cond_dim=cond_dim, hidden_dim=h_dim_2
+        self.block2 = SpatialTemporalDiTBlock(
+            joint_dim=action_dim, cond_dim=cond_dim, hidden_dim=hidden_dim
         )
-        self.block3 = HierarchicalDiTBlock(
-            in_dim=action_dim, cond_dim=cond_dim, hidden_dim=h_dim_3
+        self.block3 = SpatialTemporalDiTBlock(
+            joint_dim=action_dim, cond_dim=cond_dim, hidden_dim=hidden_dim
         )
 
         self.out_net = nn.Sequential(
@@ -110,10 +105,16 @@ class ActionVelocityField(nn.Module):
         )
 
     def forward(self, x_t, t, s_t, s_target):
-        t_embed = self.time_mlp(t)
-        cond = torch.cat([s_t, s_target, t_embed], dim=-1)
+        B, H, _ = x_t.shape
 
-        # Autoregressive Chaining refinement loop
+        t_embed = self.time_mlp(t)  # [B, H, action_dim, time_dim]
+
+        # Mean pool temporal coordinates across sequence window to unify conditioning context
+        t_flat = t_embed.mean(dim=1).view(B, -1)  # [B, action_dim * time_dim]
+
+        # [B, state_dim + state_dim + action_dim * time_dim]
+        cond = torch.cat([s_t, s_target, t_flat], dim=-1)
+
         macro_anchors = self.block1(x_t, cond)
         motion_primitives = self.block2(macro_anchors, cond)
         joint_trajectory = self.block3(motion_primitives, cond)
@@ -122,7 +123,7 @@ class ActionVelocityField(nn.Module):
 
 
 class CLAPFlowMatcher(nn.Module):
-    def __init__(self, action_dim=12, state_dim=512, hidden_dim=256, config=None):
+    def __init__(self, action_dim=58, state_dim=512, hidden_dim=256, config=None):
         super().__init__()
         self.velocity_field = ActionVelocityField(
             action_dim, state_dim, hidden_dim=hidden_dim, config=config
@@ -130,13 +131,12 @@ class CLAPFlowMatcher(nn.Module):
         self.action_dim = action_dim
 
     def get_cfm_loss(self, x_1, s_t, s_target):
-        batch_size = x_1.size(0)
+        B, H, D = x_1.shape
         x_0 = torch.randn_like(x_1)
 
-        # ComboStoc independent sampling target layout
-        t = torch.rand(batch_size, self.action_dim, device=x_1.device)
+        # ComboStoc: Strict 3D noise time allocation matching targets exactly
+        t = torch.rand(B, H, D, device=x_1.device)
 
-        # Asynchronous multi-timeline path interpolation
         x_t = t * x_1 + (1.0 - t) * x_0
         target_velocity = x_1 - x_0
 
@@ -144,16 +144,15 @@ class CLAPFlowMatcher(nn.Module):
         return torch.mean((pred_velocity - target_velocity) ** 2)
 
     @torch.no_grad()
-    def sample(self, s_t, s_target, num_steps=10):
-        batch_size = s_t.size(0)
-        # Ensure base noise starts on identical hardware device target
-        x_t = torch.randn(batch_size, self.action_dim, device=s_t.device)
+    def sample(self, s_t, s_target, horizon=7, num_steps=10):
+        # Strict execution contract matching the validation split boundaries
+        B = s_t.size(0)
+        x_t = torch.randn(B, horizon, self.action_dim, device=s_t.device)
         dt = 1.0 / num_steps
 
         for i in range(num_steps):
             t_val = i * dt
-            # Safety Anchoring: Ensure time vectors explicitly lock onto identical active hardware devices
-            t = torch.full((batch_size, 1), t_val, device=s_t.device)
+            t = torch.full((B, horizon, self.action_dim), t_val, device=s_t.device)
             v_t = self.velocity_field(x_t, t, s_t, s_target)
             x_t = x_t + v_t * dt
 
