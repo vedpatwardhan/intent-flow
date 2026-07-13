@@ -11,11 +11,13 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
   const [isMaximized, setIsMaximized] = useState(false);
   const [selectedAnnotation, setSelectedAnnotation] = useState(null); // { type: 'segments'|'vectors'|'crops', index: number }
 
-  const [annotations, setAnnotations] = useState({
+  const [annotationsByCam, setAnnotationsByCam] = useState({});
+
+  const annotations = annotationsByCam[activeCam] || {
     segments: [],
     vectors: [],
     crops: []
-  });
+  };
 
   const tools = [
     { id: 'select', label: 'Select', icon: MousePointer, color: 'var(--accent-primary, #6366f1)' },
@@ -27,24 +29,40 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
   const activeFrame = frames?.[activeCam];
 
   // Helper to map and synchronize annotations to the 224x224 space for model processing
-  const syncWithBackend = (nextAnnotations) => {
-    const scaled = {
-      segments: nextAnnotations.segments.map(seg => ({
-        x: Math.round((seg.x / 480) * 224),
-        y: Math.round((seg.y / 480) * 224)
-      })),
-      crops: nextAnnotations.crops.map(crop => ({
-        x: Math.round((crop.x / 480) * 224),
-        y: Math.round((crop.y / 480) * 224),
-        width: Math.round((crop.width / 480) * 224),
-        height: Math.round((crop.height / 480) * 224)
-      })),
-      vectors: nextAnnotations.vectors.map(vec => ({
-        start: [Math.round((vec.start[0] / 480) * 224), Math.round((vec.start[1] / 480) * 224)],
-        end: [Math.round((vec.end[0] / 480) * 224), Math.round((vec.end[1] / 480) * 224)]
-      }))
-    };
+  const syncWithBackend = (nextByCam) => {
+    const scaled = {};
+    Object.entries(nextByCam).forEach(([camName, annos]) => {
+      scaled[camName] = {
+        segments: annos.segments.map(seg => ({
+          x: Math.round((seg.x / 480) * 224),
+          y: Math.round((seg.y / 480) * 224)
+        })),
+        crops: annos.crops.map(crop => ({
+          x: Math.round((crop.x / 480) * 224),
+          y: Math.round((crop.y / 480) * 224),
+          width: Math.round((crop.width / 480) * 224),
+          height: Math.round((crop.height / 480) * 224)
+        })),
+        vectors: annos.vectors.map(vec => ({
+          start: [Math.round((vec.start[0] / 480) * 224), Math.round((vec.start[1] / 480) * 224)],
+          end: [Math.round((vec.end[0] / 480) * 224), Math.round((vec.end[1] / 480) * 224)]
+        }))
+      };
+    });
     onInteraction({ type: 'sync_annotations', annotations: scaled });
+  };
+
+  const updateAnnotations = (updater) => {
+    setAnnotationsByCam(prev => {
+      const current = prev[activeCam] || { segments: [], vectors: [], crops: [] };
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      const updated = {
+        ...prev,
+        [activeCam]: next
+      };
+      syncWithBackend(updated);
+      return updated;
+    });
   };
 
   // Helper to snap coordinates to segment points, crop centers, and crop corners in 480x480 space
@@ -177,14 +195,10 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
         x: Math.round((pos.x / 480) * 224),
         y: Math.round((pos.y / 480) * 224)
       });
-      setAnnotations(prev => {
-        const next = {
-          ...prev,
-          segments: [...prev.segments, { x: pos.x, y: pos.y }]
-        };
-        syncWithBackend(next);
-        return next;
-      });
+      updateAnnotations(prev => ({
+        ...prev,
+        segments: [...prev.segments, { x: pos.x, y: pos.y }]
+      }));
     }
   };
 
@@ -209,14 +223,10 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
       };
       const distance = Math.hypot(vector.end[0] - vector.start[0], vector.end[1] - vector.start[1]);
       if (distance > 10) {
-        setAnnotations(prev => {
-          const next = {
-            ...prev,
-            vectors: [...prev.vectors, vector]
-          };
-          syncWithBackend(next);
-          return next;
-        });
+        updateAnnotations(prev => ({
+          ...prev,
+          vectors: [...prev.vectors, vector]
+        }));
       }
     } else if (activeTool === 'crop') {
       const crop = {
@@ -226,20 +236,16 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
         height: Math.abs(currentPos.y - startPos.y)
       };
       if (crop.width > 10 && crop.height > 10) {
-        setAnnotations(prev => {
-          const next = {
-            ...prev,
-            crops: [...prev.crops, crop]
-          };
-          syncWithBackend(next);
-          return next;
-        });
+        updateAnnotations(prev => ({
+          ...prev,
+          crops: [...prev.crops, crop]
+        }));
       }
     }
   };
 
   const clearAnnotations = () => {
-    setAnnotations({ segments: [], vectors: [], crops: [] });
+    setAnnotationsByCam({});
     setSelectedAnnotation(null);
     onInteraction({ type: 'clear_annotations' });
   };
@@ -248,15 +254,13 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
     if (!selectedAnnotation) return;
     const { type, index } = selectedAnnotation;
 
-    setAnnotations(prev => {
+    updateAnnotations(prev => {
       const updatedList = [...prev[type]];
       updatedList.splice(index, 1);
-      const next = {
+      return {
         ...prev,
         [type]: updatedList
       };
-      syncWithBackend(next);
-      return next;
     });
     setSelectedAnnotation(null);
   };

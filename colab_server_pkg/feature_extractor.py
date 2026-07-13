@@ -327,10 +327,9 @@ def extract_features_common(
     dino_subspace = np.zeros((14, 14), dtype=np.float32)
     pointnext_isolated = []
 
-    if ui_annotations and (
-        ui_annotations.get("crops") or ui_annotations.get("segments")
-    ):
-        for crop in ui_annotations.get("crops", []):
+    view_annos = (ui_annotations or {}).get(view_name, {})
+    if view_annos and (view_annos.get("crops") or view_annos.get("segments")):
+        for crop in view_annos.get("crops", []):
             x_start = int((crop["x"] / 224) * 14)
             y_start = int((crop["y"] / 224) * 14)
             x_end = int(((crop["x"] + crop["width"]) / 224) * 14)
@@ -343,7 +342,7 @@ def extract_features_common(
             ch_val = int(crop["height"])
             combined_mask_224[cy : cy + ch_val, cx : cx + cw] = 1.0
 
-        sam_mask, sam_mask_224 = get_segment_masks(ui_annotations, pil_frame)
+        sam_mask, sam_mask_224 = get_segment_masks(view_annos, pil_frame)
         combined_mask = np.maximum(combined_mask, sam_mask)
         combined_mask_224 = np.maximum(combined_mask_224, sam_mask_224)
 

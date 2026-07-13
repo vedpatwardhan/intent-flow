@@ -139,7 +139,7 @@ click_type = None
 text_prompt = "cube block"
 text_modifier = None
 frame_history = deque(maxlen=5)
-ui_annotations = {"crops": [], "vectors": [], "segments": []}
+ui_annotations = {}
 
 colab_is_processing = False
 needs_colab_processing = False
@@ -479,17 +479,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     print("Cleared active camera click selections.")
 
                 elif payload.get("type") == "add_crop":
-                    ui_annotations["crops"].append(payload["coordinates"])
+                    cam = payload.get("camera", "world_center")
+                    if cam not in ui_annotations:
+                        ui_annotations[cam] = {
+                            "crops": [],
+                            "vectors": [],
+                            "segments": [],
+                        }
+                    ui_annotations[cam]["crops"].append(payload["coordinates"])
                     needs_colab_processing = True
-                    print(f"Added crop annotation: {payload['coordinates']}")
+                    print(f"Added crop annotation on {cam}: {payload['coordinates']}")
 
                 elif payload.get("type") == "add_vector":
-                    ui_annotations["vectors"].append(payload["coordinates"])
+                    cam = payload.get("camera", "world_center")
+                    if cam not in ui_annotations:
+                        ui_annotations[cam] = {
+                            "crops": [],
+                            "vectors": [],
+                            "segments": [],
+                        }
+                    ui_annotations[cam]["vectors"].append(payload["coordinates"])
                     needs_colab_processing = True
-                    print(f"Added vector annotation: {payload['coordinates']}")
+                    print(f"Added vector annotation on {cam}: {payload['coordinates']}")
 
                 elif payload.get("type") == "clear_annotations":
-                    ui_annotations = {"crops": [], "vectors": [], "segments": []}
+                    ui_annotations = {}
                     needs_colab_processing = True
                     print("Cleared all UI annotations")
 
