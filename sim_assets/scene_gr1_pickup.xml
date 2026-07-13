@@ -1,0 +1,30 @@
+<mujoco model="gr1_pickup_scene">
+  <include file="gr1t1_fourier_hand_6dof.xml"/>
+
+  <compiler meshdir="." autolimits="true"/>
+
+  <visual>
+    <headlight ambient=".4 .4 .4" diffuse=".8 .8 .8" specular="0.1 0.1 0.1"/>
+    <map znear="0.001"/>
+    <global offwidth="1920" offheight="1080"/>
+  </visual>
+
+  <worldbody>
+    <body name="table" pos="0.45 0 0.4">
+      <geom type="box" size="0.2 0.25 0.4" rgba="0.5 0.5 0.5 1" contype="1" conaffinity="3" friction="2 0.05 0.01" solref="0.005 1" solimp="0.99 0.99 0.001" />
+      <site name="workspace_center" pos="0 0 0.4" size="0.01" rgba="0 0 0 0"/> <!-- Target for cameras -->
+    </body>
+
+    <body name="cube" pos="0.5 0.0 0.82">
+      <freejoint name="cube_joint"/>
+      <geom type="box" size="0.02 0.02 0.02" rgba="1 0 0 1" contype="1" conaffinity="3" mass="0.05" friction="5 0.05 0.01" solref="0.005 1" solimp="0.99 0.99 0.001" />
+    </body>
+
+    <!-- 5 Cameras with Absolute Orientation (Using xyaxes for robust schema alignment) -->
+    <camera name="world_top" pos="0.45 0 1.8" xyaxes="0 -1 0 1 0 0" fovy="60"/>
+    <camera name="world_left" pos="0.45 -1.2 1.1" xyaxes="1 0 0 0 0.15 1" fovy="60"/>
+    <camera name="world_right" pos="0.45 1.2 1.1" xyaxes="-1 0 0 0 -0.15 1" fovy="60"/>
+    <camera name="world_center" pos="1.6 0 1.1" xyaxes="0 1 0 -0.15 0 1" fovy="60"/>
+    <!-- Wrist camera is handled programmatically in renderer -->
+  </worldbody>
+</mujoco>
