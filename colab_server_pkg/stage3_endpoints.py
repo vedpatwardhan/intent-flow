@@ -81,13 +81,27 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
     vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
     tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
 
+    # Pad proprioception to 58 dimensions and project using state_adapter
+    proprio = obs_dict["proprioception"]
+    if proprio.size(-1) < 58:
+        proprio = torch.cat(
+            [
+                proprio,
+                torch.zeros(
+                    proprio.size(0), 58 - proprio.size(-1), device=proprio.device
+                ),
+            ],
+            dim=-1,
+        )
+    proprio_tok = state.stage3_models["state_adapter"](proprio)
+
     modality_dict = {
         "vision": vis_tok,
         "text": txt_tok,
         "pointnext": pt_tok,
         "vggt": vggt_tok,
         "tactile": tactile_emb,
-        "proprioception": obs_dict["proprioception"],
+        "proprioception": proprio_tok,
     }
     return state.stage3_models["msat"](modality_dict)
 
@@ -329,6 +343,9 @@ def ensure_stage3_models():
     state.stage3_models["action_adapter"] = ActionAdapter(
         d_in=action_dim, d_out=512
     ).to(device)
+    state.stage3_models["state_adapter"] = ActionAdapter(
+        d_in=config["model"]["state_dim"], d_out=512
+    ).to(device)
     state.stage3_models["action_down_proj"] = torch.nn.Linear(512, 16).to(device)
 
     state.stage3_models["msat"] = MultiStreamActionTransformer(
@@ -390,6 +407,10 @@ def ensure_stage3_models():
         state.stage3_models["action_adapter"].load_state_dict(
             checkpoint["action_adapter"]
         )
+        if "state_adapter" in checkpoint:
+            state.stage3_models["state_adapter"].load_state_dict(
+                checkpoint["state_adapter"]
+            )
         state.stage3_models["action_down_proj"].load_state_dict(
             checkpoint["action_down_proj"]
         )
@@ -414,6 +435,10 @@ def ensure_stage3_models():
         state.stage3_models["action_adapter"].load_state_dict(
             checkpoint["action_adapter"]
         )
+        if "state_adapter" in checkpoint:
+            state.stage3_models["state_adapter"].load_state_dict(
+                checkpoint["state_adapter"]
+            )
         state.stage3_models["action_down_proj"].load_state_dict(
             checkpoint["action_down_proj"]
         )
@@ -427,6 +452,7 @@ def ensure_stage3_models():
         + list(state.stage3_models["predictor"].parameters())
         + list(state.stage3_models["discriminator"].parameters())
         + list(state.stage3_models["action_adapter"].parameters())
+        + list(state.stage3_models["state_adapter"].parameters())
         + list(state.stage3_models["action_down_proj"].parameters())
         + list(state.stage3_models["goal_attention"].parameters())
         + list(state.stage3_models["view_fusion"].parameters()),
@@ -1072,6 +1098,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
                 "msat": state.stage3_models["msat"].state_dict(),
                 "action_adapter": state.stage3_models["action_adapter"].state_dict(),
+                "state_adapter": state.stage3_models["state_adapter"].state_dict(),
                 "action_down_proj": state.stage3_models[
                     "action_down_proj"
                 ].state_dict(),
