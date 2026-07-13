@@ -43,6 +43,22 @@ from models.jepa_predictor import JepaPredictor
 from trainers.stage3.denoiser import ComboStocFlowMatcher
 from trainers.stage3.discriminator import TrajectoryDiscriminator
 from trainers.stage3.attacker import BadWorldAttacker
+
+
+class LatentAlignmentAdapter(torch.nn.Module):
+    def __init__(self, feature_dim=512):
+        super().__init__()
+        self.adapter = torch.nn.Sequential(
+            torch.nn.Linear(feature_dim, feature_dim),
+            torch.nn.LayerNorm(feature_dim),
+            torch.nn.GELU(),
+            torch.nn.Linear(feature_dim, feature_dim),
+        )
+
+    def forward(self, g):
+        return g + self.adapter(g)
+
+
 from trainers.stage3.trainer import GNNSkillLibrary, HybridMemoryTriad
 
 
@@ -331,6 +347,7 @@ def ensure_stage3_models():
         config = yaml.safe_load(f)
 
     action_dim = config["model"]["action_dim"]
+    horizon = config["model"]["horizon"]
     latent_dim = config["model"]["latent_dim"]
 
     state.stage3_models["vis_adapter"] = VisualAdapter(d_in=384).to(device)
@@ -380,6 +397,11 @@ def ensure_stage3_models():
         embed_dim=latent_dim, num_heads=8, batch_first=True
     ).to(device)
 
+    # Add latent adapter for mapping foveated/blurred goal representations to SFT space
+    state.stage3_models["latent_adapter"] = LatentAlignmentAdapter(
+        feature_dim=latent_dim
+    ).to(device)
+
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", config["paths"]["checkpoint_dir"])
     )
@@ -415,6 +437,10 @@ def ensure_stage3_models():
         state.stage3_models["gnn_library"].specialists.load_state_dict(
             checkpoint["gnn_specialists"]
         )
+        if "latent_adapter" in checkpoint:
+            state.stage3_models["latent_adapter"].load_state_dict(
+                checkpoint["latent_adapter"]
+            )
     elif os.path.exists(s2_ckpt_path):
         print(f"[Colab] Loading Stage 2 checkpoint from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
@@ -437,7 +463,9 @@ def ensure_stage3_models():
         )
         state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
         state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
-        state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
+        state.stage3_models["flow_matcher"].load_state_dict(
+            checkpoint["flow_matcher"], strict=False
+        )
 
     state.stage3_optimizer = torch.optim.AdamW(
         list(state.stage3_models["flow_matcher"].parameters())
@@ -447,7 +475,8 @@ def ensure_stage3_models():
         + list(state.stage3_models["action_adapter"].parameters())
         + list(state.stage3_models["state_adapter"].parameters())
         + list(state.stage3_models["action_down_proj"].parameters())
-        + list(state.stage3_models["goal_attention"].parameters()),
+        + list(state.stage3_models["goal_attention"].parameters())
+        + list(state.stage3_models["latent_adapter"].parameters()),
         lr=config["stage3"]["lr"],
     )
 
@@ -813,41 +842,75 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 query, stacked_goals, stacked_goals
             )
             s_target = s_target_attn.squeeze(1)
+            s_target = state.stage3_models["latent_adapter"](s_target)
             print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
-        # DAWN Loop: Generate action candidate and iteratively refine
+        # Initialize the 2D Space-Time Grid (Horizon=8, Joints=58)
+        horizon = 8
+        joint_dim = 58
+        total_gen_dim = horizon * joint_dim
+
+        # Create a master grid
+        grid = torch.ones(1, horizon, joint_dim, device=device)
+        grid[0, 0:3, :] = 0.0  # immediate steps get the full denoising path
+        grid[0, 3:6, :] = 0.5  # intermediate steps get coarse denoising
+        grid[0, 6:, :] = 0.8  # far steps initialized near convergence
+        steering_timelines = grid.view(1, total_gen_dim)  # Shape: [1, Horizon * Joints]
+
+        # Detach s_t and s_target to prevent graph leaks and runtime crashes
+        s_t = s_t.detach()
+        s_target = s_target.detach()
+        embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
+
+        # Generate action candidate with StepNFT exploration and ComboStoc timelines
         a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
-            s_t, s_target, num_steps=10
+            s_t,
+            s_target,
+            embodiment_id=embodiment_id,
+            horizon=horizon,
+            num_steps=10,
+            steering_timelines=steering_timelines,
+            step_nft_scale=0.05,
         )
-        a_candidate = a_candidate.clone().detach().requires_grad_(True)
         eta = 0.01
 
-        for k in range(5):
-            # Get the action representation
-            z_action = state.stage3_models["action_adapter"](a_candidate)
-            z_action_16 = state.stage3_models["action_down_proj"](z_action)
+        # Guidance mask (shape: [1, 464])
+        t_j = 1.0 - steering_timelines
 
-            # Predict next latent state
+        for k in range(5):
+            a_candidate = a_candidate.clone().detach().requires_grad_(True)
+
+            # Flatten step layouts to match ActionAdapter's footprint contract
+            a_flat = a_candidate.view(1, -1)  # Shape: [1, 464]
+
+            # Get the action representation and next latent state
+            z_action = state.stage3_models["action_adapter"](a_flat)
+            z_action_16 = state.stage3_models["action_down_proj"](z_action)
             s_next_pred = state.stage3_models["predictor"](s_t, z_action_16)
 
-            # Use goal attention head to get task-space representation from prediction
-            s_next_pred_expanded = s_next_pred.unsqueeze(1)  # [B, 1, D]
-            s_target_expanded = s_target.unsqueeze(1)  # [B, 1, D]
+            s_next_pred_expanded = s_next_pred.unsqueeze(1)
+            s_target_expanded = s_target.unsqueeze(1)
 
             s_goal_pred, _ = state.stage3_models["goal_attention"](
                 s_next_pred_expanded, s_target_expanded, s_target_expanded
             )
-            s_goal_pred = s_goal_pred.squeeze(1)  # [B, D]
+            s_goal_pred = s_goal_pred.squeeze(1)
 
             # Compute energy (distance to goal)
             energy = torch.mean((s_goal_pred - s_target) ** 2)
 
-            # Compute gradient and steer action
-            grad_a = torch.autograd.grad(energy, a_candidate, retain_graph=True)[0]
-            with torch.no_grad():
-                a_candidate = a_candidate - eta * grad_a
-            a_candidate = a_candidate.clone().detach().requires_grad_(True)
+            # Compute gradient relative to the unrolled candidate
+            grad_a = torch.autograd.grad(energy, a_candidate)[0]
 
+            # Masked Energy Guidance matching 3D coordinates
+            with torch.no_grad():
+                # Reshape guidance token mask back to [1, 8, 58] dynamically
+                a_candidate = a_candidate - eta * grad_a * t_j.view_as(grad_a)
+
+            a_candidate = a_candidate.clone().detach()
+
+        # Extract only the immediate multi-step prediction slice if needed,
+        # or output the unrolled trajectory block back to your motor script loader!
         final_action = a_candidate.detach()
 
         # BadWorld attack for easy tasks
@@ -1063,6 +1126,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 ].state_dict(),
                 "predictor": state.stage3_models["predictor"].state_dict(),
                 "goal_attention": state.stage3_models["goal_attention"].state_dict(),
+                "latent_adapter": state.stage3_models["latent_adapter"].state_dict(),
                 "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
                 "gnn_specialists": state.stage3_models[
                     "gnn_library"

@@ -56,33 +56,43 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
     @torch.no_grad()
     def sample_with_steering(
-        self, s_t, s_target, num_steps=10, steering_timelines=None
+        self,
+        s_t,
+        s_target,
+        embodiment_id=None,
+        horizon=8,
+        num_steps=10,
+        steering_timelines=None,
+        step_nft_scale=0.0,
     ):
-        """
-        ComboStoc Sampling.
-        Performs Euler integration from independent starting timesteps.
-        steering_timelines: [Batch, ActionDim] (starting noise timesteps)
-        """
         batch_size = s_t.size(0)
-        x_t = torch.randn(batch_size, self.action_dim, device=s_t.device)
 
-        # If no custom timelines are passed, run standard uniform time steps
+        # [B, H, ActionDim]
+        x_t = torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
+
         if steering_timelines is None:
             steering_timelines = torch.zeros(
-                batch_size, self.action_dim, device=s_t.device
+                batch_size, horizon, self.action_dim, device=s_t.device
+            )
+        else:
+            # Safe layout restoration to match 3D grid layout
+            steering_timelines = steering_timelines.view(
+                batch_size, horizon, self.action_dim
             )
 
         dt = 1.0 / num_steps
 
         for i in range(num_steps):
-            # Advance each joint along its specific timeline offset
             t_vals = steering_timelines + (i * dt)
             t_vals = torch.clamp(t_vals, 0.0, 1.0)
 
-            # Pass independent time vector directly to the velocity field
-            v_t = self.velocity_field(x_t, t_vals, s_t, s_target)
-
+            v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
             x_t = x_t + v_t * dt
+
+            if step_nft_scale > 0.0 and i < num_steps - 1:
+                noise = torch.randn_like(x_t) * step_nft_scale
+                steerable_mask = (t_vals < 1.0).float()
+                x_t = x_t + noise * steerable_mask
 
         return x_t
 
