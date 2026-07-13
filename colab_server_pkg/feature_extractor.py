@@ -419,32 +419,26 @@ def run_pointnext_model(point_cloud_np):
         return fallback
 
 
-def extract_stage3_obs_features(payload):
-    # Handle multi-view frames
-    frames_dict = (
-        payload.frames
-        if hasattr(payload, "frames")
-        else {"world_center": payload.frame}
+def extract_single_view_stage3_obs_features(
+    frame_str,
+    history_frames,
+    text_prompt,
+    ui_annotations,
+    tactile,
+    proprioception,
+    view_name="world_center",
+):
+    """
+    Core low-level function that processes features for a single RGB view, maps all modality
+    representations to PyTorch tensors on the target device, and returns an formatted obs_dict.
+    """
+    features = extract_features_common(
+        frame_str,
+        history_frames,
+        text_prompt,
+        ui_annotations,
+        view_name=view_name,
     )
-
-    # Process each view and extract features
-    view_features = {}
-    for view_name, frame_str in frames_dict.items():
-        features = extract_features_common(
-            frame_str,
-            payload.history_frames,
-            payload.text_prompt,
-            payload.ui_annotations,
-            view_name=view_name,
-        )
-        view_features[view_name] = features
-
-    # Aggregate features across views (use world_center as primary for now)
-    primary_view = "world_center"
-    if primary_view not in view_features:
-        primary_view = list(view_features.keys())[0]
-
-    features = view_features[primary_view]
 
     dino_attn = features["dino_attn"]
     vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32)
@@ -473,7 +467,7 @@ def extract_stage3_obs_features(payload):
     if len(vggt_feat) < 768:
         vggt_feat = torch.cat([vggt_feat, torch.zeros(768 - len(vggt_feat))])
 
-    tactile_grid = torch.tensor(payload.tactile, dtype=torch.float32)
+    tactile_grid = torch.tensor(tactile, dtype=torch.float32)
     if tactile_grid.shape != (4, 4):
         padded_tac = torch.zeros(4, 4)
         h_tac = min(tactile_grid.shape[0], 4)
@@ -481,7 +475,7 @@ def extract_stage3_obs_features(payload):
         padded_tac[:h_tac, :w_tac] = tactile_grid[:h_tac, :w_tac]
         tactile_grid = padded_tac
 
-    proprio = torch.tensor(payload.proprioception[:24], dtype=torch.float32)
+    proprio = torch.tensor(proprioception[:24], dtype=torch.float32)
     if len(proprio) < 24:
         proprio = torch.cat([proprio, torch.zeros(24 - len(proprio))])
 
@@ -492,20 +486,54 @@ def extract_stage3_obs_features(payload):
         )
 
     obs_dict = {
-        # Adapter formatted inputs moved to target device
         "vision": vision_feat.unsqueeze(0).to(device),
         "pointnext": pt_feat.unsqueeze(0).to(device),
         "vggt": vggt_feat.unsqueeze(0).to(device),
         "tactile": tactile_grid.unsqueeze(0).to(device),
         "proprioception": proprio.unsqueeze(0).to(device),
         "text": text_feat_raw.unsqueeze(0).unsqueeze(0).to(device),
-        # Multi-view features dictionary
-        "view_features": view_features,
-        # Raw extracted representations (forwarded cleanly to preserve context)
         "dino_attn": features["dino_attn"],
         "clip_sim": features["clip_sim"],
         "point_cloud": features["point_cloud"],
         "vggt_tracks": features["vggt_tracks"],
         "task_isolated_features": features["task_isolated_features"],
     }
+    return obs_dict
+
+
+def extract_stage3_obs_features(payload):
+    # Handle multi-view frames
+    frames_dict = (
+        payload.frames
+        if hasattr(payload, "frames")
+        else {"world_center": payload.frame}
+    )
+
+    # Process each view and extract features
+    view_features = {}
+    for view_name, frame_str in frames_dict.items():
+        features = extract_features_common(
+            frame_str,
+            payload.history_frames,
+            payload.text_prompt,
+            payload.ui_annotations,
+            view_name=view_name,
+        )
+        view_features[view_name] = features
+
+    # Aggregate features across views (use world_center as primary for now)
+    primary_view = "world_center"
+    if primary_view not in view_features:
+        primary_view = list(view_features.keys())[0]
+
+    obs_dict = extract_single_view_stage3_obs_features(
+        frames_dict[primary_view],
+        payload.history_frames,
+        payload.text_prompt,
+        payload.ui_annotations,
+        payload.tactile,
+        payload.proprioception,
+        view_name=primary_view,
+    )
+    obs_dict["view_features"] = view_features
     return obs_dict

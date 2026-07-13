@@ -1,3 +1,5 @@
+import io
+import base64
 import os
 import yaml
 import numpy as np
@@ -22,7 +24,10 @@ from colab_server_pkg.models_state import (
     stage3_trajectory_history,
     models,
 )
-from colab_server_pkg.feature_extractor import extract_stage3_obs_features
+from colab_server_pkg.feature_extractor import (
+    extract_stage3_obs_features,
+    extract_single_view_stage3_obs_features,
+)
 from colab_server_pkg.image_utils import decode_base64_image
 
 from models.adapters import (
@@ -59,6 +64,32 @@ class Stage3CalibratePayload(BaseModel):
 
 class Stage3DistillPayload(BaseModel):
     reward: float
+
+
+def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
+    """
+    Passes observation features through the respective adapter blocks and the
+    Multi-Stream Action Transformer (MSAT) to yield the multi-modal latent state.
+    """
+    if override_vision_token is not None:
+        vis_tok = override_vision_token
+    else:
+        vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
+
+    txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
+    pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
+    vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
+    tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
+
+    modality_dict = {
+        "vision": vis_tok,
+        "text": txt_tok,
+        "pointnext": pt_tok,
+        "vggt": vggt_tok,
+        "tactile": tactile_emb,
+        "proprioception": obs_dict["proprioception"],
+    }
+    return state.stage3_models["msat"](modality_dict)
 
 
 def construct_goal_states(obs_dict, ui_annotations):
@@ -123,8 +154,6 @@ def construct_goal_states(obs_dict, ui_annotations):
             # Try to query the high-quality SAM segment mask
             if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
                 try:
-                    import cv2
-
                     mask_np_224 = (
                         np.array(sam_mask_224)
                         if isinstance(sam_mask_224, torch.Tensor)
@@ -179,8 +208,6 @@ def construct_goal_states(obs_dict, ui_annotations):
                     h = min(img_h - y, 2 * r)
                     patch = pil_frame.crop((x, y, x + w, y + h))
                     mask = Image.new("L", (w, h), 0)
-                    from PIL import ImageDraw
-
                     draw = ImageDraw.Draw(mask)
                     draw.ellipse(
                         (cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255
@@ -468,8 +495,6 @@ def save_stage3_debug_plots(
                 else:
                     if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
                         try:
-                            import cv2
-
                             mask_np_224 = (
                                 np.array(sam_mask_224)
                                 if isinstance(sam_mask_224, torch.Tensor)
@@ -522,8 +547,6 @@ def save_stage3_debug_plots(
                             w = min(img_w - x, 2 * r)
                             h = min(img_h - y, 2 * r)
                             mask = Image.new("L", (w, h), 0)
-                            from PIL import ImageDraw
-
                             draw = ImageDraw.Draw(mask)
                             draw.ellipse(
                                 (cx - r - x, cy - r - y, cx + r - x, cy + r - y),
@@ -538,8 +561,6 @@ def save_stage3_debug_plots(
                         w = min(img_w - x, 2 * r)
                         h = min(img_h - y, 2 * r)
                         mask = Image.new("L", (w, h), 0)
-                        from PIL import ImageDraw
-
                         draw = ImageDraw.Draw(mask)
                         draw.ellipse(
                             (cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255
@@ -672,80 +693,32 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Save debug visualization plots via dedicated helper function
         save_stage3_debug_plots(payload, obs_dict, goal_images)
 
-        # Temporary early return for visual debugging of stage3 step
-        combined_mask_224 = obs_dict["task_isolated_features"]["combined_mask_224"]
-        return {
-            "action": [0.0] * 32,
-            "active_node_key": "mock_node",
-            "combined_mask_224": (
-                combined_mask_224.tolist()
-                if isinstance(combined_mask_224, np.ndarray)
-                else list(combined_mask_224)
-            ),
-        }
-
         # Extract encoder representations for goal states
         goal_latents = []
-        if goal_images:
-            for goal_img in goal_images:
-                # Convert PIL image to tensor
-                transform = transforms.Compose(
-                    [
-                        transforms.ToTensor(),
-                        transforms.Normalize(
-                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                        ),
-                    ]
-                )
-                goal_tensor = transform(goal_img).unsqueeze(0).to(device)
+        for goal_img in goal_images:
+            # Encode PIL goal_img to base64 string
+            buffered = io.BytesIO()
+            goal_img.save(buffered, format="JPEG")
+            goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-                # Get DINO features for goal state
-                with torch.no_grad():
-                    goal_features = models["dino"].forward_features(goal_tensor)
-                    goal_cls = goal_features[0, 0]
-                    goal_patches = goal_features[0, -196:]
-                    goal_cls = goal_cls / (goal_cls.norm(dim=-1, keepdim=True) + 1e-8)
-                    goal_attn = torch.matmul(goal_patches, goal_cls.T).view(14, 14)
-                    goal_feat = torch.tensor(
-                        goal_attn.flatten()[:384], dtype=torch.float32, device=device
-                    )
-                    if len(goal_feat) < 384:
-                        goal_feat = torch.cat(
-                            [
-                                goal_feat,
-                                torch.zeros(384 - len(goal_feat), device=device),
-                            ]
-                        )
+            # Extract goal observation features using the low-level single-view function directly
+            goal_obs_dict = extract_single_view_stage3_obs_features(
+                goal_img_str,
+                payload.history_frames,
+                payload.text_prompt,
+                payload.ui_annotations,
+                payload.tactile,
+                payload.proprioception,
+                view_name="world_center",
+            )
 
-                # Pass through adapter
-                goal_latent = state.stage3_models["vis_adapter"](goal_feat.unsqueeze(0))
+            # Pass features through respective adapters and MSAT under torch.no_grad()
+            with torch.no_grad():
+                goal_latent = encode_obs_to_latent(goal_obs_dict, state)
                 goal_latents.append(goal_latent)
 
-        # Fuse goal latents (average for now)
-        if goal_latents:
-            s_target = torch.stack(goal_latents, dim=0).mean(dim=0)
-        else:
-            # Fallback: use current state as target
-            with torch.no_grad():
-                vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
-                txt_tok = state.stage3_models["txt_adapter"](
-                    obs_dict["text"].squeeze(1)
-                )
-                pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
-                vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
-                tactile_emb = state.stage3_models["tactile_adapter"](
-                    obs_dict["tactile"]
-                )
-
-                modality_dict = {
-                    "vision": vis_tok,
-                    "text": txt_tok,
-                    "pointnext": pt_tok,
-                    "vggt": vggt_tok,
-                    "tactile": tactile_emb,
-                    "proprioception": obs_dict["proprioception"],
-                }
-                s_target = state.stage3_models["msat"](modality_dict)
+        # Fuse goal latents by averaging across all 4 combinations
+        s_target = torch.stack(goal_latents, dim=0).mean(dim=0)
 
         with torch.no_grad():
             # Multi-view fusion: extract features from all views
@@ -790,26 +763,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     vis_tok_fused = state.stage3_models["view_fusion"](
                         multi_view_concat.unsqueeze(0)
                     )
-                vis_tok = vis_tok_fused
-            else:
-                # Single view fallback
-                vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
 
-            txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
-            pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
-            vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
-            tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
-
-            # merge all modalities to get a single latent representation
-            modality_dict = {
-                "vision": vis_tok,
-                "text": txt_tok,
-                "pointnext": pt_tok,
-                "vggt": vggt_tok,
-                "tactile": tactile_emb,
-                "proprioception": obs_dict["proprioception"],
-            }
-            s_t = state.stage3_models["msat"](modality_dict)
+            # Get single multi-modal latent representation
+            s_t = encode_obs_to_latent(
+                obs_dict, state, override_vision_token=vis_tok_fused
+            )
 
         # DAWN Loop: Generate action candidate and iteratively refine
         a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
@@ -874,37 +832,8 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         action = torch.tensor([payload.action_taken], dtype=torch.float32).to(device)
 
         with torch.no_grad():
-            # Multi-view fusion for current state
-            s_t = state.stage3_models["msat"](
-                {
-                    "vision": state.stage3_models["vis_adapter"](obs_t["vision"]),
-                    "text": state.stage3_models["txt_adapter"](
-                        obs_t["text"].squeeze(1)
-                    ),
-                    "pointnext": state.stage3_models["pt_adapter"](obs_t["pointnext"]),
-                    "vggt": state.stage3_models["vggt_adapter"](obs_t["vggt"]),
-                    "tactile": state.stage3_models["tactile_adapter"](obs_t["tactile"]),
-                    "proprioception": obs_t["proprioception"],
-                }
-            ).detach()
-
-            # Multi-view fusion for next state
-            s_next = state.stage3_models["msat"](
-                {
-                    "vision": state.stage3_models["vis_adapter"](obs_next["vision"]),
-                    "text": state.stage3_models["txt_adapter"](
-                        obs_next["text"].squeeze(1)
-                    ),
-                    "pointnext": state.stage3_models["pt_adapter"](
-                        obs_next["pointnext"]
-                    ),
-                    "vggt": state.stage3_models["vggt_adapter"](obs_next["vggt"]),
-                    "tactile": state.stage3_models["tactile_adapter"](
-                        obs_next["tactile"]
-                    ),
-                    "proprioception": obs_next["proprioception"],
-                }
-            ).detach()
+            s_t = encode_obs_to_latent(obs_t, state).detach()
+            s_next = encode_obs_to_latent(obs_next, state).detach()
 
         state.stage3_trajectory_history.append((s_t, action, s_next))
         if len(state.stage3_trajectory_history) > 100:
