@@ -91,9 +91,9 @@ class PretrainingDataset(Dataset):
         data = torch.load(file_path, map_location="cpu")
 
         # 0 = Aloha, 1 = T-Rex, 2 = GR1 (Reserved for Stage 3)
-        if "aloha" in fname.lower():
+        if "aloha" in file_path.lower():
             emb_id = 0
-        elif "trex" in fname.lower():
+        elif "trex" in file_path.lower():
             emb_id = 1
         else:
             emb_id = 1  # Treat generic multi-DoF variant indices as default
