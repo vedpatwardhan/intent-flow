@@ -380,13 +380,6 @@ def ensure_stage3_models():
         embed_dim=latent_dim, num_heads=8, batch_first=True
     ).to(device)
 
-    # Add multi-view fusion layer
-    state.stage3_models["view_fusion"] = torch.nn.Sequential(
-        torch.nn.Linear(384 * 5, 384),  # Fuse 5 views of vision features
-        torch.nn.ReLU(),
-        torch.nn.Linear(384, 384),
-    ).to(device)
-
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", config["paths"]["checkpoint_dir"])
     )
@@ -454,8 +447,7 @@ def ensure_stage3_models():
         + list(state.stage3_models["action_adapter"].parameters())
         + list(state.stage3_models["state_adapter"].parameters())
         + list(state.stage3_models["action_down_proj"].parameters())
-        + list(state.stage3_models["goal_attention"].parameters())
-        + list(state.stage3_models["view_fusion"].parameters()),
+        + list(state.stage3_models["goal_attention"].parameters()),
         lr=config["stage3"]["lr"],
     )
 
@@ -762,98 +754,66 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         save_stage3_debug_plots(payload, obs_dict, goal_images)
 
         # Extract encoder representations for goal states
-        goal_latents = {}
-        obs_latents = {}
-        for view_name, image in obs_dict.items():
-            obs_latents[view_name] = encode_obs_to_latent(obs_dict[view_name], state)
-            if view_name in goal_images:
-                goal_latents[view_name] = []
-                for goal_img in goal_images[view_name]:
-                    # Encode PIL goal_img to base64 string
-                    buffered = io.BytesIO()
-                    goal_img.save(buffered, format="JPEG")
-                    goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        goal_latents = []
+        for view_name, images in goal_images.items():
+            for goal_img in images:
+                # Encode PIL goal_img to base64 string
+                buffered = io.BytesIO()
+                goal_img.save(buffered, format="JPEG")
+                goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-                    # Extract goal observation features using the low-level single-view function directly
-                    goal_obs_dict = extract_single_view_stage3_obs_features(
-                        goal_img_str,
-                        payload.history_frames,
-                        payload.text_prompt,
-                        payload.ui_annotations,
-                        payload.tactile,
-                        payload.proprioception,
-                        view_name=view_name,
-                    )
+                # Extract goal observation features using the low-level single-view function directly
+                goal_obs_dict = extract_single_view_stage3_obs_features(
+                    goal_img_str,
+                    payload.history_frames,
+                    payload.text_prompt,
+                    payload.ui_annotations,
+                    payload.tactile,
+                    payload.proprioception,
+                    view_name=view_name,
+                )
 
-                    # Pass features through respective adapters and MSAT under torch.no_grad()
-                    with torch.no_grad():
-                        goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                        goal_latents[view_name].append(goal_latent)
-
-        print(f"Observation Views: {obs_latents.keys()}")
-        print(
-            f"Observation Latent Shapes: {[obs_latents[view_name].shape for view_name in obs_latents]}"
-        )
-        print(
-            f"Goal Views: {goal_latents.keys()} --> {[len(goal_latents[view_name]) for view_name in goal_latents]}"
-        )
-        print(
-            f"Goal Latent Shapes: {[goal_latents[view_name][0].shape for view_name in goal_latents]}"
-        )
-
-        return {
-            "action": [0.0] * 32,
-            "active_node_key": "mock_node",
-        }
+                # Pass features through respective adapters and MSAT under torch.no_grad()
+                with torch.no_grad():
+                    goal_latent = encode_obs_to_latent(goal_obs_dict, state)
+                    goal_latents.append(goal_latent)
 
         with torch.no_grad():
-            # Multi-view fusion: extract features from all views
-            view_features_dict = obs_dict.get("view_features", {})
-            multi_view_feats = []
+            # Combine multi-view observations by concatenating visual streams across views
+            any_view = next(iter(obs_dict.values()))
+            combined_obs = {
+                "vision": torch.cat(
+                    [obs_dict[view]["vision"] for view in obs_dict], dim=1
+                ),
+                "pointnext": torch.cat(
+                    [obs_dict[view]["pointnext"] for view in obs_dict], dim=1
+                ),
+                "vggt": torch.cat([obs_dict[view]["vggt"] for view in obs_dict], dim=1),
+                "text": any_view["text"],
+                "tactile": any_view["tactile"],
+                "proprioception": any_view["proprioception"],
+            }
 
-            for view_name, view_feat in view_features_dict.items():
-                dino_attn = view_feat.get("dino_attn")
-                if dino_attn is not None:
-                    view_feat_tensor = torch.tensor(
-                        dino_attn.flatten()[:384], dtype=torch.float32, device=device
-                    )
-                    if len(view_feat_tensor) < 384:
-                        view_feat_tensor = torch.cat(
-                            [
-                                view_feat_tensor,
-                                torch.zeros(384 - len(view_feat_tensor), device=device),
-                            ]
-                        )
-                    multi_view_feats.append(view_feat_tensor)
+            print(f"[Stage3 Step] combined_obs visual stream shapes:")
+            print(f"  - vision: {combined_obs['vision'].shape}")
+            print(f"  - pointnext: {combined_obs['pointnext'].shape}")
+            print(f"  - vggt: {combined_obs['vggt'].shape}")
 
-            # Fuse multi-view features if we have multiple views
-            if len(multi_view_feats) > 1:
-                multi_view_concat = torch.cat(
-                    multi_view_feats, dim=0
-                )  # [num_views * 384]
-                if multi_view_concat.size(0) == 384 * 5:
-                    vis_tok_fused = state.stage3_models["view_fusion"](
-                        multi_view_concat.unsqueeze(0)
-                    )
-                else:
-                    # Pad or truncate to match expected size
-                    if multi_view_concat.size(0) < 384 * 5:
-                        multi_view_concat = torch.cat(
-                            [
-                                multi_view_concat,
-                                torch.zeros(
-                                    384 * 5 - multi_view_concat.size(0), device=device
-                                ),
-                            ]
-                        )
-                    vis_tok_fused = state.stage3_models["view_fusion"](
-                        multi_view_concat.unsqueeze(0)
-                    )
+            s_t = encode_obs_to_latent(combined_obs, state)
+            print(f"[Stage3 Step] s_t shape: {s_t.shape}")
 
-            # Get single multi-modal latent representation
-            s_t = encode_obs_to_latent(
-                obs_dict, state, override_vision_token=vis_tok_fused
+            # Query the goal latents using the current state s_t via MultiheadAttention
+            stacked_goals = torch.stack(
+                goal_latents, dim=1
+            )  # [1, num_goals, latent_dim]
+            print(f"[Stage3 Step] stacked_goals shape: {stacked_goals.shape}")
+
+            query = s_t.unsqueeze(1)  # [1, 1, latent_dim]
+            s_target_attn, _ = state.stage3_models["goal_attention"](
+                query, stacked_goals, stacked_goals
             )
+            s_target = s_target_attn.squeeze(1)
+            print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
         # DAWN Loop: Generate action candidate and iteratively refine
         a_candidate = state.stage3_models["flow_matcher"].sample_with_steering(
@@ -1103,7 +1063,6 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 ].state_dict(),
                 "predictor": state.stage3_models["predictor"].state_dict(),
                 "goal_attention": state.stage3_models["goal_attention"].state_dict(),
-                "view_fusion": state.stage3_models["view_fusion"].state_dict(),
                 "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
                 "gnn_specialists": state.stage3_models[
                     "gnn_library"

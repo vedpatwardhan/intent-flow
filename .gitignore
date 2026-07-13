@@ -1,2 +1,6 @@
 __pycache__
 dataset_samples*
+data
+temp*
+raw
+debug_*
