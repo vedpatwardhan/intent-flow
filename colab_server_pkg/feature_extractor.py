@@ -485,6 +485,7 @@ def extract_single_view_stage3_obs_features(
         )
 
     obs_dict = {
+        "features": features,
         "vision": vision_feat.unsqueeze(0).to(device),
         "pointnext": pt_feat.unsqueeze(0).to(device),
         "vggt": vggt_feat.unsqueeze(0).to(device),
@@ -511,13 +512,6 @@ def extract_stage3_obs_features(payload):
 
     # Process each view and extract features
     for view_name, frame_str in frames_dict.items():
-        features = extract_features_common(
-            frame_str,
-            payload.history_frames,
-            payload.text_prompt,
-            payload.ui_annotations,
-            view_name=view_name,
-        )
         obs_dict[view_name] = extract_single_view_stage3_obs_features(
             frame_str,
             payload.history_frames,
@@ -527,6 +521,5 @@ def extract_stage3_obs_features(payload):
             payload.proprioception,
             view_name=view_name,
         )
-        obs_dict[view_name]["features"] = features
 
     return obs_dict

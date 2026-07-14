@@ -1,6 +1,12 @@
+import base64
+import cv2
+import io
+from PIL import Image
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from colab_server_pkg.config import device
 
 
 class BadWorldAttacker:
@@ -15,88 +21,146 @@ class BadWorldAttacker:
     def generate_stochastic_ensemble_pass(
         self,
         flow_matcher,
-        s_t,
-        s_target,
-        original_action,
-        mask=None,
-        ensemble_size=4,
-        outer_steps=5,
-        inner_steps=3,
+        raw_data,  # This is the Stage3StepPayload object passed from the endpoint
+        load_image_fn,  # This is decode_base64_image from image_utils.py
+        extract_obs_features_fn,  # This is extract_stage3_obs_features from feature_extractor.py
+        encode_obs_fn,  # This is encode_obs_to_latent from stage3_endpoints.py
+        state,  # Global model/optimizer tracking container
+        s_target,  # Fused goal target embedding state vector
+        steering_timelines,  # ComboStoc time-space grid formatting tensor
+        embodiment_id,  # Long ID tracking the robotic morphology skeleton
+        ensemble_size=4,  # Number of unique observation profiles to generate
+        horizon=8,  # Trajectory planning window steps
     ):
         """
-        Runs a parallelized batch minimax attack to generate an ensemble cloud of
-        K distinct worst-case fuzzed state latents by perturbing s_t directly.
-
-        Returns:
-            A tensor of shape [ensemble_size, state_dim] holding the parallel adversarial cloud.
+        Runs an observation-space minimax evaluation loop. Applies stochastic pixel-level
+        modifications directly to payload frames before extracting features or adapters.
         """
-        # 1. Expand the baseline latents and actions to match the parallel ensemble size [K, Dimension]
-        s_t_expanded = s_t.expand(ensemble_size, -1)  # [K, 512]
-        s_target_expanded = s_target.expand(ensemble_size, -1)  # [K, 512]
-        action_expanded = original_action.expand(ensemble_size, -1)  # [K, 58]
+        perturbed_payload_variants = []
+        perturbed_latent_list = []
 
-        # If a mask is provided, we can restrict which latent space dimensions are fuzzed,
-        # otherwise we fuzz the overall encoder latent space unconditionally (all 1s)
-        if mask is None:
-            mask = torch.ones_like(s_t_expanded)  # Shape: [K, 512]
-        else:
-            mask = mask.expand(ensemble_size, -1)
+        # --- STEP 1 & 2: PERTURB THE RAW RGB IMAGE DATA DIRECTLY ---
+        # Loop through to create K distinct worst-case/stochastic visual configurations
+        for var_idx in range(ensemble_size):
+            # Clone the baseline payload container to safely isolate updates
+            temp_payload = raw_data.copy()
+            perturbed_frames = {}
 
-        # 2. Seed unique stochastic initialization offsets across each ensemble slot
-        # This breaks symmetry and ensures each track optimizes a completely unique attack vector
-        perturb = (torch.randn_like(s_t_expanded) * 0.05).requires_grad_(True)
+            for cam_name, b64_str in temp_payload.frames.items():
+                # 1. Ingest base64 string and convert to true raw numpy RGB matrix array
+                rgb_img = load_image_fn(b64_str)
 
-        for _ in range(outer_steps):
-            # --- INNER LOOP: Parallel Action Search (Min) ---
-            search_action = action_expanded.clone().detach().requires_grad_(True)
+                # 2. Apply stochastic distortions directly to the raw RGB data pixels
+                if var_idx > 0:
+                    # Break symmetry using randomized lighting shifts, focus blur, or digital channel noise
+                    if var_idx == 1:
+                        # Variant 1: Heavy Gaussian lens blur
+                        rgb_img = cv2.GaussianBlur(rgb_img, (11, 11), 0)
+                    elif var_idx == 2:
+                        # Variant 2: Harsh workspace exposure exposure saturation bias
+                        rgb_img = cv2.convertScaleAbs(rgb_img, alpha=1.3, beta=35)
+                    elif var_idx == 3:
+                        # Variant 3: High-frequency digital sensory static matrix injection
+                        noise = np.random.randint(
+                            -30, 31, rgb_img.shape, dtype=np.int16
+                        )
+                        rgb_img = np.clip(
+                            rgb_img.astype(np.int16) + noise, 0, 255
+                        ).astype(np.uint8)
 
-            for _ in range(inner_steps):
-                # Apply current parallel perturbation directly to the overall latent space
-                perturbed_s_t = s_t_expanded + mask * perturb
+                # 3. Convert the modified RGB array back into standard contract base64 format strings
+                pil_img = Image.fromarray(rgb_img)
+                buf = io.BytesIO()
+                pil_img.save(buf, format="JPEG", quality=75)
+                new_b64 = "data:image/jpeg;base64," + base64.b64encode(
+                    buf.getvalue()
+                ).decode("utf-8")
+                perturbed_frames[cam_name] = new_b64
 
-                # Sample independent early-denoising trajectory slices per ensemble track
-                t = torch.rand(ensemble_size, 1, device=s_t.device) * 0.2
-                x_0 = torch.randn_like(search_action)
-                x_t = t * search_action + (1.0 - t) * x_0
-                target_vel = search_action - x_0
+            # Bind the optimized/perturbed RGB base64 values straight back into the payload object field
+            temp_payload.frames = perturbed_frames
+            perturbed_payload_variants.append(temp_payload)
 
-                # Predict velocity under fuzzed ensemble features
-                pred_vel = flow_matcher.velocity_field(
-                    x_t, t, perturbed_s_t, s_target_expanded
+            # --- STEP 3 & 4: CONVERT RAW IMAGE DISTORTIONS INTO GROUNDED LATENTS ---
+            # 4. Extract visual down-stream tokens (DINO, CLIP, SAM, VGGT) natively from the new visual feeds
+            obs_features = extract_obs_features_fn(temp_payload)
+
+            # Combine multi-view observations by concatenating across views
+            any_view = next(iter(obs_features.values()))
+            combined_obs = {
+                "vision": torch.cat(
+                    [obs_features[view]["vision"] for view in obs_features], dim=1
+                ),
+                "pointnext": torch.cat(
+                    [obs_features[view]["pointnext"] for view in obs_features], dim=1
+                ),
+                "vggt": torch.cat(
+                    [obs_features[view]["vggt"] for view in obs_features], dim=1
+                ),
+                "text": any_view["text"],
+                "tactile": any_view["tactile"],
+                "proprioception": any_view["proprioception"],
+            }
+
+            # 5. Map features through adapters and MSAT to yield physically safe multi-modal states
+            with torch.no_grad():
+                s_t_variant = encode_obs_fn(combined_obs, state).detach()
+                perturbed_latent_list = (
+                    s_t_variant
+                    if var_idx == 0
+                    else torch.cat([perturbed_latent_list, s_t_variant], dim=0)
                 )
 
-                # Compute unique track errors independently (reduction='none' preserves distinct batch trajectories)
-                error_loss = F.mse_loss(pred_vel, target_vel, reduction="none").mean(
-                    dim=-1
-                )
-                total_inner_loss = error_loss.sum()
+        # Capture the 4 distinct visual variations generated by the loop [4, 512]
+        s_t_base_variants = perturbed_latent_list.detach()
 
-                action_grads = torch.autograd.grad(total_inner_loss, search_action)[0]
-                with torch.no_grad():
-                    search_action = (
-                        search_action - self.action_search_lr * action_grads.sign()
-                    )
-                search_action.requires_grad = True
+        # --- STEP 5 & 6: EXPLODE GRID TO 16 AND SAMPLE TRAJECTORIES DIRECTLY HERE ---
+        num_trajectories_per_obs = 4
+        total_ensemble_size = (
+            ensemble_size * num_trajectories_per_obs
+        )  # 16 unique lookahead tracks
 
-            # --- OUTER LOOP: Parallel Poison Optimization (Max) ---
-            perturbed_s_t = s_t_expanded + mask * perturb
-            t = torch.rand(ensemble_size, 1, device=s_t.device) * 0.2
-            x_0 = torch.randn_like(search_action)
-            x_t = t * search_action + (1.0 - t) * x_0
-            target_vel = search_action - x_0
+        # Replicate the 4 visual latents 4 times to build the full 16-batch combinatorial grid context [16, 512]
+        s_t_ensemble = torch.repeat_interleave(
+            s_t_base_variants, num_trajectories_per_obs, dim=0
+        )
 
-            pred_vel = flow_matcher.velocity_field(
-                x_t, t, perturbed_s_t, s_target_expanded
-            )
-            final_error_loss = (
-                F.mse_loss(pred_vel, target_vel, reduction="none").mean(dim=-1).sum()
-            )
+        # Expand target conditioning contexts uniformly to match the full 16-batch profile
+        s_target_expanded = s_target.expand(total_ensemble_size, -1)
+        embodiment_id_expanded = embodiment_id.expand(total_ensemble_size)
+        steering_timelines_expanded = steering_timelines.expand(total_ensemble_size, -1)
 
-            outer_grads = torch.autograd.grad(final_error_loss, perturb)[0]
+        # The flow matcher draws 16 independent root noise seeds x_0 across your 4 distinct visual worlds
+        a_candidates = flow_matcher.sample_with_steering(
+            s_t_ensemble,
+            s_target_expanded,
+            embodiment_id=embodiment_id_expanded,
+            horizon=horizon,
+            num_steps=10,
+            steering_timelines=steering_timelines_expanded,
+            step_nft_scale=0.05,
+        )  # Output Shape: [16, 8, 58]
 
-            # Fast gradient sign ascent across parallel tracks to maximize the planning disruption
-            perturb = perturb.detach() + self.perturb_lr * outer_grads.sign()
-            perturb.requires_grad = True
+        # --- STEP 7: RETURN UNIFIED UNROLLED DATA CONTEXTS ---
+        # Return the 4 raw image variants, the 16 ensembled latents, and the 16 generated action candidates
+        return perturbed_payload_variants, s_t_ensemble, a_candidates.detach()
 
-        # Returns the finalized parallel cloud tensor [ensemble_size, 512]
-        return (s_t_expanded + mask * perturb).detach()
+    def generate_stochastic_ensemble_pass_skeleton(
+        self,
+        flow_matcher,
+        raw_data,
+        load_image_fn,
+        extract_obs_features_fn,
+        encode_obs_fn,
+        # there's many more args ofc
+    ):
+        """
+        1. Load the images using the load_image_fn to get rgb data for 5 views.
+        2. Perform perturbations on those images, then convert them back to base 64 strings and set them back into the raw_data
+        3. Use extract_obs_features_fn to get features of those perturbed images
+        4. Use encode_obs_fn to convert those features into latent states
+        5. Do the regular minimax loop with the state as we're doing currently, but make sure to sample the action candidates here itself
+        6. Do not use velocity_field in this method, just kind of wrap around the flow matcher using the steering timelines and everything
+        7. This function should return the perturbed raw data, the perturbed latent states, and the chosen action candidates
+        """
+        pass

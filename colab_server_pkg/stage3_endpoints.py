@@ -869,69 +869,70 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         s_target = s_target.detach()
         embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
 
-        # BadWorld
-        # Generate 4 unique worst-case variations of our current belief state vector
-        ensemble_size = 4
-        mock_action_slice = torch.randn(1, joint_dim, device=device)
-        s_t_ensemble = state.stage3_models[
+        # --- COMBINATORIAL OBSERVATION MINIMAX SEARCH BLOCK ---
+        N_obs_variants = (
+            4  # 4 distinct image configurations evaluated inside the wrapper
+        )
+        M_trajectories_per_obs = 4  # 4 trajectories sampled per visual configuration
+
+        # Invoke the attacker pass to construct the entire grid natively
+        perturbed_payloads, s_t_ensemble, a_candidates = state.stage3_models[
             "attacker"
         ].generate_stochastic_ensemble_pass(
-            state.stage3_models["flow_matcher"],
-            s_t,
-            s_target,
-            mock_action_slice,
-            ensemble_size=ensemble_size,
-        )  # Output Shape: [4, 512]
-
-        # Expand targets and identifiers to evaluate the entire parallel batch together
-        s_target_expanded = s_target.expand(ensemble_size, -1)
-        embodiment_id_expanded = embodiment_id.expand(ensemble_size)
-        steering_timelines_expanded = steering_timelines.expand(ensemble_size, -1)
-
-        # Generate action candidate with StepNFT exploration and ComboStoc timelines
-        a_candidates = state.stage3_models["flow_matcher"].sample_with_steering(
-            s_t_ensemble,
-            s_target_expanded,
-            embodiment_id=embodiment_id_expanded,
+            flow_matcher=state.stage3_models["flow_matcher"],
+            raw_data=payload,
+            load_image_fn=decode_base64_image,
+            extract_obs_features_fn=extract_stage3_obs_features,
+            encode_obs_fn=encode_obs_to_latent,
+            state=state,
+            s_target=s_target,
+            steering_timelines=steering_timelines,
+            embodiment_id=embodiment_id,
+            ensemble_size=N_obs_variants,
             horizon=horizon,
-            num_steps=10,
-            steering_timelines=steering_timelines_expanded,
-            step_nft_scale=0.05,
-        )  # Output Shape: [4, 8, 58]
+        )
+
+        # Capture the true 16-batch size returned directly out of your attacker pass
+        ensemble_size = a_candidates.shape[0]  # 16
 
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.01
         timeline_rollback_rate = 0.05
         error_threshold = 0.02
 
-        # Format the master timeline grid into its explicit structural layout [4, 8, 58]
-        steering_timelines_expanded = steering_timelines_expanded.view(
-            ensemble_size, horizon, joint_dim
-        ).clone()
+        # Expand target constraints and master timelines to match the full 16 execution slots
+        s_target_expanded = s_target.expand(ensemble_size, -1)
+        steering_timelines_expanded = (
+            steering_timelines.expand(ensemble_size, -1)
+            .view(ensemble_size, horizon, joint_dim)
+            .clone()
+        )
 
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
             # Flatten step layouts to match ActionAdapter's footprint contract
-            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [4, 464]
+            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 464]
 
             # Get the action representation and next latent state
             z_action = state.stage3_models["action_adapter"](a_flat)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
 
-            s_t_expanded_for_pred = s_t.expand(ensemble_size, -1)
+            s_t_expanded_for_pred = torch.repeat_interleave(
+                s_t_ensemble, M_trajectories_per_obs, dim=0
+            )
             s_next_pred = state.stage3_models["predictor"](
                 s_t_expanded_for_pred, z_action_16
             )
 
-            # [4, 1, 512]
+            # [16, 1, 512]
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
 
             # Batch expanded target vector
-            s_target_expanded_loop = s_target.expand(ensemble_size, -1).unsqueeze(1)
+            s_target_loop_context = s_target.expand(ensemble_size, -1).unsqueeze(1)
 
             s_goal_pred, _ = state.stage3_models["goal_attention"](
-                s_next_pred_expanded, s_target_expanded_loop, s_target_expanded_loop
+                s_next_pred_expanded, s_target_loop_context, s_target_loop_context
             )
             s_goal_pred = s_goal_pred.squeeze(1)
 
@@ -975,6 +976,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             "action": final_actions.cpu().numpy().tolist(),
             "energy": final_energies.cpu().numpy().tolist(),
             "s_target": s_target.cpu().numpy().tolist(),
+            "perturbed_payloads": [p.dict() for p in perturbed_payloads],
             "active_node_key": "skill_0",
         }
     except Exception as e:

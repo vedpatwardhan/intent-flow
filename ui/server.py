@@ -271,6 +271,7 @@ async def run_stage3_training_loop(
                         res = r.json()
                         action_taken_ensemble = res.get("action")
                         energy_ensemble = res.get("energy")
+                        perturbed_payloads = res.get("perturbed_payloads", [])
             except Exception as e:
                 print(
                     f"[Training Error] Episode {ep_idx + 1} Step "
@@ -293,7 +294,7 @@ async def run_stage3_training_loop(
             transitions = []
             committed_qpos = None
 
-            # Replay all 4 trajectories inside the simulator
+            # Replay all 16 trajectories inside the simulator
             for track_idx in range(action_np.shape[0]):
                 # Rewind physics cleanly to the starting coordinates of the rollout window
                 sim.data.qpos[:] = initial_qpos
@@ -383,14 +384,26 @@ async def run_stage3_training_loop(
                         committed_touch_index_next = touch_index_next
                         committed_touch_thumb_next = touch_thumb_next
 
-                    # Append the full 8-step transition once lookahead completes
+                    # Append the full 16-step transition once lookahead completes
                     if h == action_np.shape[1] - 1:
                         grasp_success = (
                             touch_index_next > 0.5 and touch_thumb_next > 0.5
                         )
+
+                        # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
+                        visual_variant_idx = track_idx // 4
+
+                        # Use the perturbed payload if available, fallback to clean
+                        if perturbed_payloads and visual_variant_idx < len(
+                            perturbed_payloads
+                        ):
+                            assigned_obs = perturbed_payloads[visual_variant_idx]
+                        else:
+                            assigned_obs = current_obs
+
                         transitions.append(
                             {
-                                "current_obs": current_obs,
+                                "current_obs": assigned_obs,
                                 "action_taken": track_actions_flat,
                                 "next_obs": track_next_obs,
                                 "energy": energy_ensemble[track_idx],
