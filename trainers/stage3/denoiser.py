@@ -24,7 +24,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             config=config,
         )
 
-    def get_cfm_loss(self, x_1, s_t, s_target):
+    def get_cfm_loss(self, x_1, s_t, s_target, reduction="mean"):
         """
         Calculates CFM loss using independent timeline timesteps t_i for each joint
         with the official ComboStoc blending scheme to preserve sync coherence.
@@ -51,8 +51,11 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         # Pass independent time vector directly to the velocity field
         pred_velocity = self.velocity_field(x_t, t, s_t, s_target)
 
-        loss = torch.mean((pred_velocity - target_velocity) ** 2)
-        return loss
+        loss_elementwise = (pred_velocity - target_velocity) ** 2
+
+        if reduction == "none":
+            return loss_elementwise
+        return torch.mean(loss_elementwise)
 
     @torch.no_grad()
     def sample_with_steering(

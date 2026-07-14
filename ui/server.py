@@ -284,7 +284,7 @@ async def run_stage3_training_loop(
                 break
 
             # Convert to numpy to slice precisely
-            action_np = np.array(action_taken_ensemble, dtype=np.float32)  # [4, 8, 58]
+            action_np = np.array(action_taken_ensemble, dtype=np.float32)  # [16, 8, 58]
 
             # Snapshot initial state
             initial_qpos = sim.data.qpos.copy()
@@ -393,13 +393,11 @@ async def run_stage3_training_loop(
                         # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
                         visual_variant_idx = track_idx // 4
 
-                        # Use the perturbed payload if available, fallback to clean
-                        if perturbed_payloads and visual_variant_idx < len(
+                        # Enforce adversarial data contract: visual variants must exist
+                        assert (
                             perturbed_payloads
-                        ):
-                            assigned_obs = perturbed_payloads[visual_variant_idx]
-                        else:
-                            assigned_obs = current_obs
+                        ), "🔥 FATAL: Colab endpoint failed to return perturbed_payloads!"
+                        assigned_obs = perturbed_payloads[visual_variant_idx]
 
                         transitions.append(
                             {
@@ -461,7 +459,7 @@ async def run_stage3_training_loop(
                     res = r.json()
                     print(
                         f"[Training] Distill completed for Episode {ep_idx + 1}."
-                        f" Loss: {res.get('ram_loss')}"
+                        f" Loss: {res.get('opsd_loss')}"
                     )
         except Exception as e:
             print(f"[Training Error] Episode {ep_idx + 1} distill failed: {e}")

@@ -1,5 +1,6 @@
 import io
 import base64
+import json
 import os
 import yaml
 import numpy as np
@@ -870,10 +871,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
 
         # --- COMBINATORIAL OBSERVATION MINIMAX SEARCH BLOCK ---
-        N_obs_variants = (
-            4  # 4 distinct image configurations evaluated inside the wrapper
-        )
-        M_trajectories_per_obs = 4  # 4 trajectories sampled per visual configuration
+        # 4 distinct image configurations evaluated inside the wrapper
+        N_obs_variants = 4
 
         # Invoke the attacker pass to construct the entire grid natively
         perturbed_payloads, s_t_ensemble, a_candidates = state.stage3_models[
@@ -918,12 +917,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             z_action = state.stage3_models["action_adapter"](a_flat)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
 
-            s_t_expanded_for_pred = torch.repeat_interleave(
-                s_t_ensemble, M_trajectories_per_obs, dim=0
-            )
-            s_next_pred = state.stage3_models["predictor"](
-                s_t_expanded_for_pred, z_action_16
-            )
+            s_next_pred = state.stage3_models["predictor"](s_t_ensemble, z_action_16)
 
             # [16, 1, 512]
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
@@ -1121,21 +1115,21 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 [state.stage3_trajectory_history[idx][5] for idx in indices], dim=0
             )
 
-            # 1. Generative Flow Matcher Loss (CFM)
-            x_0 = torch.randn_like(batch_action)
-            t_rand = torch.rand(batch_action.size(0), 1, device=device)
-            t_vector = t_rand.expand(-1, state.stage3_models["flow_matcher"].action_dim)
+            # 1. Generative Flow Matcher Loss (CFM) via Native Blended ComboStoc Method
+            B_size = batch_action.size(0)
 
-            x_t = t_vector * batch_action + (1.0 - t_vector) * x_0
-            target_vel = batch_action - x_0
+            # Unflatten back to the true 3D trajectory grid layout [B, 8, 58]
+            batch_action_3d = batch_action.view(B_size, 8, 58)
 
-            pred_vel = state.stage3_models["flow_matcher"].velocity_field(
-                x_t, t_vector, batch_s_t, s_target_batch
+            # Request unreduced batch loss elements using our new flag
+            cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
+                x_1=batch_action_3d,
+                s_t=batch_s_t,
+                s_target=s_target_batch,
+                reduction="none",
             )
 
-            cfm_loss_elementwise = F.mse_loss(
-                pred_vel, target_vel, reduction="none"
-            ).mean(dim=-1)
+            # Apply your reward scaling filters exactly as intended
             combined_rewards = torch.clamp(
                 1.0 - batch_energy + 2.0 * batch_tactile, min=0.05
             )

@@ -1,5 +1,6 @@
 import base64
 import cv2
+import copy
 import io
 from PIL import Image
 import numpy as np
@@ -43,7 +44,7 @@ class BadWorldAttacker:
         # Loop through to create K distinct worst-case/stochastic visual configurations
         for var_idx in range(ensemble_size):
             # Clone the baseline payload container to safely isolate updates
-            temp_payload = raw_data.copy()
+            temp_payload = copy.deepcopy(raw_data)
             perturbed_frames = {}
 
             for cam_name, b64_str in temp_payload.frames.items():
