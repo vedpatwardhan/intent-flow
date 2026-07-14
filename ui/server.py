@@ -261,6 +261,7 @@ async def run_stage3_training_loop(
             }
 
             action_taken_ensemble = None
+            energy_ensemble = None
             try:
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
@@ -269,6 +270,7 @@ async def run_stage3_training_loop(
                     if r.status_code == 200:
                         res = r.json()
                         action_taken_ensemble = res.get("action")
+                        energy_ensemble = res.get("energy")
             except Exception as e:
                 print(
                     f"[Training Error] Episode {ep_idx + 1} Step "
@@ -276,8 +278,8 @@ async def run_stage3_training_loop(
                 )
                 break
 
-            if action_taken_ensemble is None:
-                print("[Training Error] No action returned from Colab.")
+            if action_taken_ensemble is None or energy_ensemble is None:
+                print("[Training Error] No action or energy returned from Colab.")
                 break
 
             # Convert to numpy to slice precisely
@@ -383,11 +385,16 @@ async def run_stage3_training_loop(
 
                     # Append the full 8-step transition once lookahead completes
                     if h == action_np.shape[1] - 1:
+                        grasp_success = (
+                            touch_index_next > 0.5 and touch_thumb_next > 0.5
+                        )
                         transitions.append(
                             {
                                 "current_obs": current_obs,
                                 "action_taken": track_actions_flat,
                                 "next_obs": track_next_obs,
+                                "energy": energy_ensemble[track_idx],
+                                "tactile": float(grasp_success),
                             }
                         )
 

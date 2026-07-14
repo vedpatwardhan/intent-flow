@@ -59,7 +59,7 @@ class LatentAlignmentAdapter(torch.nn.Module):
         return g + self.adapter(g)
 
 
-from trainers.stage3.trainer import GNNSkillLibrary, HybridMemoryTriad
+from trainers.stage3.trainer import GNNSkillLibrary
 
 
 class Stage3StepPayload(BaseModel):
@@ -76,6 +76,8 @@ class Stage3CalibrateTransition(BaseModel):
     current_obs: Stage3StepPayload
     action_taken: List[float]
     next_obs: Stage3StepPayload
+    energy: float
+    tactile: float
 
 
 class Stage3CalibratePayload(BaseModel):
@@ -484,8 +486,6 @@ def ensure_stage3_models():
         lr=config["stage3"]["lr"],
     )
 
-    state.stage3_memory = HybridMemoryTriad()
-
 
 def save_stage3_debug_plots(
     payload: Stage3StepPayload, obs_dict: dict, goal_images: list
@@ -777,6 +777,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
+        # perturb the observation images
+        # obs_dict = generate_perturbations(payload) # returns a list of obs_dicts
+
         # get all global and filtered features
         obs_dict = extract_stage3_obs_features(payload)
 
@@ -965,9 +968,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Extract only the immediate multi-step prediction slice if needed,
         # or output the unrolled trajectory block back to your motor script loader!
         final_actions = a_candidates.detach()
+        with torch.no_grad():
+            final_energies = torch.mean((s_goal_pred - s_target_expanded) ** 2, dim=-1)
 
         return {
             "action": final_actions.cpu().numpy().tolist(),
+            "energy": final_energies.cpu().numpy().tolist(),
+            "s_target": s_target.cpu().numpy().tolist(),
             "active_node_key": "skill_0",
         }
     except Exception as e:
@@ -996,7 +1003,11 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             if s_t_first is None:
                 s_t_first = s_t
 
-            state.stage3_trajectory_history.append((s_t, action, s_next))
+            # Track the current state, action block, true next state, energy,
+            # tactile success, and the step target
+            state.stage3_trajectory_history.append(
+                (s_t, action, s_next, trans.energy, trans.tactile, s_t)
+            )
 
         while len(state.stage3_trajectory_history) > 100:
             state.stage3_trajectory_history.pop(0)
@@ -1048,10 +1059,6 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         loss_total.backward()
         state.stage3_optimizer.step()
 
-        tactile_spike = float(payload.transitions[0].next_obs.tactile[0][0] > 0.5)
-        if s_t_first is not None:
-            state.stage3_memory.update(s_t_first[0], tactile_spike)
-
         return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
     except Exception as e:
         traceback.print_exc()
@@ -1076,10 +1083,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        # OPSD: Offline Policy State Distillation with multiple loss components
         num_opsd_steps = 5
         batch_size = min(len(state.stage3_trajectory_history), 16)
-
         total_loss = 0.0
 
         for opsd_step in range(num_opsd_steps):
@@ -1089,7 +1094,6 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             indices = np.random.choice(
                 len(state.stage3_trajectory_history), batch_size, replace=False
             )
-
             batch_s_t = torch.cat(
                 [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
             )
@@ -1099,8 +1103,23 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             batch_s_next = torch.cat(
                 [state.stage3_trajectory_history[idx][2] for idx in indices], dim=0
             )
+            batch_energy = torch.tensor(
+                [state.stage3_trajectory_history[idx][3] for idx in indices],
+                dtype=torch.float32,
+                device=device,
+            )
+            batch_tactile = torch.tensor(
+                [state.stage3_trajectory_history[idx][4] for idx in indices],
+                dtype=torch.float32,
+                device=device,
+            )
 
-            # 1. Flow Matcher Loss (CFM) with reward weighting
+            # Retrieve the true baseline step targets saved during the calibration trace
+            s_target_batch = torch.cat(
+                [state.stage3_trajectory_history[idx][5] for idx in indices], dim=0
+            )
+
+            # 1. Generative Flow Matcher Loss (CFM)
             x_0 = torch.randn_like(batch_action)
             t_rand = torch.rand(batch_action.size(0), 1, device=device)
             t_vector = t_rand.expand(-1, state.stage3_models["flow_matcher"].action_dim)
@@ -1108,20 +1127,17 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             x_t = t_vector * batch_action + (1.0 - t_vector) * x_0
             target_vel = batch_action - x_0
 
-            if len(state.stage3_memory.anchors) > 0:
-                s_target_batch = (
-                    state.stage3_memory.anchors[-1]
-                    .to(device)
-                    .unsqueeze(0)
-                    .expand(batch_size, -1)
-                )
-            else:
-                s_target_batch = batch_s_t.clone()
-
             pred_vel = state.stage3_models["flow_matcher"].velocity_field(
                 x_t, t_vector, batch_s_t, s_target_batch
             )
-            cfm_loss = F.mse_loss(pred_vel, target_vel)
+
+            cfm_loss_elementwise = F.mse_loss(
+                pred_vel, target_vel, reduction="none"
+            ).mean(dim=-1)
+            combined_rewards = torch.clamp(
+                1.0 - batch_energy + 2.0 * batch_tactile, min=0.05
+            )
+            cfm_loss = (cfm_loss_elementwise * combined_rewards).mean()
 
             # 2. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
@@ -1129,7 +1145,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
-            # 3. Goal Attention Loss (train attention head)
+            # 3. Goal Attention Loss
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
             s_target_expanded = s_target_batch.unsqueeze(1)
             s_goal_pred, _ = state.stage3_models["goal_attention"](
@@ -1138,7 +1154,14 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             s_goal_pred = s_goal_pred.squeeze(1)
             goal_attention_loss = F.mse_loss(s_goal_pred, s_target_batch)
 
-            # 4. Anti-collapse regularization for all components
+            # 4. CASA (Contrastive Action-State Alignment) Loss integration from Stage 2 SFT
+            z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
+            z_a = z_action / (z_action.norm(dim=-1, keepdim=True) + 1e-8)
+            sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
+            labels = torch.arange(sim_matrix.size(0), device=device)
+            casa_loss = F.cross_entropy(sim_matrix, labels)
+
+            # 5. Anti-collapse regularization (SIGReg)
             random_dirs = torch.randn(batch_s_t.size(-1), 10, device=device)
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
             projected = torch.matmul(batch_s_t, random_dirs)
@@ -1148,14 +1171,46 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 mean_proj, torch.zeros_like(mean_proj)
             )
 
-            # 5. Combined loss with reward weighting
-            combined_reward = max(0.05, 1.0 + payload.reward)
+            # Combined total optimization payload
             loss_opsd = (
-                cfm_loss * combined_reward
+                cfm_loss
+                + 0.2 * casa_loss
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
                 + sigreg_loss * 0.01
             )
+
+            # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
+            with torch.no_grad():
+                state_magnitude = batch_s_t.norm(dim=-1).mean().item()
+                state_variance = batch_s_t.var(dim=-1).mean().item()
+
+                action_magnitude = batch_action.norm(dim=-1).mean().item()
+                action_steps = batch_action.view(batch_action.size(0), 8, 58)
+                action_deltas = action_steps[:, 1:, :] - action_steps[:, :-1, :]
+                action_smoothness = action_deltas.abs().mean().item()
+
+                # Core Parity Metrics from Stage 1/2 Checkpoints
+                identity_error = F.mse_loss(batch_s_t, batch_s_next).item()
+                noop_ratio = predictor_loss.item() / max(identity_error, 1e-6)
+
+                z_random = torch.randn_like(z_action_16)
+                s_next_pred_rand = state.stage3_models["predictor"](batch_s_t, z_random)
+                action_drift = F.mse_loss(s_next_pred, s_next_pred_rand).item()
+
+            diagnostics = {
+                "epoch_step": opsd_step,
+                "loss/cfm_loss": cfm_loss.item(),
+                "loss/casa_loss": casa_loss.item(),
+                "loss/sigreg_loss": sigreg_loss.item(),
+                "drift/state_magnitude": state_magnitude,
+                "drift/state_variance": state_variance,
+                "policy/action_magnitude": action_magnitude,
+                "policy/action_smoothness": action_smoothness,
+                "metrics/noop_loss_ratio": noop_ratio,
+                "metrics/action_drift": action_drift,
+            }
+            print(f"📊 Stage 3 OPSD Diagnostics: {json.dumps(diagnostics, indent=2)}")
 
             loss_opsd.backward()
             state.stage3_optimizer.step()
@@ -1163,6 +1218,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
 
         avg_loss = total_loss / num_opsd_steps
 
+        # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "..", config["paths"]["checkpoint_dir"]
@@ -1195,11 +1251,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             final_path,
         )
 
-        return {
-            "status": "distilled",
-            "opsd_loss": avg_loss,
-            "checkpoint": final_path,
-        }
+        return {"status": "distilled", "opsd_loss": avg_loss, "checkpoint": final_path}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(
