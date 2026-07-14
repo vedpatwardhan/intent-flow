@@ -966,6 +966,14 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         with torch.no_grad():
             final_energies = torch.mean((s_goal_pred - s_target_expanded) ** 2, dim=-1)
 
+        # Print step trajectories telemetry
+        print("--- Stage 3 Step Trajectories ---")
+        for i in range(ensemble_size):
+            energy_val = final_energies[i].item()
+            action_norm = final_actions[i].norm().item()
+            print(f"  Track {i:02d}: Energy = {energy_val:.6f} | Action Norm = {action_norm:.4f}")
+        print("---------------------------------")
+
         return {
             "action": final_actions.cpu().numpy().tolist(),
             "energy": final_energies.cpu().numpy().tolist(),
