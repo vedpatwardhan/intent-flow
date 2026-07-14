@@ -891,10 +891,16 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             steering_timelines=steering_timelines_expanded,
             step_nft_scale=0.05,
         )  # Output Shape: [4, 8, 58]
-        eta = 0.01
 
-        # Guidance mask (shape: [4, 464])
-        t_j = 1.0 - steering_timelines_expanded
+        # Learning rate for action adjustment and timeline rollback scale
+        eta = 0.01
+        timeline_rollback_rate = 0.05
+        error_threshold = 0.02
+
+        # Format the master timeline grid into its explicit structural layout [4, 8, 58]
+        steering_timelines_expanded = steering_timelines_expanded.view(
+            ensemble_size, horizon, joint_dim
+        ).clone()
 
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
@@ -928,8 +934,27 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Masked Energy Guidance matching 3D coordinates
             with torch.no_grad():
-                # Reshape guidance token mask back to [4, 8, 58] dynamically
-                a_candidates = a_candidates - eta * grad_a * t_j.view_as(grad_a)
+                # Dynamically calculate the guidance mask (shape: [4, 8, 58])
+                t_j = 1.0 - steering_timelines_expanded
+
+                # Sculpt action parameters along the tracking vector field
+                a_candidates = a_candidates - eta * grad_a * t_j
+
+                # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
+                # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
+                joint_errors = grad_a.abs().mean(dim=(0, 1))
+
+                # Identify indices breaching our task accuracy threshold
+                drifting_joints_mask = joint_errors > error_threshold
+
+                # Apply Localized Timeline Rollback to the time maps of drifting dimensions
+                # Decrementing 't' opens up 't_j', granting more gradient flexibility next step
+                steering_timelines_expanded[
+                    :, :, drifting_joints_mask
+                ] -= timeline_rollback_rate
+                steering_timelines_expanded = torch.clamp(
+                    steering_timelines_expanded, 0.0, 1.0
+                )
 
             a_candidates = a_candidates.clone().detach()
 
