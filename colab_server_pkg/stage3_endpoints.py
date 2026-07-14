@@ -72,10 +72,14 @@ class Stage3StepPayload(BaseModel):
     is_easy_task: bool = False
 
 
-class Stage3CalibratePayload(BaseModel):
+class Stage3CalibrateTransition(BaseModel):
     current_obs: Stage3StepPayload
     action_taken: List[float]
     next_obs: Stage3StepPayload
+
+
+class Stage3CalibratePayload(BaseModel):
+    transitions: List[Stage3CalibrateTransition]
 
 
 class Stage3DistillPayload(BaseModel):
@@ -976,16 +980,22 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
-        obs_t = extract_stage3_obs_features(payload.current_obs)
-        obs_next = extract_stage3_obs_features(payload.next_obs)
-        action = torch.tensor([payload.action_taken], dtype=torch.float32).to(device)
+        s_t_first = None
 
-        with torch.no_grad():
-            s_t = encode_obs_to_latent(obs_t, state).detach()
-            s_next = encode_obs_to_latent(obs_next, state).detach()
+        for trans in payload.transitions:
+            obs_t = extract_stage3_obs_features(trans.current_obs)
+            obs_next = extract_stage3_obs_features(trans.next_obs)
+            action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
+            with torch.no_grad():
+                s_t = encode_obs_to_latent(obs_t, state).detach()
+                s_next = encode_obs_to_latent(obs_next, state).detach()
 
-        state.stage3_trajectory_history.append((s_t, action, s_next))
-        if len(state.stage3_trajectory_history) > 100:
+            if s_t_first is None:
+                s_t_first = s_t
+
+            state.stage3_trajectory_history.append((s_t, action, s_next))
+
+        while len(state.stage3_trajectory_history) > 100:
             state.stage3_trajectory_history.pop(0)
 
         batch_size = min(len(state.stage3_trajectory_history), 8)
@@ -1029,10 +1039,11 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         loss_total.backward()
         state.stage3_optimizer.step()
 
-        tactile_spike = float(payload.next_obs.tactile[0][0] > 0.5)
-        state.stage3_memory.update(s_t[0], tactile_spike)
+        tactile_spike = float(payload.transitions[0].next_obs.tactile[0][0] > 0.5)
+        if s_t_first is not None:
+            state.stage3_memory.update(s_t_first[0], tactile_spike)
 
-        return {"status": "calibrated", "loss": loss_dynamics.item()}
+        return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(

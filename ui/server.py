@@ -208,13 +208,13 @@ async def run_stage3_training_loop(
 
         episode_reward = 0.0
 
-        for step in range(max_steps):
+        for env_step in range(max_steps):
             # Capture observation
             sim.renderer.update_scene(sim.data, camera="world_center")
 
             # Computes distance between fingers and cube
-            # ToDo: Needs to be generalized for other tasks,
-            # where the user configures tactile forces in the UI
+            # ToDo: Needs to be generalized for other tasks, where the user configures
+            # which fingers matter, relative positions, etc. in the UI.
             index_pos = sim.data.xpos[index_id]
             thumb_pos = sim.data.xpos[thumb_id]
             cube_pos = sim.data.xpos[cube_id]
@@ -260,7 +260,7 @@ async def run_stage3_training_loop(
                 "is_easy_task": False,
             }
 
-            action_taken = None
+            action_taken_ensemble = None
             try:
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
@@ -270,7 +270,10 @@ async def run_stage3_training_loop(
                         res = r.json()
                         action_taken_ensemble = res.get("action")
             except Exception as e:
-                print(f"[Training Error] Step {step} Colab step query failed: {e}")
+                print(
+                    f"[Training Error] Episode {ep_idx + 1} Step "
+                    f"{env_step} Colab step query failed: {e}"
+                )
                 break
 
             if action_taken_ensemble is None:
@@ -285,8 +288,8 @@ async def run_stage3_training_loop(
             initial_qvel = sim.data.qvel.copy()
             initial_ctrl = sim.data.ctrl.copy()
 
-            actions_taken_batch = []
-            next_obs_batch = []
+            transitions = []
+            committed_qpos = None
 
             # Replay all 4 trajectories inside the simulator
             for track_idx in range(action_np.shape[0]):
@@ -296,95 +299,112 @@ async def run_stage3_training_loop(
                 sim.data.ctrl[:] = initial_ctrl
                 mujoco.mj_forward(sim.model, sim.data)
 
-                # Extract the action slice corresponding to the current candidate index
-                track_action = action_np[track_idx, 0, :]  # Shape: (58,)
-                action_32 = track_action[:32]
-                action_rad = sim.unscaler.unscale_action(action_32)
+                obs_h = current_obs
+                track_frame_history = list(frame_history)
 
-                # Execute motor posture loop
-                for _ in range(2):
-                    for i, j_id in enumerate(sim.protocol_joint_ids):
-                        if j_id != -1:
-                            q_idx = sim.model.jnt_qposadr[j_id]
-                            sim.last_target_q[q_idx] = action_rad[i]
-                            if i in sim.coupling_map:
-                                for distal_idx in sim.coupling_map[i]:
-                                    sim.last_target_q[distal_idx] = action_rad[i]
-                    sim.sync_ctrl_to_qpos(sim.last_target_q)
-                    sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [
-                        0.0,
-                        0.0,
-                        0.95,
-                    ]
-                    sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
-                        1.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                    ]
-                    sim.data.qvel[:6] = 0.0
-                    mujoco.mj_step(sim.model, sim.data)
+                # Execute the full 8-step trajectory sequence open-loop
+                for h in range(action_np.shape[1]):
+                    track_action = action_np[track_idx, h, :]  # Shape: (58,)
+                    action_32 = track_action[:32]
+                    action_rad = sim.unscaler.unscale_action(action_32)
 
-                # Get next observation for this specific candidate stream
-                frames_all_views_next = {}
-                for cam_name in sim.cam_names:
-                    sim.renderer.update_scene(sim.data, camera=cam_name)
-                    rgb_cam_next = sim.renderer.render()
-                    img_cam_next = Image.fromarray(rgb_cam_next)
-                    img_cam_next_224 = img_cam_next.resize((224, 224))
-                    buf_cam_next = io.BytesIO()
-                    img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
-                    frames_all_views_next[cam_name] = (
-                        "data:image/jpeg;base64,"
-                        + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
+                    # Execute motor posture loop
+                    for _ in range(2):
+                        for i, j_id in enumerate(sim.protocol_joint_ids):
+                            if j_id != -1:
+                                q_idx = sim.model.jnt_qposadr[j_id]
+                                sim.last_target_q[q_idx] = action_rad[i]
+                                if i in sim.coupling_map:
+                                    for distal_idx in sim.coupling_map[i]:
+                                        sim.last_target_q[distal_idx] = action_rad[i]
+                        sim.sync_ctrl_to_qpos(sim.last_target_q)
+                        sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [
+                            0.0,
+                            0.0,
+                            0.95,
+                        ]
+                        sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ]
+                        sim.data.qvel[:6] = 0.0
+                        mujoco.mj_step(sim.model, sim.data)
+
+                    # Get next observation for this specific candidate step
+                    frames_all_views_next = {}
+                    for cam_name in sim.cam_names:
+                        sim.renderer.update_scene(sim.data, camera=cam_name)
+                        rgb_cam_next = sim.renderer.render()
+                        img_cam_next = Image.fromarray(rgb_cam_next)
+                        img_cam_next_224 = img_cam_next.resize((224, 224))
+                        buf_cam_next = io.BytesIO()
+                        img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
+                        frames_all_views_next[cam_name] = (
+                            "data:image/jpeg;base64,"
+                            + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
+                        )
+
+                    track_frame_history_next = list(track_frame_history)
+                    if len(track_frame_history_next) < 2:
+                        track_frame_history_next.append(
+                            frames_all_views_next["world_center"]
+                        )
+                    else:
+                        track_frame_history_next.pop(0)
+                        track_frame_history_next.append(
+                            frames_all_views_next["world_center"]
+                        )
+
+                    index_pos = sim.data.xpos[index_id]
+                    thumb_pos = sim.data.xpos[thumb_id]
+                    cube_pos = sim.data.xpos[cube_id]
+                    d_index = float(np.linalg.norm(index_pos - cube_pos))
+                    d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+                    touch_index_next = (
+                        max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
+                    )
+                    touch_thumb_next = (
+                        max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
+                    )
+                    tactile_grid_next = [[0.0] * 4 for _ in range(4)]
+                    tactile_grid_next[0][0] = touch_index_next
+                    tactile_grid_next[1][1] = touch_thumb_next
+
+                    track_next_obs = {
+                        "frames": frames_all_views_next,
+                        "history_frames": track_frame_history_next,
+                        "proprioception": sim.get_state_32()[:24].tolist(),
+                        "tactile": tactile_grid_next,
+                        "text_prompt": text_prompt or "grasp cube",
+                        "ui_annotations": ui_annotations
+                        or {"crops": [], "vectors": [], "segments": []},
+                        "is_easy_task": False,
+                    }
+
+                    transitions.append(
+                        {
+                            "current_obs": obs_h,
+                            "action_taken": track_action.tolist(),
+                            "next_obs": track_next_obs,
+                        }
                     )
 
-                frame_history_next = list(frame_history)
-                if len(frame_history_next) < 2:
-                    frame_history_next.append(frames_all_views_next["world_center"])
-                else:
-                    frame_history_next.pop(0)
-                    frame_history_next.append(frames_all_views_next["world_center"])
+                    # Progress rollout step
+                    obs_h = track_next_obs
+                    track_frame_history = track_frame_history_next
 
-                index_pos = sim.data.xpos[index_id]
-                thumb_pos = sim.data.xpos[thumb_id]
-                cube_pos = sim.data.xpos[cube_id]
-                d_index = float(np.linalg.norm(index_pos - cube_pos))
-                d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
-                touch_index_next = (
-                    max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
-                )
-                touch_thumb_next = (
-                    max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
-                )
-                tactile_grid_next = [[0.0] * 4 for _ in range(4)]
-                tactile_grid_next[0][0] = touch_index_next
-                tactile_grid_next[1][1] = touch_thumb_next
+                    # Keep track 0's final step outcomes as the committed path for the environment
+                    if track_idx == 0 and h == action_np.shape[1] - 1:
+                        committed_qpos = sim.data.qpos.copy()
+                        committed_qvel = sim.data.qvel.copy()
+                        committed_ctrl = sim.data.ctrl.copy()
+                        committed_next_obs = track_next_obs
+                        committed_touch_index_next = touch_index_next
+                        committed_touch_thumb_next = touch_thumb_next
 
-                track_next_obs = {
-                    "frames": frames_all_views_next,
-                    "history_frames": frame_history_next,
-                    "proprioception": sim.get_state_32()[:24].tolist(),
-                    "tactile": tactile_grid_next,
-                    "text_prompt": text_prompt or "grasp cube",
-                    "ui_annotations": ui_annotations
-                    or {"crops": [], "vectors": [], "segments": []},
-                    "is_easy_task": False,
-                }
-
-                actions_taken_batch.append(track_action.tolist())
-                next_obs_batch.append(track_next_obs)
-
-                # Keep track 0 as the committed path that the simulator will proceed with
-                if track_idx == 0:
-                    committed_qpos = sim.data.qpos.copy()
-                    committed_qvel = sim.data.qvel.copy()
-                    committed_ctrl = sim.data.ctrl.copy()
-                    committed_next_obs = track_next_obs
-                    committed_touch_index_next = touch_index_next
-                    committed_touch_thumb_next = touch_thumb_next
-
-            # Rewind physics back to the committed path
+            # Rewind physics back to the committed path's final outcome
             sim.data.qpos[:] = committed_qpos
             sim.data.qvel[:] = committed_qvel
             sim.data.ctrl[:] = committed_ctrl
@@ -399,22 +419,20 @@ async def run_stage3_training_loop(
             step_reward = -physics_state["target_dist"]
             episode_reward += step_reward
 
-            # Report calibration (For now, calibrate payload corresponds to track 0 to stay compatible with endpoints.py)
-            calibrate_payload = {
-                "current_obs": current_obs,
-                "action_taken": actions_taken_batch[0],
-                "next_obs": next_obs,
-            }
+            # Report calibration
+            calibrate_payload = {"transitions": transitions}
 
             try:
                 async with httpx.AsyncClient() as client:
                     await client.post(
                         f"{colab_url}/stage3/calibrate",
                         json=calibrate_payload,
-                        timeout=15.0,
+                        timeout=30.0,
                     )
             except Exception as e:
-                print(f"[Training Error] Step {step} Colab calibrate failed: {e}")
+                print(
+                    f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
+                )
 
         # Distillation
         touch_count = 0
