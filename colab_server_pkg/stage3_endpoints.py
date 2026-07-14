@@ -985,8 +985,11 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         for trans in payload.transitions:
             obs_t = extract_stage3_obs_features(trans.current_obs)
             obs_next = extract_stage3_obs_features(trans.next_obs)
+
+            # action: Shape [1, 464] (464 = 8 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
             with torch.no_grad():
+                # s_t, s_next: Shape [1, 512] (shared state latent dimension)
                 s_t = encode_obs_to_latent(obs_t, state).detach()
                 s_next = encode_obs_to_latent(obs_next, state).detach()
 
@@ -1003,22 +1006,28 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             len(state.stage3_trajectory_history), batch_size, replace=False
         )
 
+        # batch_s_t: Shape [batch_size, 512]
         batch_s_t = torch.cat(
             [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
         )
+        # batch_action: Shape [batch_size, 464]
         batch_action = torch.cat(
             [state.stage3_trajectory_history[idx][1] for idx in indices], dim=0
         )
+        # batch_s_next: Shape [batch_size, 512]
         batch_s_next = torch.cat(
             [state.stage3_trajectory_history[idx][2] for idx in indices], dim=0
         )
 
         state.stage3_optimizer.zero_grad()
+        # z_action: Shape [batch_size, 512] (projected action trajectory latents)
         z_action = state.stage3_models["action_adapter"](batch_action)
+        # z_action_16: Shape [batch_size, 16] (bottleneck dynamics conditioning latent)
         z_action_16 = state.stage3_models["action_down_proj"](z_action)
+        # s_next_pred: Shape [batch_size, 512] (predicted macro-step outcome latent state)
         s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
 
-        # Dynamics loss (predictor update without goal attention)
+        # Dynamics loss (predictor update without goal attention) - Scalar loss
         loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
 
         # Anti-collapse regularization (SIGReg-style)

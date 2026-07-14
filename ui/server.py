@@ -293,18 +293,18 @@ async def run_stage3_training_loop(
 
             # Replay all 4 trajectories inside the simulator
             for track_idx in range(action_np.shape[0]):
-                # Rewind physics cleanly to the starting coordinates
+                # Rewind physics cleanly to the starting coordinates of the rollout window
                 sim.data.qpos[:] = initial_qpos
                 sim.data.qvel[:] = initial_qvel
                 sim.data.ctrl[:] = initial_ctrl
                 mujoco.mj_forward(sim.model, sim.data)
 
-                obs_h = current_obs
-                track_frame_history = list(frame_history)
+                track_actions_flat = []
 
                 # Execute the full 8-step trajectory sequence open-loop
                 for h in range(action_np.shape[1]):
                     track_action = action_np[track_idx, h, :]  # Shape: (58,)
+                    track_actions_flat.extend(track_action.tolist())
                     action_32 = track_action[:32]
                     action_rad = sim.unscaler.unscale_action(action_32)
 
@@ -346,17 +346,6 @@ async def run_stage3_training_loop(
                             + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
                         )
 
-                    track_frame_history_next = list(track_frame_history)
-                    if len(track_frame_history_next) < 2:
-                        track_frame_history_next.append(
-                            frames_all_views_next["world_center"]
-                        )
-                    else:
-                        track_frame_history_next.pop(0)
-                        track_frame_history_next.append(
-                            frames_all_views_next["world_center"]
-                        )
-
                     index_pos = sim.data.xpos[index_id]
                     thumb_pos = sim.data.xpos[thumb_id]
                     cube_pos = sim.data.xpos[cube_id]
@@ -374,7 +363,7 @@ async def run_stage3_training_loop(
 
                     track_next_obs = {
                         "frames": frames_all_views_next,
-                        "history_frames": track_frame_history_next,
+                        "history_frames": list(frame_history),
                         "proprioception": sim.get_state_32()[:24].tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
@@ -382,18 +371,6 @@ async def run_stage3_training_loop(
                         or {"crops": [], "vectors": [], "segments": []},
                         "is_easy_task": False,
                     }
-
-                    transitions.append(
-                        {
-                            "current_obs": obs_h,
-                            "action_taken": track_action.tolist(),
-                            "next_obs": track_next_obs,
-                        }
-                    )
-
-                    # Progress rollout step
-                    obs_h = track_next_obs
-                    track_frame_history = track_frame_history_next
 
                     # Keep track 0's final step outcomes as the committed path for the environment
                     if track_idx == 0 and h == action_np.shape[1] - 1:
@@ -403,6 +380,16 @@ async def run_stage3_training_loop(
                         committed_next_obs = track_next_obs
                         committed_touch_index_next = touch_index_next
                         committed_touch_thumb_next = touch_thumb_next
+
+                    # Append the full 8-step transition once lookahead completes
+                    if h == action_np.shape[1] - 1:
+                        transitions.append(
+                            {
+                                "current_obs": current_obs,
+                                "action_taken": track_actions_flat,
+                                "next_obs": track_next_obs,
+                            }
+                        )
 
             # Rewind physics back to the committed path's final outcome
             sim.data.qpos[:] = committed_qpos
