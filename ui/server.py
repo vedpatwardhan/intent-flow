@@ -284,7 +284,7 @@ async def run_stage3_training_loop(
                 break
 
             # Convert to numpy to slice precisely
-            action_np = np.array(action_taken_ensemble, dtype=np.float32)  # [16, 8, 58]
+            action_np = np.array(action_taken_ensemble, dtype=np.float32)  # [16, 7, 58]
 
             # Snapshot initial state
             initial_qpos = sim.data.qpos.copy()

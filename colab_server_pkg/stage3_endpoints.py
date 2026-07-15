@@ -959,13 +959,17 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 # [16, 1, 512]
                 s_next_pred_expanded = s_next_pred.unsqueeze(1)
 
-                # Batch expanded target vector
-                s_target_loop_context = s_target.expand(ensemble_size, -1).unsqueeze(1)
+                # Expand the 4 RAW foveated goal orientations [16, 4, 512]
+                stacked_goals_expanded = stacked_goals.expand(ensemble_size, -1, -1)
 
-                s_goal_pred, _ = state.stage3_models["goal_attention"](
-                    s_next_pred_expanded, s_target_loop_context, s_target_loop_context
+                # Query the 4 goal perspectives using the predicted next state vector
+                s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
+                    s_next_pred_expanded, stacked_goals_expanded, stacked_goals_expanded
                 )
-                s_goal_pred = s_goal_pred.squeeze(1)
+                s_goal_pred_attn = s_goal_pred_attn.squeeze(1) # Shape: [16, 512]
+
+                # Project the foveated pool back into aligned task space [16, 512]
+                s_goal_pred = state.stage3_models["latent_adapter"](s_goal_pred_attn)
 
                 # Compute energy and gradient (distance to goal)
                 energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
@@ -974,7 +978,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Masked Energy Guidance matching 3D coordinates
             with torch.no_grad():
-                # Dynamically calculate the guidance mask (shape: [4, 8, 58])
+                # Dynamically calculate the guidance mask (shape: [4, 7, 58])
                 t_j = 1.0 - steering_timelines_expanded
 
                 # Sculpt action parameters along the tracking vector field
