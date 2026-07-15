@@ -90,13 +90,22 @@ class BadWorldAttacker:
             any_view = next(iter(obs_features.values()))
             combined_obs = {
                 "vision": torch.cat(
-                    [obs_features[view]["vision"] for view in obs_features], dim=1
+                    [
+                        obs_features[view]["vision"].unsqueeze(1)
+                        for view in obs_features
+                    ],
+                    dim=1,
                 ),
                 "pointnext": torch.cat(
-                    [obs_features[view]["pointnext"] for view in obs_features], dim=1
+                    [
+                        obs_features[view]["pointnext"].unsqueeze(1)
+                        for view in obs_features
+                    ],
+                    dim=1,
                 ),
                 "vggt": torch.cat(
-                    [obs_features[view]["vggt"] for view in obs_features], dim=1
+                    [obs_features[view]["vggt"].unsqueeze(1) for view in obs_features],
+                    dim=1,
                 ),
                 "text": any_view["text"],
                 "tactile": any_view["tactile"],

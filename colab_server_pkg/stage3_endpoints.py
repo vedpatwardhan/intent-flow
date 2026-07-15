@@ -830,12 +830,15 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             )
             combined_obs = {
                 "vision": torch.cat(
-                    [obs_dict[view]["vision"] for view in obs_dict], dim=1
+                    [obs_dict[view]["vision"].unsqueeze(1) for view in obs_dict], dim=1
                 ),
                 "pointnext": torch.cat(
-                    [obs_dict[view]["pointnext"] for view in obs_dict], dim=1
+                    [obs_dict[view]["pointnext"].unsqueeze(1) for view in obs_dict],
+                    dim=1,
                 ),
-                "vggt": torch.cat([obs_dict[view]["vggt"] for view in obs_dict], dim=1),
+                "vggt": torch.cat(
+                    [obs_dict[view]["vggt"].unsqueeze(1) for view in obs_dict], dim=1
+                ),
                 "text": any_view["text"],
                 "tactile": any_view["tactile"],
                 "proprioception": any_view["proprioception"],
