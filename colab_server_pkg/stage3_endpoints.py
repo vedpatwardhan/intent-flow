@@ -94,39 +94,40 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
     Passes observation features through the respective adapter blocks and the
     Multi-Stream Action Transformer (MSAT) to yield the multi-modal latent state.
     """
-    if override_vision_token is not None:
-        vis_tok = override_vision_token
-    else:
-        vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
+    with torch.amp.autocast("cuda"):
+        if override_vision_token is not None:
+            vis_tok = override_vision_token
+        else:
+            vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
 
-    txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
-    pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
-    vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
-    tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
+        txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
+        pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
+        vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
+        tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
 
-    # Pad proprioception to 58 dimensions and project using state_adapter
-    proprio = obs_dict["proprioception"]
-    if proprio.size(-1) < 58:
-        proprio = torch.cat(
-            [
-                proprio,
-                torch.zeros(
-                    proprio.size(0), 58 - proprio.size(-1), device=proprio.device
-                ),
-            ],
-            dim=-1,
-        )
-    proprio_tok = state.stage3_models["state_adapter"](proprio)
+        # Pad proprioception to 58 dimensions and project using state_adapter
+        proprio = obs_dict["proprioception"]
+        if proprio.size(-1) < 58:
+            proprio = torch.cat(
+                [
+                    proprio,
+                    torch.zeros(
+                        proprio.size(0), 58 - proprio.size(-1), device=proprio.device
+                    ),
+                ],
+                dim=-1,
+            )
+        proprio_tok = state.stage3_models["state_adapter"](proprio)
 
-    modality_dict = {
-        "vision": vis_tok,
-        "text": txt_tok,
-        "pointnext": pt_tok,
-        "vggt": vggt_tok,
-        "tactile": tactile_emb,
-        "proprioception": proprio_tok,
-    }
-    return state.stage3_models["msat"](modality_dict)
+        modality_dict = {
+            "vision": vis_tok,
+            "text": txt_tok,
+            "pointnext": pt_tok,
+            "vggt": vggt_tok,
+            "tactile": tactile_emb,
+            "proprioception": proprio_tok,
+        }
+        return state.stage3_models["msat"](modality_dict)
 
 
 def construct_goal_states(obs_dict, ui_annotations):
