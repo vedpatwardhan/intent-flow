@@ -83,28 +83,27 @@ def load_pretrained_models():
     models["dino"].eval()
 
     print("Loading CLIP...")
-    models["clip"] = CLIPModel.from_pretrained("openai/clip-vit-base-patch16").to(
-        device
-    )
+    models["clip"] = CLIPModel.from_pretrained(
+        "openai/clip-vit-base-patch16", torch_dtype=torch.float16
+    ).to(device)
     models["clip_processor"] = CLIPProcessor.from_pretrained(
         "openai/clip-vit-base-patch16"
     )
     models["clip"].eval()
 
     print("Loading SAM 2...")
-    models["sam"] = Sam2Model.from_pretrained("facebook/sam2-hiera-large").to(device)
+    models["sam"] = Sam2Model.from_pretrained(
+        "facebook/sam2-hiera-large", torch_dtype=torch.float16
+    ).to(device)
     models["sam_processor"] = Sam2Processor.from_pretrained("facebook/sam2-hiera-large")
     models["sam"].eval()
-    models["sam_automatic_mask_generator"] = pipeline(
-        task="mask-generation", model="facebook/sam2-hiera-large", device=device
-    )
 
     print("Loading Depth-Anything V2...")
     models["depth_processor"] = AutoImageProcessor.from_pretrained(
         "depth-anything/Depth-Anything-V2-Small-hf"
     )
     models["depth_model"] = AutoModelForDepthEstimation.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small-hf"
+        "depth-anything/Depth-Anything-V2-Small-hf", torch_dtype=torch.float16
     ).to(device)
     models["depth_model"].eval()
 
