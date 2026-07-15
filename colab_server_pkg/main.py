@@ -84,7 +84,7 @@ def load_pretrained_models():
 
     print("Loading CLIP...")
     models["clip"] = CLIPModel.from_pretrained(
-        "openai/clip-vit-base-patch16", torch_dtype=torch.float16
+        "openai/clip-vit-base-patch16", dtype=torch.float16
     ).to(device)
     models["clip_processor"] = CLIPProcessor.from_pretrained(
         "openai/clip-vit-base-patch16"
@@ -93,7 +93,7 @@ def load_pretrained_models():
 
     print("Loading SAM 2...")
     models["sam"] = Sam2Model.from_pretrained(
-        "facebook/sam2-hiera-large", torch_dtype=torch.float16
+        "facebook/sam2-hiera-large", dtype=torch.float16
     ).to(device)
     models["sam_processor"] = Sam2Processor.from_pretrained("facebook/sam2-hiera-large")
     models["sam"].eval()
@@ -103,7 +103,7 @@ def load_pretrained_models():
         "depth-anything/Depth-Anything-V2-Small-hf"
     )
     models["depth_model"] = AutoModelForDepthEstimation.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small-hf", torch_dtype=torch.float16
+        "depth-anything/Depth-Anything-V2-Small-hf", dtype=torch.float16
     ).to(device)
     models["depth_model"].eval()
 
