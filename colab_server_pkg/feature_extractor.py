@@ -35,6 +35,12 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
     inputs_vision = models["clip_processor"](images=pil_frame, return_tensors="pt").to(
         device
     )
+    for k, v in inputs_text.items():
+        if torch.is_tensor(v) and torch.is_floating_point(v):
+            inputs_text[k] = v.to(torch.float16)
+    for k, v in inputs_vision.items():
+        if torch.is_tensor(v) and torch.is_floating_point(v):
+            inputs_vision[k] = v.to(torch.float16)
     with torch.no_grad():
         text_feat_raw = models["clip"].get_text_features(**inputs_text)
         vision_out = models["clip"].vision_model(**inputs_vision)
@@ -59,6 +65,9 @@ def get_point_cloud(pil_frame: Image, frame: np.ndarray):
     inputs_depth = models["depth_processor"](images=pil_frame, return_tensors="pt").to(
         device
     )
+    for k, v in inputs_depth.items():
+        if torch.is_tensor(v) and torch.is_floating_point(v):
+            inputs_depth[k] = v.to(torch.float16)
     with torch.no_grad():
         outputs_depth = models["depth_model"](**inputs_depth)
         depth_map = (
@@ -263,6 +272,9 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
         input_labels=[[[1]] for _ in range(num_pts)],
         return_tensors="pt",
     ).to(device)
+    for k, v in inputs.items():
+        if torch.is_tensor(v) and torch.is_floating_point(v):
+            inputs[k] = v.to(torch.float16)
 
     with torch.inference_mode():
         outputs = models["sam"](**inputs)
