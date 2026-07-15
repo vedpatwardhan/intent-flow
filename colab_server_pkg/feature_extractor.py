@@ -415,7 +415,7 @@ def run_pointnext_model(point_cloud_np):
             with torch.amp.autocast("cuda", enabled=False):
                 feat = models["pointnext"](pc_t)
             if feat.dim() > 2:
-                feat = feat.mean(dim=1)  # Global pooling over points
+                feat = feat.mean(dim=-1)  # Global average pooling over points
             return feat.squeeze(0).cpu()
     except Exception as e:
         print(f"Error running PointNeXt model: {e}")
