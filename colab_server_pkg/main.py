@@ -131,7 +131,7 @@ def load_pretrained_models():
                         "blocks": [1, 1, 1, 1, 1, 1],
                         "strides": [1, 2, 2, 2, 2, 1],
                         "width": 32,
-                        "in_channels": 4,  # x, y, z, intensity
+                        "in_channels": 3,  # x, y, z
                         "sa_layers": 3,
                         "sa_use_res": True,
                         "group_args": {

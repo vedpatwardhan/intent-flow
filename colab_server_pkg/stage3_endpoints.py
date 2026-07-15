@@ -365,7 +365,7 @@ def ensure_stage3_models():
     ).to(device)
     state.stage3_models["tactile_adapter"] = TactileAdapter().to(device)
     state.stage3_models["action_adapter"] = ActionAdapter(
-        d_in=action_dim, d_out=512
+        d_in=(horizon - 1) * action_dim, d_out=512
     ).to(device)
     state.stage3_models["state_adapter"] = ActionAdapter(
         d_in=config["model"]["state_dim"], d_out=512
@@ -869,8 +869,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             s_target = state.stage3_models["latent_adapter"](s_target)
             print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
-        # Initialize the 2D Space-Time Grid (Horizon=8, Joints=58)
-        horizon = 8
+        # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
+        horizon = 7
         joint_dim = 58
         total_gen_dim = horizon * joint_dim
 
@@ -927,7 +927,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
             # Flatten step layouts to match ActionAdapter's footprint contract
-            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 464]
+            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
 
             # Get the action representation and next latent state
             z_action = state.stage3_models["action_adapter"](a_flat)
@@ -1015,7 +1015,7 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             obs_t = extract_stage3_obs_features(trans.current_obs)
             obs_next = extract_stage3_obs_features(trans.next_obs)
 
-            # action: Shape [1, 464] (464 = 8 steps * 58 action_dim)
+            # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
             with torch.no_grad():
                 # s_t, s_next: Shape [1, 512] (shared state latent dimension)
@@ -1043,7 +1043,7 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         batch_s_t = torch.cat(
             [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
         )
-        # batch_action: Shape [batch_size, 464]
+        # batch_action: Shape [batch_size, 406]
         batch_action = torch.cat(
             [state.stage3_trajectory_history[idx][1] for idx in indices], dim=0
         )
@@ -1144,8 +1144,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # 1. Generative Flow Matcher Loss (CFM) via Native Blended ComboStoc Method
             B_size = batch_action.size(0)
 
-            # Unflatten back to the true 3D trajectory grid layout [B, 8, 58]
-            batch_action_3d = batch_action.view(B_size, 8, 58)
+            # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
+            batch_action_3d = batch_action.view(B_size, 7, 58)
 
             # Request unreduced batch loss elements using our new flag
             cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
@@ -1208,7 +1208,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 state_variance = batch_s_t.var(dim=-1).mean().item()
 
                 action_magnitude = batch_action.norm(dim=-1).mean().item()
-                action_steps = batch_action.view(batch_action.size(0), 8, 58)
+                action_steps = batch_action.view(batch_action.size(0), 7, 58)
                 action_deltas = action_steps[:, 1:, :] - action_steps[:, :-1, :]
                 action_smoothness = action_deltas.abs().mean().item()
 

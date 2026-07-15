@@ -391,12 +391,12 @@ def run_pointnext_model(point_cloud_np):
 
     try:
         cloud_data = np.array(point_cloud_np)
-        if cloud_data.shape[1] < 4:
-            # Pad intensity with zeros if shape is [N, 3] or similar
-            pad = np.zeros((cloud_data.shape[0], 4 - cloud_data.shape[1]))
+        if cloud_data.shape[1] < 3:
+            # Pad intensity/color with zeros if shape is [N, 2] or similar
+            pad = np.zeros((cloud_data.shape[0], 3 - cloud_data.shape[1]))
             cloud_data = np.concatenate([cloud_data, pad], axis=1)
         else:
-            cloud_data = cloud_data[:, :4]
+            cloud_data = cloud_data[:, :3]
 
         pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
