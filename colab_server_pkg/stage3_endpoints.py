@@ -796,38 +796,39 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # obs_dict = generate_perturbations(payload) # returns a list of obs_dicts
 
         # get all global and filtered features
-        obs_dict = extract_stage3_obs_features(payload)
+        with torch.amp.autocast("cuda"):
+            obs_dict = extract_stage3_obs_features(payload)
 
-        # Construct goal states from crops/segments/arrows
-        goal_images = construct_goal_states(obs_dict, payload.ui_annotations)
+            # Construct goal states from crops/segments/arrows
+            goal_images = construct_goal_states(obs_dict, payload.ui_annotations)
 
-        # Save debug visualization plots via dedicated helper function
-        save_stage3_debug_plots(payload, obs_dict, goal_images)
+            # Save debug visualization plots via dedicated helper function
+            save_stage3_debug_plots(payload, obs_dict, goal_images)
 
-        # Extract encoder representations for goal states
-        goal_latents = []
-        for view_name, images in goal_images.items():
-            for goal_img in images:
-                # Encode PIL goal_img to base64 string
-                buffered = io.BytesIO()
-                goal_img.save(buffered, format="JPEG")
-                goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            # Extract encoder representations for goal states
+            goal_latents = []
+            for view_name, images in goal_images.items():
+                for goal_img in images:
+                    # Encode PIL goal_img to base64 string
+                    buffered = io.BytesIO()
+                    goal_img.save(buffered, format="JPEG")
+                    goal_img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-                # Extract goal observation features using the low-level single-view function directly
-                goal_obs_dict = extract_single_view_stage3_obs_features(
-                    goal_img_str,
-                    payload.history_frames,
-                    payload.text_prompt,
-                    payload.ui_annotations,
-                    payload.tactile,
-                    payload.proprioception,
-                    view_name=view_name,
-                )
+                    # Extract goal observation features using the low-level single-view function directly
+                    goal_obs_dict = extract_single_view_stage3_obs_features(
+                        goal_img_str,
+                        payload.history_frames,
+                        payload.text_prompt,
+                        payload.ui_annotations,
+                        payload.tactile,
+                        payload.proprioception,
+                        view_name=view_name,
+                    )
 
-                # Pass features through respective adapters and MSAT under torch.no_grad()
-                with torch.no_grad():
-                    goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                    goal_latents.append(goal_latent)
+                    # Pass features through respective adapters and MSAT under torch.no_grad()
+                    with torch.no_grad():
+                        goal_latent = encode_obs_to_latent(goal_obs_dict, state)
+                        goal_latents.append(goal_latent)
 
         print("Goal Latents Shape:", goal_latents[0].shape)
         with torch.no_grad():
