@@ -409,12 +409,16 @@ def ensure_stage3_models():
         feature_dim=latent_dim
     ).to(device)
 
+    ckpt_dir_config = config["paths"]["checkpoint_dir"]
+    if ckpt_dir_config.startswith("latent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
     checkpoint_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", config["paths"]["checkpoint_dir"])
+        os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
     )
     os.makedirs(checkpoint_dir, exist_ok=True)
     s3_ckpt_path = os.path.join(checkpoint_dir, "stage3_rl_final.pt")
     s2_ckpt_path = os.path.join(checkpoint_dir, "stage2_sft.pt")
+    print(f"[Colab] Resolved checkpoint directory path: {checkpoint_dir}")
 
     if os.path.exists(s3_ckpt_path):
         print(f"[Colab] Loading Stage 3 checkpoint from: {s3_ckpt_path}")
@@ -472,6 +476,10 @@ def ensure_stage3_models():
         state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
         state.stage3_models["flow_matcher"].load_state_dict(
             checkpoint["flow_matcher"], strict=False
+        )
+    else:
+        print(
+            "[Colab] WARNING: Neither Stage 3 nor Stage 2 checkpoints were found. Models initialized with default random weights!"
         )
 
     state.stage3_optimizer = torch.optim.AdamW(
@@ -774,6 +782,7 @@ def save_stage3_debug_plots(
 async def handle_stage3_step(payload: Stage3StepPayload):
     # Called on every step of every epoch
     try:
+        torch.cuda.empty_cache()
         # instantiates all models and loads parameters from checkpoints
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
@@ -926,28 +935,32 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
-            # Flatten step layouts to match ActionAdapter's footprint contract
-            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
+            with torch.amp.autocast("cuda"):
+                # Flatten step layouts to match ActionAdapter's footprint contract
+                a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
 
-            # Get the action representation and next latent state
-            z_action = state.stage3_models["action_adapter"](a_flat)
-            z_action_16 = state.stage3_models["action_down_proj"](z_action)
+                # Get the action representation and next latent state
+                z_action = state.stage3_models["action_adapter"](a_flat)
+                z_action_16 = state.stage3_models["action_down_proj"](z_action)
 
-            s_next_pred = state.stage3_models["predictor"](s_t_ensemble, z_action_16)
+                s_next_pred = state.stage3_models["predictor"](
+                    s_t_ensemble, z_action_16
+                )
 
-            # [16, 1, 512]
-            s_next_pred_expanded = s_next_pred.unsqueeze(1)
+                # [16, 1, 512]
+                s_next_pred_expanded = s_next_pred.unsqueeze(1)
 
-            # Batch expanded target vector
-            s_target_loop_context = s_target.expand(ensemble_size, -1).unsqueeze(1)
+                # Batch expanded target vector
+                s_target_loop_context = s_target.expand(ensemble_size, -1).unsqueeze(1)
 
-            s_goal_pred, _ = state.stage3_models["goal_attention"](
-                s_next_pred_expanded, s_target_loop_context, s_target_loop_context
-            )
-            s_goal_pred = s_goal_pred.squeeze(1)
+                s_goal_pred, _ = state.stage3_models["goal_attention"](
+                    s_next_pred_expanded, s_target_loop_context, s_target_loop_context
+                )
+                s_goal_pred = s_goal_pred.squeeze(1)
 
-            # Compute energy and gradient (distance to goal)
-            energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
+                # Compute energy and gradient (distance to goal)
+                energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
+
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
             # Masked Energy Guidance matching 3D coordinates
