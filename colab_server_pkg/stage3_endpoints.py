@@ -815,9 +815,19 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     goal_latent = encode_obs_to_latent(goal_obs_dict, state)
                     goal_latents.append(goal_latent)
 
+        print("Goal Latents Shape:", goal_latents[0].shape)
         with torch.no_grad():
             # Combine multi-view observations by concatenating visual streams across views
             any_view = next(iter(obs_dict.values()))
+            any_view_key = next(iter(obs_dict.keys()))
+            print(
+                f"Shapes: {obs_dict[any_view_key]['vision'].shape} "
+                f"{obs_dict[any_view_key]['pointnext'].shape} "
+                f"{obs_dict[any_view_key]['vggt'].shape} "
+                f"{obs_dict[any_view_key]['text'].shape} "
+                f"{obs_dict[any_view_key]['tactile'].shape} "
+                f"{obs_dict[any_view_key]['proprioception'].shape} "
+            )
             combined_obs = {
                 "vision": torch.cat(
                     [obs_dict[view]["vision"] for view in obs_dict], dim=1
@@ -835,6 +845,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             print(f"  - vision: {combined_obs['vision'].shape}")
             print(f"  - pointnext: {combined_obs['pointnext'].shape}")
             print(f"  - vggt: {combined_obs['vggt'].shape}")
+            print(f"  - text: {combined_obs['text'].shape}")
+            print(f"  - tactile: {combined_obs['tactile'].shape}")
+            print(f"  - proprioception: {combined_obs['proprioception'].shape}")
 
             s_t = encode_obs_to_latent(combined_obs, state)
             print(f"[Stage3 Step] s_t shape: {s_t.shape}")
@@ -971,7 +984,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         for i in range(ensemble_size):
             energy_val = final_energies[i].item()
             action_norm = final_actions[i].norm().item()
-            print(f"  Track {i:02d}: Energy = {energy_val:.6f} | Action Norm = {action_norm:.4f}")
+            print(
+                f"  Track {i:02d}: Energy = {energy_val:.6f} | Action Norm = {action_norm:.4f}"
+            )
         print("---------------------------------")
 
         return {

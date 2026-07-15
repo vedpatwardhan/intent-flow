@@ -398,15 +398,11 @@ def run_pointnext_model(point_cloud_np):
         else:
             cloud_data = cloud_data[:, :4]
 
-        pc_t = (
-            torch.tensor(cloud_data, dtype=torch.float32, device=device)
-            .unsqueeze(0)
-            .transpose(1, 2)
-        )
+        pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
             feat = models["pointnext"](pc_t)
             if feat.dim() > 2:
-                feat = feat.mean(dim=-1)  # Global pooling over points
+                feat = feat.mean(dim=1)  # Global pooling over points
             return feat.squeeze(0).cpu()
     except Exception as e:
         print(f"Error running PointNeXt model: {e}")

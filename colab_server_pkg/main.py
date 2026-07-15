@@ -134,16 +134,39 @@ def load_pretrained_models():
                         "in_channels": 4,  # x, y, z, intensity
                         "sa_layers": 3,
                         "sa_use_res": True,
+                        "group_args": {
+                            "NAME": "ballquery",
+                            "radius": 0.15,
+                            "nsample": 32,
+                        },
+                        "conv_args": {
+                            "order": "conv-norm-act",
+                        },
+                        "norm_args": {
+                            "norm": "bn",
+                        },
+                        "act_args": {
+                            "act": "relu",
+                        },
+                    },
+                    "conv_args": {
+                        "order": "conv-norm-act",
+                    },
+                    "norm_args": {
+                        "norm": "bn",
+                    },
+                    "act_args": {
+                        "act": "relu",
                     },
                     "decoder_args": {"NAME": "PointNextDecoder"},
                     "cls_args": {
-                        "NAME": "PointNextHead",
+                        "NAME": "SegHead",
                         "num_classes": 384,
                     },
                 }
             }
         )
-        models["pointnext"] = build_model_from_cfg(cfg).to(device)
+        models["pointnext"] = build_model_from_cfg(cfg.model).to(device)
         models["pointnext"].eval()
     except Exception as e:
         print(f"Warning: Failed to load PointNeXt model ({e}). Using mock/fallback.")
