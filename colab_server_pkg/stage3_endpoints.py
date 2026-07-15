@@ -455,28 +455,33 @@ def ensure_stage3_models():
     elif os.path.exists(s2_ckpt_path):
         print(f"[Colab] Loading Stage 2 checkpoint from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
-        state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
-        state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
-        state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
-        state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
-        state.stage3_models["tactile_adapter"].load_state_dict(
-            checkpoint["tactile_adapter"]
+        # SFT checkpoints are always PyTorch Lightning format; extract from flat state_dict
+        state_dict = (
+            checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
         )
-        state.stage3_models["action_adapter"].load_state_dict(
-            checkpoint["action_adapter"]
-        )
-        if "state_adapter" in checkpoint:
-            state.stage3_models["state_adapter"].load_state_dict(
-                checkpoint["state_adapter"]
-            )
-        state.stage3_models["action_down_proj"].load_state_dict(
-            checkpoint["action_down_proj"]
-        )
-        state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
-        state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
-        state.stage3_models["flow_matcher"].load_state_dict(
-            checkpoint["flow_matcher"], strict=False
-        )
+        print("[Colab] Loading PyTorch Lightning SFT weights layout...")
+        for module_name in [
+            "vis_adapter",
+            "txt_adapter",
+            "pt_adapter",
+            "vggt_adapter",
+            "tactile_adapter",
+            "action_adapter",
+            "state_adapter",
+            "action_down_proj",
+            "msat",
+            "predictor",
+            "flow_matcher",
+        ]:
+            m_state_dict = {}
+            prefix = f"{module_name}."
+            for k, v in state_dict.items():
+                if k.startswith(prefix):
+                    m_state_dict[k[len(prefix) :]] = v
+            if len(m_state_dict) > 0 and module_name in state.stage3_models:
+                state.stage3_models[module_name].load_state_dict(
+                    m_state_dict, strict=(module_name != "flow_matcher")
+                )
     else:
         print(
             "[Colab] WARNING: Neither Stage 3 nor Stage 2 checkpoints were found. Models initialized with default random weights!"
