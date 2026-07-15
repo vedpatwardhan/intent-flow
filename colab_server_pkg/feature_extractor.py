@@ -83,8 +83,8 @@ def get_point_cloud(pil_frame: Image, frame: np.ndarray):
         )
 
     grid_x, grid_y = np.meshgrid(
-        np.linspace(0, w - 1, 100).astype(int),
-        np.linspace(0, h - 1, 100).astype(int),
+        np.linspace(0, w - 1, 70).astype(int),
+        np.linspace(0, h - 1, 70).astype(int),
     )
     xs = grid_x.flatten()
     ys = grid_y.flatten()
@@ -412,7 +412,8 @@ def run_pointnext_model(point_cloud_np):
 
         pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
-            feat = models["pointnext"](pc_t)
+            with torch.amp.autocast("cuda", enabled=False):
+                feat = models["pointnext"](pc_t)
             if feat.dim() > 2:
                 feat = feat.mean(dim=1)  # Global pooling over points
             return feat.squeeze(0).cpu()
