@@ -1040,76 +1040,78 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         s_t_first = None
 
         for trans in payload.transitions:
-            obs_t_views = extract_stage3_obs_features(trans.current_obs)
-            obs_next_views = extract_stage3_obs_features(trans.next_obs)
-
-            # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
-            action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
             with torch.no_grad():
-                # Combine multi-view observations for current observation (t)
-                any_view_t = next(iter(obs_t_views.values()))
-                combined_obs_t = {
-                    "vision": torch.cat(
-                        [
-                            obs_t_views[view]["vision"].unsqueeze(1)
-                            for view in obs_t_views
-                        ],
-                        dim=1,
-                    ),
-                    "pointnext": torch.cat(
-                        [
-                            obs_t_views[view]["pointnext"].unsqueeze(1)
-                            for view in obs_t_views
-                        ],
-                        dim=1,
-                    ),
-                    "vggt": torch.cat(
-                        [
-                            obs_t_views[view]["vggt"].unsqueeze(1)
-                            for view in obs_t_views
-                        ],
-                        dim=1,
-                    ),
-                    "text": any_view_t["text"],
-                    "tactile": any_view_t["tactile"],
-                    "proprioception": any_view_t["proprioception"],
-                }
+                with torch.amp.autocast("cuda"):
+                    obs_t_views = extract_stage3_obs_features(trans.current_obs)
+                    obs_next_views = extract_stage3_obs_features(trans.next_obs)
 
-                # Combine multi-view observations for next observation (t+1)
-                any_view_next = next(iter(obs_next_views.values()))
-                combined_obs_next = {
-                    "vision": torch.cat(
-                        [
-                            obs_next_views[view]["vision"].unsqueeze(1)
-                            for view in obs_next_views
-                        ],
-                        dim=1,
-                    ),
-                    "pointnext": torch.cat(
-                        [
-                            obs_next_views[view]["pointnext"].unsqueeze(1)
-                            for view in obs_next_views
-                        ],
-                        dim=1,
-                    ),
-                    "vggt": torch.cat(
-                        [
-                            obs_next_views[view]["vggt"].unsqueeze(1)
-                            for view in obs_next_views
-                        ],
-                        dim=1,
-                    ),
-                    "text": any_view_next["text"],
-                    "tactile": any_view_next["tactile"],
-                    "proprioception": any_view_next["proprioception"],
-                }
+                    # Combine multi-view observations for current observation (t)
+                    any_view_t = next(iter(obs_t_views.values()))
+                    combined_obs_t = {
+                        "vision": torch.cat(
+                            [
+                                obs_t_views[view]["vision"].unsqueeze(1)
+                                for view in obs_t_views
+                            ],
+                            dim=1,
+                        ),
+                        "pointnext": torch.cat(
+                            [
+                                obs_t_views[view]["pointnext"].unsqueeze(1)
+                                for view in obs_t_views
+                            ],
+                            dim=1,
+                        ),
+                        "vggt": torch.cat(
+                            [
+                                obs_t_views[view]["vggt"].unsqueeze(1)
+                                for view in obs_t_views
+                            ],
+                            dim=1,
+                        ),
+                        "text": any_view_t["text"],
+                        "tactile": any_view_t["tactile"],
+                        "proprioception": any_view_t["proprioception"],
+                    }
 
-                # s_t, s_next: Shape [1, 512] (shared state latent dimension)
-                s_t = encode_obs_to_latent(combined_obs_t, state).detach()
-                s_next = encode_obs_to_latent(combined_obs_next, state).detach()
+                    # Combine multi-view observations for next observation (t+1)
+                    any_view_next = next(iter(obs_next_views.values()))
+                    combined_obs_next = {
+                        "vision": torch.cat(
+                            [
+                                obs_next_views[view]["vision"].unsqueeze(1)
+                                for view in obs_next_views
+                            ],
+                            dim=1,
+                        ),
+                        "pointnext": torch.cat(
+                            [
+                                obs_next_views[view]["pointnext"].unsqueeze(1)
+                                for view in obs_next_views
+                            ],
+                            dim=1,
+                        ),
+                        "vggt": torch.cat(
+                            [
+                                obs_next_views[view]["vggt"].unsqueeze(1)
+                                for view in obs_next_views
+                            ],
+                            dim=1,
+                        ),
+                        "text": any_view_next["text"],
+                        "tactile": any_view_next["tactile"],
+                        "proprioception": any_view_next["proprioception"],
+                    }
+
+                    # s_t, s_next: Shape [1, 512] (shared state latent dimension)
+                    s_t = encode_obs_to_latent(combined_obs_t, state).detach()
+                    s_next = encode_obs_to_latent(combined_obs_next, state).detach()
 
             if s_t_first is None:
                 s_t_first = s_t
+
+            # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
+            action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
 
             # Track the current state, action block, true next state, energy,
             # tactile success, and the step target
@@ -1166,6 +1168,9 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
 
         loss_total.backward()
         state.stage3_optimizer.step()
+
+        # Release fragmented allocation pools
+        torch.cuda.empty_cache()
 
         return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
     except Exception as e:
@@ -1323,6 +1328,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             loss_opsd.backward()
             state.stage3_optimizer.step()
             total_loss += loss_opsd.item()
+
+        # Release fragmented allocation pools
+        torch.cuda.empty_cache()
 
         avg_loss = total_loss / num_opsd_steps
 
