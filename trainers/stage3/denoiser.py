@@ -90,7 +90,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
         for i in range(num_steps):
             t_vals = steering_timelines + (i * dt)
-            t_vals = torch.clamp(t_vals, 0.0, 1.0)
+            t_vals = torch.clamp(t_vals, min=0.0, max=1.0)
 
             # 1. Inspect raw velocity field network outputs
             v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
@@ -115,9 +115,12 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
             print(
                 f"   Step {i:02d} -> "
+                f"State s_t Bounds: [{s_t.min().item():.4f}, {s_t.max().item():.4f}] | "
+                f"State s_target Bounds: [{s_target.min().item():.4f}, {s_target.max().item():.4f}] | "
                 f"Velocity Field Bounds: [{v_min:.4f}, {v_max:.4f}] | "
                 f"Noise Step Bounds: [{noise_min:.4f}, {noise_max:.4f}] | "
-                f"Resulting x_t Bounds: [{x_t.min().item():.4f}, {x_t.max().item():.4f}]"
+                f"Resulting x_t Bounds: [{x_t.min().item():.4f}, {x_t.max().item():.4f}] | "
+                f"Resulting t_vals Bounds: [{t_vals.min().item():.4f}, {t_vals.max().item():.4f}]"
             )
 
         return x_t
