@@ -11,6 +11,7 @@ from PIL import Image
 import numpy as np
 import cv2
 import httpx
+import copy
 
 # Add parent directory (latent-flow root) to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -143,6 +144,7 @@ frame_history = deque(maxlen=5)
 ui_annotations = {}
 
 colab_is_processing = False
+is_training_active = False
 needs_colab_processing = False
 last_colab_query_time = 0.0
 
@@ -543,6 +545,12 @@ async def run_stage3_training_loop(
         except Exception as e:
             print(f"[Training Error] Episode {ep_idx + 1} distill failed: {e}")
 
+    # Restore simulation physics cleanly back to the pre-training layout
+    sim.data.qpos[:] = initial_state["qpos"]
+    sim.data.qvel[:] = initial_state["qvel"]
+    sim.data.ctrl[:] = initial_state["ctrl"]
+    mujoco.mj_forward(sim.model, sim.data)
+
     await websocket.send_text(
         json.dumps(
             {
@@ -563,6 +571,7 @@ async def websocket_endpoint(websocket: WebSocket):
     global colab_is_processing, needs_colab_processing, last_colab_query_time
     global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
     global ui_annotations
+    global is_training_active
     await websocket.accept()
     print("UI Connected via WebSocket")
     needs_colab_processing = (
@@ -577,6 +586,7 @@ async def websocket_endpoint(websocket: WebSocket):
     is_moving = False
     moving_check_steps = 0
     cached_data_updated = True  # Send once on initial connection
+    last_sent_payload = None
 
     try:
         while True:
@@ -697,120 +707,137 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Entrypoint --> called from the UI
                 elif payload.get("type") == "start_training":
                     print("Starting Stage 3 training loop...")
-                    await run_stage3_training_loop(
-                        websocket, sim, colab_url, text_prompt, ui_annotations
-                    )
+                    is_training_active = True
+                    try:
+                        await run_stage3_training_loop(
+                            websocket, sim, colab_url, text_prompt, ui_annotations
+                        )
+                    finally:
+                        is_training_active = False
 
             except asyncio.TimeoutError:
                 pass
 
             # Step physics 16 times per tick
-            for _ in range(16):
-                sim.sync_ctrl_to_qpos(sim.last_target_q)
-                sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [0.0, 0.0, 0.95]
-                sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
-                    1.0,
-                    0.0,
-                    0.0,
-                    0.0,
+            if not is_training_active:
+                for _ in range(16):
+                    sim.sync_ctrl_to_qpos(sim.last_target_q)
+                    sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [
+                        0.0,
+                        0.0,
+                        0.95,
+                    ]
+                    sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]
+                    sim.data.qvel[:6] = 0.0
+                    mujoco.mj_step(sim.model, sim.data)
+
+                # Check if slider movement completed
+                if is_moving:
+                    moving_check_steps += 1
+                    max_error = 0.0
+                    for i in sim.active_joints_this_command:
+                        j_id = sim.protocol_joint_ids[i]
+                        if j_id != -1:
+                            q_idx = sim.model.jnt_qposadr[j_id]
+                            error = abs(sim.data.qpos[q_idx] - sim.last_target_q[q_idx])
+                            if error > max_error:
+                                max_error = error
+                    if max_error < 0.02 or moving_check_steps > 30:
+                        is_moving = False
+                        needs_colab_processing = True
+
+            if is_training_active and last_sent_payload is not None:
+                ws_payload = copy.deepcopy(last_sent_payload)
+            else:
+                # Render and encode all 5 cameras for the UI grid
+                frames = {}
+                for name in sim.cam_names:
+                    sim.renderer.update_scene(sim.data, camera=name)
+                    rgb = sim.renderer.render()
+
+                    # Apply visual noise if BadWorld Attack is active on active camera
+                    if attack_active and name == active_camera:
+                        rgb = rgb.copy()
+                        rgb[:, :, 0] = np.clip(rgb[:, :, 0] + 50, 0, 255)
+
+                    img = Image.fromarray(rgb)
+                    # Resizing to 480x480 for higher resolution UI display
+                    img_resized = img.resize((480, 480))
+                    buf = io.BytesIO()
+                    img_resized.save(buf, format="JPEG", quality=75)
+                    frames[name] = "data:image/jpeg;base64," + base64.b64encode(
+                        buf.getvalue()
+                    ).decode("utf-8")
+
+                # Calculate actual physics telemetry
+                physics = sim.get_physics_state()
+                target_dist = physics["target_dist"]
+
+                energy = min(target_dist * 2.0, 1.2)
+                if attack_active:
+                    energy = min(energy + 0.5, 1.2)
+
+                index_pos = sim.data.xpos[index_id]
+                thumb_pos = sim.data.xpos[thumb_id]
+                cube_pos = sim.data.xpos[cube_id]
+
+                d_index = float(np.linalg.norm(index_pos - cube_pos))
+                d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+
+                touch_index = (
+                    max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
+                )
+                touch_thumb = (
+                    max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
+                )
+
+                tactile_grid = [[touch_index, 0.0], [0.0, touch_thumb]]
+
+                joints_data = {
+                    "positions": sim.get_state_32()[:4].tolist(),
+                    "torques": [float(sim.data.ctrl[i]) for i in range(4)],
+                }
+
+                skills_data = [
+                    {
+                        "id": "1",
+                        "name": "reach_cube",
+                        "type": "internalized",
+                        "x": 60,
+                        "y": 75,
+                        "active": target_dist > 0.15,
+                    },
+                    {
+                        "id": "2",
+                        "name": "pinch_cube",
+                        "type": "internalized",
+                        "x": 150,
+                        "y": 45,
+                        "active": (0.04 < target_dist <= 0.15),
+                    },
+                    {
+                        "id": "3",
+                        "name": "lift_cube",
+                        "type": "externalized",
+                        "x": 240,
+                        "y": 75,
+                        "active": (target_dist <= 0.04 and cube_pos[2] > 0.85),
+                    },
                 ]
-                sim.data.qvel[:6] = 0.0
-                mujoco.mj_step(sim.model, sim.data)
 
-            # Check if slider movement completed
-            if is_moving:
-                moving_check_steps += 1
-                max_error = 0.0
-                for i in sim.active_joints_this_command:
-                    j_id = sim.protocol_joint_ids[i]
-                    if j_id != -1:
-                        q_idx = sim.model.jnt_qposadr[j_id]
-                        error = abs(sim.data.qpos[q_idx] - sim.last_target_q[q_idx])
-                        if error > max_error:
-                            max_error = error
-                if max_error < 0.02 or moving_check_steps > 30:
-                    is_moving = False
-                    needs_colab_processing = True
-
-            # Render and encode all 5 cameras for the UI grid
-            frames = {}
-            for name in sim.cam_names:
-                sim.renderer.update_scene(sim.data, camera=name)
-                rgb = sim.renderer.render()
-
-                # Apply visual noise if BadWorld Attack is active on active camera
-                if attack_active and name == active_camera:
-                    rgb = rgb.copy()
-                    rgb[:, :, 0] = np.clip(rgb[:, :, 0] + 50, 0, 255)
-
-                img = Image.fromarray(rgb)
-                # Resizing to 480x480 for higher resolution UI display
-                img_resized = img.resize((480, 480))
-                buf = io.BytesIO()
-                img_resized.save(buf, format="JPEG", quality=75)
-                frames[name] = "data:image/jpeg;base64," + base64.b64encode(
-                    buf.getvalue()
-                ).decode("utf-8")
-
-            # Calculate actual physics telemetry
-            physics = sim.get_physics_state()
-            target_dist = physics["target_dist"]
-
-            energy = min(target_dist * 2.0, 1.2)
-            if attack_active:
-                energy = min(energy + 0.5, 1.2)
-
-            index_pos = sim.data.xpos[index_id]
-            thumb_pos = sim.data.xpos[thumb_id]
-            cube_pos = sim.data.xpos[cube_id]
-
-            d_index = float(np.linalg.norm(index_pos - cube_pos))
-            d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
-
-            touch_index = max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
-            touch_thumb = max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
-
-            tactile_grid = [[touch_index, 0.0], [0.0, touch_thumb]]
-
-            joints_data = {
-                "positions": sim.get_state_32()[:4].tolist(),
-                "torques": [float(sim.data.ctrl[i]) for i in range(4)],
-            }
-
-            skills_data = [
-                {
-                    "id": "1",
-                    "name": "reach_cube",
-                    "type": "internalized",
-                    "x": 60,
-                    "y": 75,
-                    "active": target_dist > 0.15,
-                },
-                {
-                    "id": "2",
-                    "name": "pinch_cube",
-                    "type": "internalized",
-                    "x": 150,
-                    "y": 45,
-                    "active": (0.04 < target_dist <= 0.15),
-                },
-                {
-                    "id": "3",
-                    "name": "lift_cube",
-                    "type": "externalized",
-                    "x": 240,
-                    "y": 75,
-                    "active": (target_dist <= 0.04 and cube_pos[2] > 0.85),
-                },
-            ]
-
-            ws_payload = {
-                "frames": frames,
-                "energy": energy,
-                "tactile_grid": tactile_grid,
-                "joints": joints_data,
-                "skills": skills_data,
-            }
+                ws_payload = {
+                    "frames": frames,
+                    "energy": energy,
+                    "tactile_grid": tactile_grid,
+                    "joints": joints_data,
+                    "skills": skills_data,
+                }
+                last_sent_payload = ws_payload
 
             current_time = asyncio.get_event_loop().time()
             # Query Colab server for advanced frame processing (DINO, CLIP, SAM, VGGT)
