@@ -433,7 +433,7 @@ async def run_stage3_training_loop(
                 video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
 
                 # Setup cv2.VideoWriter: 2x3 grid of 240x240 frames -> 720 width, 480 height
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                fourcc = cv2.VideoWriter_fourcc(*"avc1")
                 video_writer = cv2.VideoWriter(video_path, fourcc, 2.0, (720, 480))
 
                 for frame_idx, frame_dict in enumerate(track_frames):
