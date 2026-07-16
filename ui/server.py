@@ -252,10 +252,16 @@ async def run_stage3_training_loop(
                 frame_history.pop(0)
                 frame_history.append(frames_all_views)
 
+            proprio_list = sim.get_state_32()[:24].tolist()
+            if any(np.isnan(val) for val in proprio_list):
+                print(
+                    f"⚠️ [NaN Warning] MuJoCo joint proprioception contains NaN at step {env_step}! Simulator exploded."
+                )
+
             current_obs = {
                 "frames": frames_all_views,
                 "history_frames": list(frame_history),
-                "proprioception": sim.get_state_32()[:24].tolist(),
+                "proprioception": proprio_list,
                 "tactile": tactile_grid,
                 "text_prompt": text_prompt or "grasp cube",
                 "ui_annotations": ui_annotations
@@ -322,7 +328,8 @@ async def run_stage3_training_loop(
                     track_action = action_np[track_idx, h, :]  # Shape: (58,)
                     track_actions_flat.extend(track_action.tolist())
                     action_32 = track_action[:32]
-                    action_rad = sim.unscaler.unscale_action(action_32)
+                    action_32_clamped = np.clip(action_32, -1.0, 1.0)
+                    action_rad = sim.unscaler.unscale_action(action_32_clamped)
 
                     # Execute motor posture loop
                     for _ in range(2):

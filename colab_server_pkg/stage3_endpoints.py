@@ -99,11 +99,24 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
             vis_tok = override_vision_token
         else:
             vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
+            if torch.isnan(vis_tok).any():
+                print("⚠️ [NaN Debug] vis_tok contains NaN!")
 
         txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
+        if torch.isnan(txt_tok).any():
+            print("⚠️ [NaN Debug] txt_tok contains NaN!")
+
         pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
+        if torch.isnan(pt_tok).any():
+            print("⚠️ [NaN Debug] pt_tok contains NaN!")
+
         vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
+        if torch.isnan(vggt_tok).any():
+            print("⚠️ [NaN Debug] vggt_tok contains NaN!")
+
         tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
+        if torch.isnan(tactile_emb).any():
+            print("⚠️ [NaN Debug] tactile_emb contains NaN!")
 
         # Pad proprioception to 58 dimensions and project using state_adapter
         proprio = obs_dict["proprioception"]
@@ -118,6 +131,8 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
                 dim=-1,
             )
         proprio_tok = state.stage3_models["state_adapter"](proprio)
+        if torch.isnan(proprio_tok).any():
+            print("⚠️ [NaN Debug] proprio_tok contains NaN!")
 
         modality_dict = {
             "vision": vis_tok,
@@ -127,7 +142,10 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
             "tactile": tactile_emb,
             "proprioception": proprio_tok,
         }
-        return state.stage3_models["msat"](modality_dict)
+        out = state.stage3_models["msat"](modality_dict)
+        if torch.isnan(out).any():
+            print("⚠️ [NaN Debug] msat output contains NaN!")
+        return out
 
 
 def construct_goal_states(obs_dict, ui_annotations):
@@ -1129,15 +1147,35 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                         "proprioception": any_view_next["proprioception"],
                     }
 
+                    # Check for NaNs in combined features before encoding
+                    for name, d_dict in [
+                        ("current", combined_obs_t),
+                        ("next", combined_obs_next),
+                    ]:
+                        for k, v in d_dict.items():
+                            if torch.is_tensor(v) and torch.isnan(v).any():
+                                print(
+                                    f"⚠️ [NaN Warning] {name} observation contains NaN in feature: '{k}'!"
+                                )
+
                     # s_t, s_next: Shape [1, 512] (shared state latent dimension)
                     s_t = encode_obs_to_latent(combined_obs_t, state).detach()
                     s_next = encode_obs_to_latent(combined_obs_next, state).detach()
+                    print(
+                        f"s_t bounds: [{s_t.min().item():.6f}, {s_t.max().item():.6f}]"
+                    )
+                    print(
+                        f"s_next bounds: [{s_next.min().item():.6f}, {s_next.max().item():.6f}]"
+                    )
 
             if s_t_first is None:
                 s_t_first = s_t
 
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
+            print(
+                f"action bounds: [{action.min().item():.6f}, {action.max().item():.6f}]"
+            )
 
             # Track the current state, action block, true next state, energy,
             # tactile success, and the step target
@@ -1168,13 +1206,31 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
 
         state.stage3_optimizer.zero_grad()
         # z_action: Shape [batch_size, 512] (projected action trajectory latents)
+        print(
+            f"batch_action bounds: [{batch_action.min().item():.6f}, {batch_action.max().item():.6f}]"
+        )
         z_action = state.stage3_models["action_adapter"](batch_action)
         # z_action_16: Shape [batch_size, 16] (bottleneck dynamics conditioning latent)
+        print(
+            f"z_action bounds: [{z_action.min().item():.6f}, {z_action.max().item():.6f}]"
+        )
         z_action_16 = state.stage3_models["action_down_proj"](z_action)
         # s_next_pred: Shape [batch_size, 512] (predicted macro-step outcome latent state)
+        print(
+            f"batch_s_t bounds: [{batch_s_t.min().item():.6f}, {batch_s_t.max().item():.6f}]"
+        )
+        print(
+            f"z_action_16 bounds: [{z_action_16.min().item():.6f}, {z_action_16.max().item():.6f}]"
+        )
         s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
 
         # Dynamics loss (predictor update without goal attention) - Scalar loss
+        print(
+            f"s_next_pred bounds: [{s_next_pred.min().item():.6f}, {s_next_pred.max().item():.6f}]"
+        )
+        print(
+            f"batch_s_next bounds: [{batch_s_next.min().item():.6f}, {batch_s_next.max().item():.6f}]"
+        )
         loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
 
         # Anti-Collapse Regularization: Enforce diversity on predicted future states

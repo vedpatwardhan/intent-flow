@@ -67,9 +67,10 @@ def get_point_cloud(pil_frame: Image, frame: np.ndarray):
     )
     for k, v in inputs_depth.items():
         if torch.is_tensor(v) and torch.is_floating_point(v):
-            inputs_depth[k] = v.to(torch.float16)
+            inputs_depth[k] = v.to(torch.float32)
     with torch.no_grad():
-        outputs_depth = models["depth_model"](**inputs_depth)
+        with torch.amp.autocast("cuda", enabled=False):
+            outputs_depth = models["depth_model"](**inputs_depth)
         depth_map = (
             torch.nn.functional.interpolate(
                 outputs_depth.predicted_depth.unsqueeze(1),
@@ -406,6 +407,17 @@ def run_pointnext_model(point_cloud_np):
 
     try:
         cloud_data = np.array(point_cloud_np)
+
+        # Filter out NaN/Inf rows to prevent CUDA illegal memory access
+        if len(cloud_data) > 0:
+            valid_rows = ~np.isnan(cloud_data).any(axis=1) & ~np.isinf(cloud_data).any(
+                axis=1
+            )
+            cloud_data = cloud_data[valid_rows]
+
+        if len(cloud_data) == 0:
+            return torch.zeros(384, device=device)
+
         if cloud_data.shape[1] < 3:
             # Pad intensity/color with zeros if shape is [N, 2] or similar
             pad = np.zeros((cloud_data.shape[0], 3 - cloud_data.shape[1]))
@@ -457,7 +469,7 @@ def extract_single_view_stage3_obs_features(
         vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
 
     pointnext_isolated = features["task_isolated_features"]["pointnext_isolated"]
-    if len(pointnext_isolated) > 0:
+    if len(pointnext_isolated) >= 32:
         pt_feat = run_pointnext_model(pointnext_isolated)
     else:
         pt_feat = run_pointnext_model(features["point_cloud"])
