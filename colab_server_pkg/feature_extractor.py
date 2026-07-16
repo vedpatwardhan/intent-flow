@@ -336,7 +336,7 @@ def extract_features_common(
     sam_mask = np.zeros((14, 14), dtype=np.float32)
     sam_mask_224 = np.zeros((224, 224), dtype=np.float32)
     vggt_local = []
-    dino_subspace = np.zeros((14, 14), dtype=np.float32)
+    dino_subspace = np.array([], dtype=np.float32)
     pointnext_isolated = []
 
     view_annos = (ui_annotations or {}).get(view_name, {})
