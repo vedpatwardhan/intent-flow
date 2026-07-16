@@ -490,7 +490,7 @@ async def run_stage3_training_loop(
                 video_writer.release()
                 print(f"[Video Utility] Saved rollout video: {video_path}")
 
-            # Rewind physics back to the committed path's final outcome
+            # Rewind physics back to the committed path's final outcome to capture its state
             sim.data.qpos[:] = committed_qpos
             sim.data.qvel[:] = committed_qvel
             sim.data.ctrl[:] = committed_ctrl
@@ -519,6 +519,12 @@ async def run_stage3_training_loop(
                 print(
                     f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                 )
+
+            # Reset physics back to the pre-training layout for the next step start
+            sim.data.qpos[:] = initial_state["qpos"]
+            sim.data.qvel[:] = initial_state["qvel"]
+            sim.data.ctrl[:] = initial_state["ctrl"]
+            mujoco.mj_forward(sim.model, sim.data)
 
         # Distillation
         touch_count = 0

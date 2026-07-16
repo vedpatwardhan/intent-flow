@@ -136,11 +136,14 @@ def get_filtered_point_cloud(
     colors_norm = colors / 255.0
     rs, gs, bs = colors_norm[:, 0], colors_norm[:, 1], colors_norm[:, 2]
 
-    rs[~mask_filter] = 0.0
-    gs[~mask_filter] = 0.0
-    bs[~mask_filter] = 0.0
+    xs_f = xs_norm[mask_filter]
+    ys_f = ys_norm[mask_filter]
+    zs_f = zs_norm[mask_filter]
+    rs_f = rs[mask_filter]
+    gs_f = gs[mask_filter]
+    bs_f = bs[mask_filter]
 
-    pointnext_isolated = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
+    pointnext_isolated = np.stack([xs_f, ys_f, zs_f, rs_f, gs_f, bs_f], axis=1)
     return pointnext_isolated
 
 
