@@ -1330,9 +1330,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
             # 5. Anti-collapse regularization (SIGReg)
-            random_dirs = torch.randn(batch_s_t.size(-1), 10, device=device)
+            random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
-            projected = torch.matmul(batch_s_t, random_dirs)
+            projected = torch.matmul(s_next_pred, random_dirs)
             mean_proj = projected.mean(dim=0, keepdim=True)
             std_proj = projected.std(dim=0, keepdim=True)
             sigreg_loss = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(

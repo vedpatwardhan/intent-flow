@@ -140,6 +140,20 @@ class BadWorldAttacker:
         embodiment_id_expanded = embodiment_id.expand(total_ensemble_size)
         steering_timelines_expanded = steering_timelines.expand(total_ensemble_size, -1)
 
+        # --- DIAGNOSTIC TELEMETRY LOGGING Inside Attacker ---
+        with torch.no_grad():
+            latent_mean = s_t_ensemble.mean().item()
+            latent_std = s_t_ensemble.std().item()
+            print(
+                f"🕵️‍♂️ [ATTACKER DIAGNOSTIC] Replicated Latent Batch Context -> Mean: {latent_mean:.4f} | Std: {latent_std:.4f}"
+            )
+
+            # Check if the visual perturbations are inducing latent variance collapse
+            # if std is near zero, all 4 visual worlds look identical to the transformer
+            print(
+                f"🕵️‍♂️ [ATTACKER DIAGNOSTIC] Target Latent Context -> Mean: {s_target.mean().item():.4f} | Std: {s_target.std().item():.4f}"
+            )
+
         # The flow matcher draws 16 independent root noise seeds x_0 across your 4 distinct visual worlds
         a_candidates = flow_matcher.sample_with_steering(
             s_t_ensemble,
@@ -150,6 +164,14 @@ class BadWorldAttacker:
             steering_timelines=steering_timelines_expanded,
             step_nft_scale=0.05,
         )  # Output Shape: [16, 8, 58]
+
+        # --- DIAGNOSTIC TELEMETRY: Inspect outputs right out of the flow generator ---
+        with torch.no_grad():
+            raw_gen_min = a_candidates.min().item()
+            raw_gen_max = a_candidates.max().item()
+            print(
+                f"🕵️‍♂️ [ATTACKER DIAGNOSTIC] Post-Generation Actions -> Min: {raw_gen_min:.4f} | Max: {raw_gen_max:.4f}"
+            )
 
         # --- STEP 7: RETURN UNIFIED UNROLLED DATA CONTEXTS ---
         # Return the 4 raw image variants, the 16 ensembled latents, and the 16 generated action candidates

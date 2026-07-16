@@ -73,12 +73,15 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         # [B, H, ActionDim]
         x_t = torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
 
+        print(
+            f"📊 [ODE Init] x_0 Standard Normal Bounds -> Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
+        )
+
         if steering_timelines is None:
             steering_timelines = torch.zeros(
                 batch_size, horizon, self.action_dim, device=s_t.device
             )
         else:
-            # Safe layout restoration to match 3D grid layout
             steering_timelines = steering_timelines.view(
                 batch_size, horizon, self.action_dim
             )
@@ -89,13 +92,33 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             t_vals = steering_timelines + (i * dt)
             t_vals = torch.clamp(t_vals, 0.0, 1.0)
 
+            # 1. Inspect raw velocity field network outputs
             v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
-            x_t = x_t + v_t * dt
 
+            v_min, v_max = v_t.min().item(), v_t.max().item()
+
+            # 2. Compute the direct contribution of velocity to the step update
+            v_step = v_t * dt
+
+            # 3. Inspect Stochastic Noise Injection
+            noise_min, noise_max = 0.0, 0.0
             if step_nft_scale > 0.0 and i < num_steps - 1:
-                noise = torch.randn_like(x_t) * step_nft_scale
+                raw_noise = torch.randn_like(x_t)
                 steerable_mask = (t_vals < 1.0).float()
-                x_t = x_t + noise * steerable_mask
+                noise_step = raw_noise * step_nft_scale * steerable_mask
+                noise_min, noise_max = noise_step.min().item(), noise_step.max().item()
+
+                # Apply updates
+                x_t = x_t + v_step + noise_step
+            else:
+                x_t = x_t + v_step
+
+            print(
+                f"   Step {i:02d} -> "
+                f"Velocity Field Bounds: [{v_min:.4f}, {v_max:.4f}] | "
+                f"Noise Step Bounds: [{noise_min:.4f}, {noise_max:.4f}] | "
+                f"Resulting x_t Bounds: [{x_t.min().item():.4f}, {x_t.max().item():.4f}]"
+            )
 
         return x_t
 
