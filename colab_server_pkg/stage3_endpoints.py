@@ -909,21 +909,23 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         N_obs_variants = 4
 
         # Invoke the attacker pass to construct the entire grid natively
-        perturbed_payloads, s_t_ensemble, a_candidates = state.stage3_models[
-            "attacker"
-        ].generate_stochastic_ensemble_pass(
-            flow_matcher=state.stage3_models["flow_matcher"],
-            raw_data=payload,
-            load_image_fn=decode_base64_image,
-            extract_obs_features_fn=extract_stage3_obs_features,
-            encode_obs_fn=encode_obs_to_latent,
-            state=state,
-            s_target=s_target,
-            steering_timelines=steering_timelines,
-            embodiment_id=embodiment_id,
-            ensemble_size=N_obs_variants,
-            horizon=horizon,
-        )
+        with torch.no_grad():
+            with torch.amp.autocast("cuda"):
+                perturbed_payloads, s_t_ensemble, a_candidates = state.stage3_models[
+                    "attacker"
+                ].generate_stochastic_ensemble_pass(
+                    flow_matcher=state.stage3_models["flow_matcher"],
+                    raw_data=payload,
+                    load_image_fn=decode_base64_image,
+                    extract_obs_features_fn=extract_stage3_obs_features,
+                    encode_obs_fn=encode_obs_to_latent,
+                    state=state,
+                    s_target=s_target,
+                    steering_timelines=steering_timelines,
+                    embodiment_id=embodiment_id,
+                    ensemble_size=N_obs_variants,
+                    horizon=horizon,
+                )
 
         # Capture the true 16-batch size returned directly out of your attacker pass
         ensemble_size = a_candidates.shape[0]  # 16
