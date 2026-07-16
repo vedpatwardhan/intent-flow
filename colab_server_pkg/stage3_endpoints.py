@@ -1038,8 +1038,13 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         import colab_server_pkg.models_state as state
 
         s_t_first = None
+        num_transitions = len(payload.transitions)
+        print(f"\n[Calibrate] Starting calibration on {num_transitions} transitions...")
 
-        for trans in payload.transitions:
+        for i, trans in enumerate(payload.transitions):
+            print(
+                f"[Calibrate] Processing transition {i + 1}/{num_transitions} ({(i + 1) / num_transitions * 100:.1f}%)..."
+            )
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
                     obs_t_views = extract_stage3_obs_features(trans.current_obs)
@@ -1169,19 +1174,34 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         else:
             loss_total = loss_dynamics
 
-        # Backward pass with stability rails
+        # Backpropagate the gradients cleanly
         loss_total.backward()
 
-        # Clip exploding gradient updates to a maximum norm of 1.0
-        torch.nn.utils.clip_grad_norm_(
-            [p for m in state.stage3_models.values() for p in m.parameters()],
-            max_norm=1.0,
-        )
+        # Extract parameters of the predictor
+        model_obj = state.stage3_models.get("predictor")
+        if not model_obj or not hasattr(model_obj, "parameters"):
+            raise RuntimeError(
+                "🔥 FATAL: The 'predictor' module was not found in state.stage3_models! "
+                "Calibration cannot proceed without active dynamics updates."
+            )
+        trainable_params = list(model_obj.parameters())
 
+        # Apply safety rails to clip exploding gradient updates
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+
+        # Step the optimizer forward safely
         state.stage3_optimizer.step()
 
         # Release fragmented allocation pools
         torch.cuda.empty_cache()
+
+        print(
+            f"[Calibrate] Optimization complete. Dynamics loss: {loss_dynamics.item():.6f}"
+        )
+        if batch_s_t.size(0) > 1:
+            print(
+                f"            SIGReg loss: {loss_sigreg.item():.6f} | Total loss: {loss_total.item():.6f}\n"
+            )
 
         return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
     except Exception as e:
