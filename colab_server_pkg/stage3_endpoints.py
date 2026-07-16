@@ -1152,13 +1152,16 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
 
         # Anti-collapse regularization (SIGReg-style)
-        # Project latents onto random directions and enforce isotropic Gaussian
         if batch_s_t.size(0) > 1:
             random_dirs = torch.randn(batch_s_t.size(-1), 10, device=device)
-            random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
+            random_dirs = random_dirs / (random_dirs.norm(dim=0, keepdim=True) + 1e-8)
             projected = torch.matmul(batch_s_t, random_dirs)
             mean_proj = projected.mean(dim=0, keepdim=True)
-            std_proj = projected.std(dim=0, keepdim=True)
+
+            # Safe Variance calculation to protect against single-token or low-variance inputs
+            var_proj = projected.var(dim=0, keepdim=True)
+            std_proj = torch.sqrt(var_proj + 1e-8)
+
             loss_sigreg = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(
                 mean_proj, torch.zeros_like(mean_proj)
             )
@@ -1166,7 +1169,15 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         else:
             loss_total = loss_dynamics
 
+        # Backward pass with stability rails
         loss_total.backward()
+
+        # Clip exploding gradient updates to a maximum norm of 1.0
+        torch.nn.utils.clip_grad_norm_(
+            [p for m in state.stage3_models.values() for p in m.parameters()],
+            max_norm=1.0,
+        )
+
         state.stage3_optimizer.step()
 
         # Release fragmented allocation pools
