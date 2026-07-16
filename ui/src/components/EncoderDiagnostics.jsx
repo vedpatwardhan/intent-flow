@@ -308,8 +308,8 @@ export default function EncoderDiagnostics({
     }
 
     // 1. Exact Plotly Camera Transformation Matrix
-    // Match custom_camera: eye=[0.1, 0.1, 2.0], up=[0, 1, 0]
-    const eye = [0.1, 0.1, 2.0];
+    // Match custom_camera: eye=[0.1, 0.5, 2.0], up=[0, 1, 0]
+    const eye = [0.1, 0.5, 2.0];
     const eyeNorm = Math.sqrt(eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]);
     const forward = [-eye[0] / eyeNorm, -eye[1] / eyeNorm, -eye[2] / eyeNorm];
     const up_initial = [0.0, 1.0, 0.0];
@@ -336,7 +336,7 @@ export default function EncoderDiagnostics({
       const z_cam = px * forward[0] + py * forward[1] + pz * forward[2] + 2.0;
 
       // Perspective focal scaling (Zoom factor)
-      const focal = 1.8;
+      const focal = 2.4;
       const x_proj = (x_cam * focal) / z_cam;
       const y_proj = (y_cam * focal) / z_cam;
 

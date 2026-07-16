@@ -9,6 +9,7 @@ from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from PIL import Image
 import numpy as np
+import cv2
 import httpx
 
 # Add parent directory (latent-flow root) to sys.path
@@ -302,6 +303,16 @@ async def run_stage3_training_loop(
                 sim.data.ctrl[:] = initial_ctrl
                 mujoco.mj_forward(sim.model, sim.data)
 
+                # Initialize frame recording buffer
+                track_frames = []
+
+                # Capture starting frame (t=0)
+                start_frames = {}
+                for cam_name in sim.cam_names:
+                    sim.renderer.update_scene(sim.data, camera=cam_name)
+                    start_frames[cam_name] = sim.renderer.render().copy()
+                track_frames.append(start_frames)
+
                 track_actions_flat = []
 
                 # Execute the full 8-step trajectory sequence open-loop
@@ -337,9 +348,11 @@ async def run_stage3_training_loop(
 
                     # Get next observation for this specific candidate step
                     frames_all_views_next = {}
+                    step_frames = {}
                     for cam_name in sim.cam_names:
                         sim.renderer.update_scene(sim.data, camera=cam_name)
                         rgb_cam_next = sim.renderer.render()
+                        step_frames[cam_name] = rgb_cam_next.copy()
                         img_cam_next = Image.fromarray(rgb_cam_next)
                         img_cam_next_224 = img_cam_next.resize((224, 224))
                         buf_cam_next = io.BytesIO()
@@ -348,6 +361,7 @@ async def run_stage3_training_loop(
                             "data:image/jpeg;base64,"
                             + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
                         )
+                    track_frames.append(step_frames)
 
                     index_pos = sim.data.xpos[index_id]
                     thumb_pos = sim.data.xpos[thumb_id]
@@ -408,6 +422,45 @@ async def run_stage3_training_loop(
                                 "tactile": float(grasp_success),
                             }
                         )
+
+                # Save rollout video compilation for this track using cv2
+                video_dir = f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
+                os.makedirs(video_dir, exist_ok=True)
+                video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
+                
+                # Setup cv2.VideoWriter: 2x3 grid of 240x240 frames -> 720 width, 480 height
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                video_writer = cv2.VideoWriter(video_path, fourcc, 2.0, (720, 480))
+                
+                for frame_idx, frame_dict in enumerate(track_frames):
+                    grid = np.zeros((480, 720, 3), dtype=np.uint8)
+                    
+                    # Resize views to 240x240
+                    c_center = cv2.resize(frame_dict["world_center"], (240, 240))
+                    c_top = cv2.resize(frame_dict["world_top"], (240, 240))
+                    c_left = cv2.resize(frame_dict["world_left"], (240, 240))
+                    c_right = cv2.resize(frame_dict["world_right"], (240, 240))
+                    c_wrist = cv2.resize(frame_dict["world_wrist"], (240, 240))
+                    
+                    # Tile grid: center, top, left in row 1; right, wrist in row 2
+                    grid[0:240, 0:240] = c_center
+                    grid[0:240, 240:480] = c_top
+                    grid[0:240, 480:720] = c_left
+                    grid[240:480, 0:240] = c_right
+                    grid[240:480, 240:480] = c_wrist
+                    
+                    # Draw text in the remaining black telemetry quadrant (bottom right)
+                    energy_val = energy_ensemble[track_idx]
+                    cv2.putText(grid, f"Track {track_idx:02d}", (495, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(grid, f"Energy: {energy_val:.6f}", (495, 340), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                    cv2.putText(grid, f"Step: {frame_idx}", (495, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+                    
+                    # Convert to BGR format for OpenCV
+                    grid_bgr = cv2.cvtColor(grid, cv2.COLOR_RGB2BGR)
+                    video_writer.write(grid_bgr)
+                
+                video_writer.release()
+                print(f"[Video Utility] Saved rollout video: {video_path}")
 
             # Rewind physics back to the committed path's final outcome
             sim.data.qpos[:] = committed_qpos
@@ -497,6 +550,7 @@ async def websocket_endpoint(websocket: WebSocket):
     step_count = 0
     is_moving = False
     moving_check_steps = 0
+    cached_data_updated = True # Send once on initial connection
 
     try:
         while True:
@@ -728,12 +782,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 "tactile_grid": tactile_grid,
                 "joints": joints_data,
                 "skills": skills_data,
-                "dino_attn": cached_dino_attn,
-                "clip_sim": cached_clip_sim,
-                "sam_mask": cached_sam_mask,
-                "point_cloud": cached_point_cloud,
-                "vggt_tracks": cached_vggt_tracks,
-                "task_isolated_features": cached_task_isolated_features,
             }
 
             current_time = asyncio.get_event_loop().time()
@@ -762,6 +810,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     async def run_colab_query(payload_data):
                         global colab_is_processing
                         global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
+                        nonlocal cached_data_updated
                         try:
                             async with httpx.AsyncClient() as client:
                                 r = await client.post(
@@ -787,6 +836,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                         print(
                                             "[server.py] No task_isolated_features in Colab response"
                                         )
+                                    cached_data_updated = True
                         except Exception as e:
                             print("Colab communication error:")
                             traceback.print_exc()
@@ -804,6 +854,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         "history_frames": list(frame_history),
                     }
                     asyncio.create_task(run_colab_query(post_payload))
+
+            if cached_data_updated:
+                ws_payload["dino_attn"] = cached_dino_attn
+                ws_payload["clip_sim"] = cached_clip_sim
+                ws_payload["sam_mask"] = cached_sam_mask
+                ws_payload["point_cloud"] = cached_point_cloud
+                ws_payload["vggt_tracks"] = cached_vggt_tracks
+                ws_payload["task_isolated_features"] = cached_task_isolated_features
+                cached_data_updated = False
 
             await websocket.send_text(json.dumps(ws_payload))
             step_count += 1
