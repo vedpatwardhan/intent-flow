@@ -943,8 +943,26 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             .clone()
         )
 
+        def log_action_bounds(a_candidates):
+            with torch.no_grad():
+                raw_min = a_candidates.min().item()
+                raw_max = a_candidates.max().item()
+                raw_mean = a_candidates.mean().item()
+                print(
+                    f"🔍 [DIAGNOSTIC] /step Unclipped Bounds -> Min: {raw_min:.4f} "
+                    f"| Max: {raw_max:.4f} | Mean: {raw_mean:.4f}"
+                )
+                if raw_min < -1.0 or raw_max > 1.0:
+                    print(
+                        f"⚠️  [WARNING] Action candidates are drifting outside "
+                        "[-1, 1] range!"
+                    )
+
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
+
+            # --- DIAGNOSTIC TELEMETRY LOGGING ---
+            log_action_bounds(a_candidates)
 
             with torch.amp.autocast("cuda"):
                 # Flatten step layouts to match ActionAdapter's footprint contract
@@ -1003,6 +1021,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 )
 
             a_candidates = a_candidates.clone().detach()
+
+        # --- DIAGNOSTIC TELEMETRY LOGGING ---
+        log_action_bounds(a_candidates)
 
         # Extract only the immediate multi-step prediction slice if needed,
         # or output the unrolled trajectory block back to your motor script loader!
