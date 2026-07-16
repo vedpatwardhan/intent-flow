@@ -1156,16 +1156,19 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         # Dynamics loss (predictor update without goal attention) - Scalar loss
         loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
 
-        # Anti-collapse regularization (SIGReg-style)
-        if batch_s_t.size(0) > 1:
-            random_dirs = torch.randn(batch_s_t.size(-1), 10, device=device)
+        # Anti-Collapse Regularization: Enforce diversity on predicted future states
+        if s_next_pred.size(0) > 1:
+            # Project predicted states onto random directions to check for isotropic distribution
+            random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
             random_dirs = random_dirs / (random_dirs.norm(dim=0, keepdim=True) + 1e-8)
-            projected = torch.matmul(batch_s_t, random_dirs)
+
+            # Project the predicted outputs, not the identical inputs
+            projected = torch.matmul(s_next_pred, random_dirs)
             mean_proj = projected.mean(dim=0, keepdim=True)
 
-            # Safe Variance calculation to protect against single-token or low-variance inputs
-            var_proj = projected.var(dim=0, keepdim=True)
-            std_proj = torch.sqrt(var_proj + 1e-8)
+            # Calculate variance safely on the predictor's diverse outputs
+            var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
+            std_proj = torch.sqrt(var_proj) + 1e-8
 
             loss_sigreg = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(
                 mean_proj, torch.zeros_like(mean_proj)

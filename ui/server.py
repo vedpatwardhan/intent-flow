@@ -513,7 +513,7 @@ async def run_stage3_training_loop(
                     await client.post(
                         f"{colab_url}/stage3/calibrate",
                         json=calibrate_payload,
-                        timeout=30.0,
+                        timeout=100.0,
                     )
             except Exception as e:
                 print(
