@@ -966,7 +966,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
                     s_next_pred_expanded, stacked_goals_expanded, stacked_goals_expanded
                 )
-                s_goal_pred_attn = s_goal_pred_attn.squeeze(1) # Shape: [16, 512]
+                s_goal_pred_attn = s_goal_pred_attn.squeeze(1)  # Shape: [16, 512]
 
                 # Project the foveated pool back into aligned task space [16, 512]
                 s_goal_pred = state.stage3_models["latent_adapter"](s_goal_pred_attn)
