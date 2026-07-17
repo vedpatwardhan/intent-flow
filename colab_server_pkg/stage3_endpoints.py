@@ -95,6 +95,14 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
     Multi-Stream Action Transformer (MSAT) to yield the multi-modal latent state.
     """
     with torch.amp.autocast("cuda"):
+        # Print input bounds for debugging NaNs
+        for k, v in obs_dict.items():
+            if torch.is_tensor(v):
+                print(
+                    f"   [Input Debug] {k} bounds: "
+                    f"[{v.min().item():.6f}, {v.max().item():.6f}]"
+                )
+
         if override_vision_token is not None:
             vis_tok = override_vision_token
         else:
