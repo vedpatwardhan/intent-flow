@@ -156,6 +156,26 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
         return out
 
 
+def get_combined_obs(obs_views, any_view):
+    return {
+        "vision": torch.cat(
+            [obs_views[view]["vision"].unsqueeze(1) for view in obs_views],
+            dim=1,
+        ),
+        "pointnext": torch.cat(
+            [obs_views[view]["pointnext"].unsqueeze(1) for view in obs_views],
+            dim=1,
+        ),
+        "vggt": torch.cat(
+            [obs_views[view]["vggt"].unsqueeze(1) for view in obs_views],
+            dim=1,
+        ),
+        "text": any_view["text"],
+        "tactile": any_view["tactile"],
+        "proprioception": any_view["proprioception"],
+    }
+
+
 def construct_goal_states(obs_dict, ui_annotations):
     """
     Construct goal state representations for each annotated view by rearranging crops/segments according to arrows.
@@ -872,21 +892,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 f"{obs_dict[any_view_key]['tactile'].shape} "
                 f"{obs_dict[any_view_key]['proprioception'].shape} "
             )
-            combined_obs = {
-                "vision": torch.cat(
-                    [obs_dict[view]["vision"].unsqueeze(1) for view in obs_dict], dim=1
-                ),
-                "pointnext": torch.cat(
-                    [obs_dict[view]["pointnext"].unsqueeze(1) for view in obs_dict],
-                    dim=1,
-                ),
-                "vggt": torch.cat(
-                    [obs_dict[view]["vggt"].unsqueeze(1) for view in obs_dict], dim=1
-                ),
-                "text": any_view["text"],
-                "tactile": any_view["tactile"],
-                "proprioception": any_view["proprioception"],
-            }
+            combined_obs = get_combined_obs(obs_dict, any_view)
 
             print(f"[Stage3 Step] combined_obs visual stream shapes:")
             print(f"  - vision: {combined_obs['vision'].shape}")
@@ -1099,61 +1105,11 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
 
                     # Combine multi-view observations for current observation (t)
                     any_view_t = next(iter(obs_t_views.values()))
-                    combined_obs_t = {
-                        "vision": torch.cat(
-                            [
-                                obs_t_views[view]["vision"].unsqueeze(1)
-                                for view in obs_t_views
-                            ],
-                            dim=1,
-                        ),
-                        "pointnext": torch.cat(
-                            [
-                                obs_t_views[view]["pointnext"].unsqueeze(1)
-                                for view in obs_t_views
-                            ],
-                            dim=1,
-                        ),
-                        "vggt": torch.cat(
-                            [
-                                obs_t_views[view]["vggt"].unsqueeze(1)
-                                for view in obs_t_views
-                            ],
-                            dim=1,
-                        ),
-                        "text": any_view_t["text"],
-                        "tactile": any_view_t["tactile"],
-                        "proprioception": any_view_t["proprioception"],
-                    }
+                    combined_obs_t = get_combined_obs(obs_t_views, any_view_t)
 
                     # Combine multi-view observations for next observation (t+1)
                     any_view_next = next(iter(obs_next_views.values()))
-                    combined_obs_next = {
-                        "vision": torch.cat(
-                            [
-                                obs_next_views[view]["vision"].unsqueeze(1)
-                                for view in obs_next_views
-                            ],
-                            dim=1,
-                        ),
-                        "pointnext": torch.cat(
-                            [
-                                obs_next_views[view]["pointnext"].unsqueeze(1)
-                                for view in obs_next_views
-                            ],
-                            dim=1,
-                        ),
-                        "vggt": torch.cat(
-                            [
-                                obs_next_views[view]["vggt"].unsqueeze(1)
-                                for view in obs_next_views
-                            ],
-                            dim=1,
-                        ),
-                        "text": any_view_next["text"],
-                        "tactile": any_view_next["tactile"],
-                        "proprioception": any_view_next["proprioception"],
-                    }
+                    combined_obs_next = get_combined_obs(obs_next_views, any_view_next)
 
                     # Check for NaNs/Infs in combined features before encoding
                     for name, d_dict in [

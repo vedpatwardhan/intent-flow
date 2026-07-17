@@ -434,7 +434,15 @@ def run_pointnext_model(point_cloud_np):
     cloud_data = cloud_data[:, :3]
 
     # Center coordinates safely to stabilize MLPs
+    print(
+        "[PointNeXt Log] Cloud Data Bounds Before Norm: "
+        f"[{np.min(cloud_data)} - {np.max(cloud_data)}]"
+    )
     cloud_data = cloud_data - np.mean(cloud_data, axis=0, keepdims=True)
+    print(
+        "[PointNeXt Log] Cloud Data Bounds After Norm: "
+        f"[{np.min(cloud_data)} - {np.max(cloud_data)}]"
+    )
 
     # Structure OpenPoints contract [1, N, 3]
     pos = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
@@ -448,12 +456,21 @@ def run_pointnext_model(point_cloud_np):
         with torch.amp.autocast("cuda", enabled=False):
             feat = models["pointnext"](data)
 
+        print("[PointNeXt Log] Raw Feat Shape: ", feat.shape)
         if feat.dim() > 2:
             feat = feat.mean(dim=-1)  # Global average pooling over points
 
         # Standard L2 Normalization contract to protect downstream MSAT attention blocks
         feat = feat.squeeze(0).cpu()
+        print(
+            "[PointNeXt Log] Feat Bounds: ",
+            f"[{torch.min(feat).item()} - {torch.max(feat).item()}]",
+        )
         feat_norm = feat / (feat.norm(dim=-1, keepdim=True) + 1e-8)
+        print(
+            "[PointNeXt Log] Feat Norm Bounds: ",
+            f"[{torch.min(feat_norm).item()} - {torch.max(feat_norm).item()}]",
+        )
         return feat_norm
 
 
