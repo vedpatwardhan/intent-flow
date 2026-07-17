@@ -443,9 +443,6 @@ def run_pointnext_model(point_cloud_np):
     # Convert to torch tensor: Shape [1, N, 3]
     pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
 
-    # Correct the shape inversion to match OpenPoints expectations: [1, 3, N]
-    pc_t = pc_t.transpose(1, 2)
-
     with torch.no_grad():
         with torch.amp.autocast("cuda", enabled=False):
             feat = models["pointnext"](pc_t)
@@ -454,7 +451,7 @@ def run_pointnext_model(point_cloud_np):
             feat = feat.mean(dim=-1)  # Global average pooling over points
 
         # Standard L2 Normalization contract to protect downstream MSAT attention blocks
-        feat.squeeze(0).cpu()
+        feat = feat.squeeze(0).cpu()
         feat_norm = feat / (feat.norm(dim=-1, keepdim=True) + 1e-8)
         return feat_norm
 
