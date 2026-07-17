@@ -472,6 +472,27 @@ def run_pointnext_model(point_cloud_np):
         f"[{torch.min(x).item()} - {torch.max(x).item()}]"
     )
 
+    # --- DIAGNOSTIC ASSERTION PROBE ---
+    # 1. Check for Graph Attachment / Leaks
+    assert (
+        not pos.requires_grad
+    ), "🔥 CRITICAL FAILURE: 'pos' is attached to a computation graph!"
+    assert (
+        not x.requires_grad
+    ), "🔥 CRITICAL FAILURE: 'x' is attached to a computation graph!"
+
+    # 2. Check for Memory Contiguity
+    # pos must be contiguous. x is a transposed view, so its direct .is_contiguous() will be False,
+    # but its memory must not be corrupted by un-isolated views.
+    if not pos.is_contiguous():
+        raise RuntimeError(
+            "🔥 CRITICAL FAILURE: 'pos' tensor memory layout is non-contiguous!"
+        )
+
+    # 3. Force CUDA Synchronization to isolate data-dependent faults
+    torch.cuda.synchronize()
+    # ----------------------------------
+
     data = {"pos": pos, "x": x}
 
     with torch.no_grad():
