@@ -421,7 +421,8 @@ def run_pointnext_model(point_cloud_np):
     filtered_len = len(cloud_data)
     print(
         f"[PointNeXt Log] Input points: {original_len} | "
-        f"Valid points (after NaN/Inf filter): {filtered_len}"
+        f"Valid points (after NaN/Inf filter): {filtered_len} | "
+        f"Point shape: {cloud_data.shape}"
     )
 
     if filtered_len == 0:
@@ -446,9 +447,17 @@ def run_pointnext_model(point_cloud_np):
 
     # Structure OpenPoints contract [1, N, 3]
     pos = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
+    print(
+        f"[PointNeXt Log] Pos Shape: {pos.shape} "
+        f"[{torch.min(pos).item()} - {torch.max(pos).item()}]"
+    )
 
     # x expects feature channel space layout: [Batch, Channels, Points] -> [1, 3, N]
     x = pos.transpose(1, 2)
+    print(
+        f"[PointNeXt Log] X Shape: {x.shape} "
+        f"[{torch.min(x).item()} - {torch.max(x).item()}]"
+    )
 
     data = {"pos": pos, "x": x}
 
@@ -456,9 +465,15 @@ def run_pointnext_model(point_cloud_np):
         with torch.amp.autocast("cuda", enabled=False):
             feat = models["pointnext"](data)
 
-        print("[PointNeXt Log] Raw Feat Shape: ", feat.shape)
-        if feat.dim() > 2:
-            feat = feat.mean(dim=-1)  # Global average pooling over points
+        print(
+            f"[PointNeXt Log] Raw Feat Shape: {feat.shape} "
+            f"[{torch.min(feat).item()} - {torch.max(feat).item()}]"
+        )
+        feat = feat.mean(dim=-1)  # Global average pooling over points
+        print(
+            f"[PointNeXt Log] Pooled Feat Shape: {feat.shape} "
+            f"[{torch.min(feat).item()} - {torch.max(feat).item()}]"
+        )
 
         # Standard L2 Normalization contract to protect downstream MSAT attention blocks
         feat = feat.squeeze(0).cpu()
