@@ -107,7 +107,9 @@ def get_point_cloud(pil_frame: Image, frame: np.ndarray):
     x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
     y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
     z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
-    max_range = max(x_range, y_range, z_range, 1e-8)
+
+    # Increase the floor to prevent hyper-inflating collapsed coordinates
+    max_range = max(x_range, y_range, z_range, 1e-4)
 
     xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
     ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
@@ -415,37 +417,33 @@ def run_pointnext_model(point_cloud_np):
     valid_rows = ~np.isnan(cloud_data).any(axis=1) & ~np.isinf(cloud_data).any(axis=1)
     cloud_data = cloud_data[valid_rows]
 
-    if len(cloud_data) == 0:
-        print(
-            "⚠️ [PointNeXt Log] Zero valid points remaining after NaN/Inf filtering. Returning zero token."
-        )
-        return torch.zeros(384, device=device).cpu()
-
     filtered_len = len(cloud_data)
     print(
         f"[PointNeXt Log] Input points: {original_len} | "
         f"Valid points (after NaN/Inf filter): {filtered_len}"
     )
 
+    if filtered_len == 0:
+        print(
+            "⚠️ [PointNeXt Log] Zero valid points remaining after NaN/Inf filtering. Returning zero token."
+        )
+        return torch.zeros(384, device=device).cpu()
+
     # Enforce standard coordinate input dimensions [N, 3]
-    if cloud_data.shape[1] < 3:
-        # Pad intensity/color with zeros if shape is [N, 2] or similar
-        pad = np.zeros((cloud_data.shape[0], 3 - cloud_data.shape[1]))
-        cloud_data = np.concatenate([cloud_data, pad], axis=1)
-    else:
-        cloud_data = cloud_data[:, :3]
+    cloud_data = cloud_data[:, :3]
 
-    # Standard Normalization: Zero-center coordinates to stabilize OpenPoints convolutions
-    cloud_data[:, :3] = cloud_data[:, :3] - np.mean(
-        cloud_data[:, :3], axis=0, keepdims=True
-    )
+    # Center coordinates safely to stabilize MLPs
+    cloud_data = cloud_data - np.mean(cloud_data, axis=0, keepdims=True)
 
-    # Convert to torch tensor: Shape [1, N, 3]
-    pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
+    # Structure OpenPoints contract [1, N, 3]
+    pos = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
+    x = pos.clone()  # Shape: [1, N, 3]
+
+    data = {"pos": pos, "x": x}
 
     with torch.no_grad():
         with torch.amp.autocast("cuda", enabled=False):
-            feat = models["pointnext"](pc_t)
+            feat = models["pointnext"](data)
 
         if feat.dim() > 2:
             feat = feat.mean(dim=-1)  # Global average pooling over points
