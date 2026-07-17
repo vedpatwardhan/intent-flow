@@ -146,8 +146,8 @@ def get_filtered_point_cloud(
     gs_f = gs[mask_filter]
     bs_f = bs[mask_filter]
 
-    pointnext_isolated = np.stack([xs_f, ys_f, zs_f, rs_f, gs_f, bs_f], axis=1)
-    return pointnext_isolated
+    point_cloud_local = np.stack([xs_f, ys_f, zs_f, rs_f, gs_f, bs_f], axis=1)
+    return point_cloud_local
 
 
 def get_vggt_point_tracks_base(history_frames: list[str]) -> tuple:
@@ -343,7 +343,7 @@ def extract_features_common(
     sam_mask_224 = np.zeros((224, 224), dtype=np.float32)
     vggt_local = []
     dino_subspace = np.array([], dtype=np.float32)
-    pointnext_isolated = []
+    pointcloud_local = []
 
     view_annos = (ui_annotations or {}).get(view_name, {})
     if view_annos and (view_annos.get("crops") or view_annos.get("segments")):
