@@ -397,55 +397,66 @@ def run_pointnext_model(point_cloud_np):
     """
     Run PointNeXt encoder on point cloud [NumPoints, >=3] to extract 384-dim feature token.
     """
-    if models.get("pointnext") is None or len(point_cloud_np) == 0:
-        fallback = torch.tensor(
-            np.array(point_cloud_np).flatten()[:384], dtype=torch.float32
-        )
-        if len(fallback) < 384:
-            fallback = torch.cat([fallback, torch.zeros(384 - len(fallback))])
-        return fallback
+    # Explicitly check for initialization or empty data early
+    if models.get("pointnext") is None:
+        print("❌ [PointNeXt Error] Model is not initialized in global state!")
+        return torch.zeros(384, device=device).cpu()
 
-    try:
-        cloud_data = np.array(point_cloud_np)
-        original_len = len(cloud_data)
-
-        # Filter out NaN/Inf rows to prevent CUDA illegal memory access
-        if len(cloud_data) > 0:
-            valid_rows = ~np.isnan(cloud_data).any(axis=1) & ~np.isinf(cloud_data).any(
-                axis=1
-            )
-            cloud_data = cloud_data[valid_rows]
-
-        filtered_len = len(cloud_data)
+    if point_cloud_np is None or len(point_cloud_np) == 0:
         print(
-            f"[PointNeXt Log] Input points: {original_len} | Valid points (after NaN/Inf filter): {filtered_len}"
+            "⚠️ [PointNeXt Log] Empty point cloud payload encountered. Returning zero token."
         )
+        return torch.zeros(384, device=device).cpu()
 
-        if len(cloud_data) == 0:
-            return torch.zeros(384, device=device)
+    cloud_data = np.array(point_cloud_np)
+    original_len = len(cloud_data)
 
-        if cloud_data.shape[1] < 3:
-            # Pad intensity/color with zeros if shape is [N, 2] or similar
-            pad = np.zeros((cloud_data.shape[0], 3 - cloud_data.shape[1]))
-            cloud_data = np.concatenate([cloud_data, pad], axis=1)
-        else:
-            cloud_data = cloud_data[:, :3]
+    # Filter out NaN/Inf rows to prevent CUDA illegal memory access
+    valid_rows = ~np.isnan(cloud_data).any(axis=1) & ~np.isinf(cloud_data).any(axis=1)
+    cloud_data = cloud_data[valid_rows]
 
-        pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
-        with torch.no_grad():
-            with torch.amp.autocast("cuda", enabled=False):
-                feat = models["pointnext"](pc_t)
-            if feat.dim() > 2:
-                feat = feat.mean(dim=-1)  # Global average pooling over points
-            return feat.squeeze(0).cpu()
-    except Exception as e:
-        print(f"Error running PointNeXt model: {e}")
-        fallback = torch.tensor(
-            np.array(point_cloud_np).flatten()[:384], dtype=torch.float32
+    if len(cloud_data) == 0:
+        print(
+            "⚠️ [PointNeXt Log] Zero valid points remaining after NaN/Inf filtering. Returning zero token."
         )
-        if len(fallback) < 384:
-            fallback = torch.cat([fallback, torch.zeros(384 - len(fallback))])
-        return fallback
+        return torch.zeros(384, device=device).cpu()
+
+    filtered_len = len(cloud_data)
+    print(
+        f"[PointNeXt Log] Input points: {original_len} | "
+        f"Valid points (after NaN/Inf filter): {filtered_len}"
+    )
+
+    # Enforce standard coordinate input dimensions [N, 3]
+    if cloud_data.shape[1] < 3:
+        # Pad intensity/color with zeros if shape is [N, 2] or similar
+        pad = np.zeros((cloud_data.shape[0], 3 - cloud_data.shape[1]))
+        cloud_data = np.concatenate([cloud_data, pad], axis=1)
+    else:
+        cloud_data = cloud_data[:, :3]
+
+    # Standard Normalization: Zero-center coordinates to stabilize OpenPoints convolutions
+    cloud_data[:, :3] = cloud_data[:, :3] - np.mean(
+        cloud_data[:, :3], axis=0, keepdims=True
+    )
+
+    # Convert to torch tensor: Shape [1, N, 3]
+    pc_t = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
+
+    # Correct the shape inversion to match OpenPoints expectations: [1, 3, N]
+    pc_t = pc_t.transpose(1, 2)
+
+    with torch.no_grad():
+        with torch.amp.autocast("cuda", enabled=False):
+            feat = models["pointnext"](pc_t)
+
+        if feat.dim() > 2:
+            feat = feat.mean(dim=-1)  # Global average pooling over points
+
+        # Standard L2 Normalization contract to protect downstream MSAT attention blocks
+        feat.squeeze(0).cpu()
+        feat_norm = feat / (feat.norm(dim=-1, keepdim=True) + 1e-8)
+        return feat_norm
 
 
 def extract_single_view_stage3_obs_features(
