@@ -41,10 +41,10 @@ class GR1SimulationServer(GR1MuJoCoBase):
         depth_cam = self.renderer.render().copy()
         self.renderer.disable_depth_rendering()
 
-        # 2. Convert to metric depth (meters)
+        # 2. Metric depth (meters) is returned directly by MuJoCo's Python renderer
         near = self.model.vis.map.znear
         far = self.model.vis.map.zfar
-        metric_depth = near / (1.0 - depth_cam * (1.0 - near / far))
+        metric_depth = depth_cam
 
         # 3. Resize to 224x224 matching image shape
         metric_depth_224 = cv2.resize(
@@ -61,16 +61,22 @@ class GR1SimulationServer(GR1MuJoCoBase):
         ys = grid_y.flatten()
         zs = metric_depth_224[ys, xs]
 
-        # 5. Projection
+        # 5. Filter out background points on raw metric depth first (in meters)
+        foreground_mask = zs < 3.0
+        if foreground_mask.sum() > 0:
+            xs = xs[foreground_mask]
+            ys = ys[foreground_mask]
+            zs = zs[foreground_mask]
+
+        # 6. Projection: Emulate disparity convention where closer is larger and farther is smaller
         focal_length = max(w, h)
         cx = w / 2.0
         cy = h / 2.0
+        zs_proj = far - zs
+        xs_proj = (xs - cx) * zs_proj / focal_length
+        ys_proj = (cy - ys) * zs_proj / focal_length
 
-        xs_proj = (xs - cx) * zs / focal_length
-        ys_proj = (cy - ys) * zs / focal_length
-        zs_proj = zs
-
-        # 6. Colors
+        # 7. Colors
         colors = rgb_224[ys, xs]
         rs = colors[:, 0] / 255.0
         gs = colors[:, 1] / 255.0
@@ -91,10 +97,10 @@ class GR1SimulationServer(GR1MuJoCoBase):
 
         max_range = max(x_range, y_range, z_range, 1e-4)
 
-        # 8. Normalization
-        xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
-        ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
-        zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
+        # 8. Normalization & Viewport Offset
+        xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.5
+        ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.5 - 0.25
+        zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.5
 
         point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
         return point_cloud.tolist()

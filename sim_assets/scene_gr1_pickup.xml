@@ -5,7 +5,7 @@
 
   <visual>
     <headlight ambient=".4 .4 .4" diffuse=".8 .8 .8" specular="0.1 0.1 0.1"/>
-    <map znear="0.001"/>
+    <map znear="0.1" zfar="5.0"/>
     <global offwidth="1920" offheight="1080"/>
   </visual>
 
