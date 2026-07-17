@@ -62,109 +62,6 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
     return sim_norm, text_feat_raw.squeeze(0).cpu()
 
 
-def get_point_cloud(pil_frame: Image, frame: np.ndarray):
-    h, w = pil_frame.height, pil_frame.width
-    inputs_depth = models["depth_processor"](images=pil_frame, return_tensors="pt").to(
-        device
-    )
-    for k, v in inputs_depth.items():
-        if torch.is_tensor(v) and torch.is_floating_point(v):
-            inputs_depth[k] = v.to(torch.float32)
-    with torch.no_grad():
-        with torch.amp.autocast("cuda", enabled=False):
-            outputs_depth = models["depth_model"](**inputs_depth)
-        depth_map = (
-            torch.nn.functional.interpolate(
-                outputs_depth.predicted_depth.unsqueeze(1),
-                size=(h, w),
-                mode="bicubic",
-                align_corners=False,
-            )
-            .squeeze()
-            .cpu()
-            .numpy()
-        )
-
-    grid_x, grid_y = np.meshgrid(
-        np.linspace(0, w - 1, 70).astype(int),
-        np.linspace(0, h - 1, 70).astype(int),
-    )
-    xs = grid_x.flatten()
-    ys = grid_y.flatten()
-    zs = depth_map[ys, xs]
-
-    focal_length = max(w, h)
-    cx = w / 2.0
-    cy = h / 2.0
-
-    xs_proj = (xs - cx) * zs / focal_length
-    ys_proj = (cy - ys) * zs / focal_length
-    zs_proj = zs
-
-    colors = frame[ys, xs]
-    rs = colors[:, 0] / 255.0
-    gs = colors[:, 1] / 255.0
-    bs = colors[:, 2] / 255.0
-
-    x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
-    y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
-    z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
-
-    # Anti-Degeneracy Jitter for Collapsed Synthetic Views
-    # When the camera clips a face or hits a flat surface, the physical range drops.
-    # We add an imperceptible amount of noise to coordinates to prevent zero-variance CUDA overflows.
-    if max(x_range, y_range, z_range) < 1e-3:
-        xs_proj = xs_proj + np.random.normal(0, 1e-5, xs_proj.shape)
-        ys_proj = ys_proj + np.random.normal(0, 1e-5, ys_proj.shape)
-        zs_proj = zs_proj + np.random.normal(0, 1e-5, zs_proj.shape)
-
-        # Recalculate ranges with the broken degeneracy
-        x_range = xs_proj.max() - xs_proj.min()
-        y_range = ys_proj.max() - ys_proj.min()
-        z_range = zs_proj.max() - zs_proj.min()
-
-    # Increase the floor to prevent hyper-inflating collapsed coordinates
-    max_range = max(x_range, y_range, z_range, 1e-4)
-
-    xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
-    ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
-    zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
-
-    point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
-    return point_cloud, depth_map, xs, ys, xs_proj, ys_proj, zs_proj, colors
-
-
-def get_filtered_point_cloud(
-    xs: np.ndarray,
-    ys: np.ndarray,
-    combined_mask: np.ndarray,
-    xs_proj: np.ndarray,
-    ys_proj: np.ndarray,
-    zs_proj: np.ndarray,
-    colors: np.ndarray,
-):
-    xs_14 = np.clip((xs / 224 * 14).astype(int), 0, 13)
-    ys_14 = np.clip((ys / 224 * 14).astype(int), 0, 13)
-    mask_filter = combined_mask[ys_14, xs_14] > 0.0
-
-    pts_iso = np.stack([xs_proj, ys_proj, zs_proj], axis=1)
-    max_range = max((pts_iso.max(axis=0) - pts_iso.min(axis=0)).max(), 1e-8)
-    pts_norm = (pts_iso - pts_iso.mean(axis=0)) * (1.6 / max_range)
-    xs_norm, ys_norm, zs_norm = pts_norm[:, 0], pts_norm[:, 1], pts_norm[:, 2]
-    colors_norm = colors / 255.0
-    rs, gs, bs = colors_norm[:, 0], colors_norm[:, 1], colors_norm[:, 2]
-
-    xs_f = xs_norm[mask_filter]
-    ys_f = ys_norm[mask_filter]
-    zs_f = zs_norm[mask_filter]
-    rs_f = rs[mask_filter]
-    gs_f = gs[mask_filter]
-    bs_f = bs[mask_filter]
-
-    point_cloud_local = np.stack([xs_f, ys_f, zs_f, rs_f, gs_f, bs_f], axis=1)
-    return point_cloud_local
-
-
 def get_vggt_point_tracks_base(history_frames: list[str]) -> tuple:
     if len(history_frames) < 2:
         history_frames = [history_frames[0], history_frames[0]]
@@ -321,7 +218,12 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
 
 
 def extract_features_common(
-    frame_str, history_frames, text_prompt, ui_annotations, view_name="world_center"
+    frame_str,
+    history_frames,
+    text_prompt,
+    ui_annotations,
+    point_clouds=None,
+    view_name="world_center",
 ):
     frame = decode_base64_image(frame_str)
     pil_frame = Image.fromarray(frame)
@@ -342,9 +244,11 @@ def extract_features_common(
 
     dino_attn = get_dino_attn_map(frame)
     clip_sim, text_feat = get_clip_cosine_similarity(text_prompt, pil_frame)
-    point_cloud, depth_map, xs, ys, xs_proj, ys_proj, zs_proj, colors = get_point_cloud(
-        pil_frame, frame
-    )
+
+    if point_clouds and view_name in point_clouds:
+        point_cloud = np.array(point_clouds[view_name])
+    else:
+        point_cloud = np.zeros((4900, 6), dtype=np.float32)
     pt_flat, seeds_flat, wp_frame2, base_mask, _, seq_len, _, _ = (
         get_vggt_point_tracks_base(view_history)
     )
@@ -388,9 +292,18 @@ def extract_features_common(
         )
 
         dino_subspace = dino_attn * combined_mask
-        point_cloud_local = get_filtered_point_cloud(
-            xs, ys, combined_mask, xs_proj, ys_proj, zs_proj, colors
+
+        # Direct 1-to-1 grid mapping from the 70x70 point cloud to the 14x14 mask
+        grid_x, grid_y = np.meshgrid(
+            np.linspace(0, 223, 70).astype(int),
+            np.linspace(0, 223, 70).astype(int),
         )
+        xs_grid = grid_x.flatten()
+        ys_grid = grid_y.flatten()
+        mask_xs = np.clip(xs_grid // 16, 0, 13)
+        mask_ys = np.clip(ys_grid // 16, 0, 13)
+        local_mask = combined_mask[mask_ys, mask_xs] > 0.5
+        point_cloud_local = point_cloud[local_mask].tolist()
 
     return {
         "dino_attn": dino_attn,
@@ -532,6 +445,7 @@ def extract_single_view_stage3_obs_features(
     ui_annotations,
     tactile,
     proprioception,
+    point_clouds=None,
     view_name="world_center",
 ):
     """
@@ -543,6 +457,7 @@ def extract_single_view_stage3_obs_features(
         history_frames,
         text_prompt,
         ui_annotations,
+        point_clouds=point_clouds,
         view_name=view_name,
     )
 
@@ -557,13 +472,17 @@ def extract_single_view_stage3_obs_features(
     # --- DIAGNOSTIC FRAME CAPTURE BLOCK ---
     # Automatically intercepts and extracts the frame if the feature space collapses into NaNs
     if torch.isnan(pt_feat).any() or torch.isinf(pt_feat).any():
-        print(f"🚨 [DIAGNOSTIC DETECTION] NaN/Inf footprint triggered in PointNeXt features for view: {view_name}!")
+        print(
+            f"🚨 [DIAGNOSTIC DETECTION] NaN/Inf footprint triggered in PointNeXt features for view: {view_name}!"
+        )
         pil_img = features.get("pil_frame")
         if pil_img is not None:
             os.makedirs("debug_anomalies", exist_ok=True)
             save_path = f"debug_anomalies/anomaly_{view_name}_{int(time.time())}.png"
             pil_img.save(save_path)
-            print(f"📸 Captured and saved offending visual context frame to: {save_path}")
+            print(
+                f"📸 Captured and saved offending visual context frame to: {save_path}"
+            )
     # --------------------------------------
 
     # 2. VGGT: Always use the full tracks for state representation
@@ -627,6 +546,7 @@ def extract_stage3_obs_features(payload):
         if hasattr(payload, "frames")
         else {"world_center": payload.frame}
     )
+    point_clouds = getattr(payload, "point_clouds", None)
     obs_dict = {}
 
     # Process each view and extract features
@@ -638,6 +558,7 @@ def extract_stage3_obs_features(payload):
             payload.ui_annotations,
             payload.tactile,
             payload.proprioception,
+            point_clouds=point_clouds,
             view_name=view_name,
         )
 

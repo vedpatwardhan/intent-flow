@@ -31,6 +31,74 @@ class GR1SimulationServer(GR1MuJoCoBase):
     def __init__(self):
         super().__init__(restrict_ik=True)
 
+    def _render_needs_depth(self) -> bool:
+        return True
+
+    def get_point_cloud_numpy(self, cam_name: str, rgb_224: np.ndarray) -> list:
+        # 1. Render and capture depth buffer
+        self.renderer.enable_depth_rendering()
+        self.renderer.update_scene(self.data, camera=cam_name)
+        depth_cam = self.renderer.render().copy()
+        self.renderer.disable_depth_rendering()
+
+        # 2. Convert to metric depth (meters)
+        near = self.model.vis.map.znear
+        far = self.model.vis.map.zfar
+        metric_depth = near / (1.0 - depth_cam * (1.0 - near / far))
+
+        # 3. Resize to 224x224 matching image shape
+        metric_depth_224 = cv2.resize(
+            metric_depth, (224, 224), interpolation=cv2.INTER_NEAREST
+        )
+
+        # 4. Grid generation (70x70) on 224x224 resolution
+        w, h = 224, 224
+        grid_x, grid_y = np.meshgrid(
+            np.linspace(0, w - 1, 70).astype(int),
+            np.linspace(0, h - 1, 70).astype(int),
+        )
+        xs = grid_x.flatten()
+        ys = grid_y.flatten()
+        zs = metric_depth_224[ys, xs]
+
+        # 5. Projection
+        focal_length = max(w, h)
+        cx = w / 2.0
+        cy = h / 2.0
+
+        xs_proj = (xs - cx) * zs / focal_length
+        ys_proj = (cy - ys) * zs / focal_length
+        zs_proj = zs
+
+        # 6. Colors
+        colors = rgb_224[ys, xs]
+        rs = colors[:, 0] / 255.0
+        gs = colors[:, 1] / 255.0
+        bs = colors[:, 2] / 255.0
+
+        # 7. Range check & Jitter (Anti-Degeneracy)
+        x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
+        y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
+        z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
+
+        if max(x_range, y_range, z_range) < 1e-3:
+            xs_proj = xs_proj + np.random.normal(0, 1e-5, xs_proj.shape)
+            ys_proj = ys_proj + np.random.normal(0, 1e-5, ys_proj.shape)
+            zs_proj = zs_proj + np.random.normal(0, 1e-5, zs_proj.shape)
+            x_range = xs_proj.max() - xs_proj.min()
+            y_range = ys_proj.max() - ys_proj.min()
+            z_range = zs_proj.max() - zs_proj.min()
+
+        max_range = max(x_range, y_range, z_range, 1e-4)
+
+        # 8. Normalization
+        xs_norm = (xs_proj - xs_proj.mean()) / max_range * 1.6
+        ys_norm = (ys_proj - ys_proj.mean()) / max_range * 1.6
+        zs_norm = (zs_proj - zs_proj.mean()) / max_range * 1.6
+
+        point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
+        return point_cloud.tolist()
+
     def _handle_ik_pickup_logic(self, phase=0, offset_cm=5):
         """Standard multi-phase IK solver for the red cube."""
         self.current_phase = phase + 1
@@ -234,6 +302,7 @@ async def run_stage3_training_loop(
 
             # Capture all 5 camera views for multi-view processing
             frames_all_views = {}
+            point_clouds_all_views = {}
             for cam_name in sim.cam_names:
                 sim.renderer.update_scene(sim.data, camera=cam_name)
                 rgb_cam = sim.renderer.render()
@@ -244,6 +313,9 @@ async def run_stage3_training_loop(
                 frames_all_views[cam_name] = (
                     "data:image/jpeg;base64,"
                     + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
+                )
+                point_clouds_all_views[cam_name] = sim.get_point_cloud_numpy(
+                    cam_name, np.array(img_cam_224)
                 )
 
             if len(frame_history) < 2:
@@ -267,6 +339,7 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
+                "point_clouds": point_clouds_all_views,
             }
 
             action_taken_ensemble = None
@@ -397,6 +470,16 @@ async def run_stage3_training_loop(
                         "is_easy_task": False,
                     }
 
+                    if h == action_np.shape[1] - 1:
+                        point_clouds_next = {}
+                        for cam_name in sim.cam_names:
+                            img_cam_next = Image.fromarray(step_frames[cam_name])
+                            img_cam_next_224 = img_cam_next.resize((224, 224))
+                            point_clouds_next[cam_name] = sim.get_point_cloud_numpy(
+                                cam_name, np.array(img_cam_next_224)
+                            )
+                        track_next_obs["point_clouds"] = point_clouds_next
+
                     # Keep track 0's final step outcomes as the committed path for the environment
                     if track_idx == 0 and h == action_np.shape[1] - 1:
                         committed_qpos = sim.data.qpos.copy()
@@ -419,7 +502,10 @@ async def run_stage3_training_loop(
                         assert (
                             perturbed_payloads
                         ), "🔥 FATAL: Colab endpoint failed to return perturbed_payloads!"
-                        assigned_obs = perturbed_payloads[visual_variant_idx]
+                        assigned_obs = copy.deepcopy(
+                            perturbed_payloads[visual_variant_idx]
+                        )
+                        assigned_obs["point_clouds"] = current_obs["point_clouds"]
 
                         transitions.append(
                             {
@@ -869,6 +955,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 ).decode("utf-8")
 
                 if base64_frame_224:
+                    # Generate point cloud for active_camera natively in sim server
+                    pc_active = sim.get_point_cloud_numpy(
+                        active_camera, np.array(img_224)
+                    )
+
                     frame_history.append(base64_frame_224)
                     colab_is_processing = True
                     needs_colab_processing = False
@@ -919,6 +1010,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "text_modifier": text_modifier,
                         "ui_annotations": ui_annotations,
                         "history_frames": list(frame_history),
+                        "point_clouds": {active_camera: pc_active},
                     }
                     asyncio.create_task(run_colab_query(post_payload))
 

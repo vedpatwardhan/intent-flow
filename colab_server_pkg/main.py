@@ -17,12 +17,11 @@ from colab_server_pkg.image_utils import decode_base64_image
 from colab_server_pkg.feature_extractor import (
     get_dino_attn_map,
     get_clip_cosine_similarity,
-    get_point_cloud,
-    get_filtered_point_cloud,
     get_vggt_point_tracks_base,
     get_vggt_2d_tracks_from_mask,
     get_segment_masks,
     extract_features_common,
+    run_pointnext_model,
 )
 from colab_server_pkg.stage3_endpoints import (
     Stage3StepPayload,
@@ -70,6 +69,7 @@ class FramePayload(BaseModel):
         None  # {"crops": [], "vectors": [], "segments": []}
     )
     history_frames: Optional[List[str]] = []  # Previous base64 frames for VGGT tracking
+    point_clouds: Optional[dict] = None
 
 
 @app.on_event("startup")
@@ -97,15 +97,6 @@ def load_pretrained_models():
     ).to(device)
     models["sam_processor"] = Sam2Processor.from_pretrained("facebook/sam2-hiera-large")
     models["sam"].eval()
-
-    print("Loading Depth-Anything V2...")
-    models["depth_processor"] = AutoImageProcessor.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small-hf"
-    )
-    models["depth_model"] = AutoModelForDepthEstimation.from_pretrained(
-        "depth-anything/Depth-Anything-V2-Small-hf", dtype=torch.float16
-    ).to(device)
-    models["depth_model"].eval()
 
     print("Loading VGGT...")
     vggt_model = VGGT()
@@ -178,12 +169,20 @@ def load_pretrained_models():
 async def process_frame(payload: FramePayload):
     try:
         start = perf_counter()
+        point_clouds = payload.point_clouds or {}
+        view_name = next(iter(point_clouds.keys())) if point_clouds else "world_center"
+
         features = extract_features_common(
             payload.frame,
             payload.history_frames,
             payload.text_prompt,
             payload.ui_annotations,
+            point_clouds=payload.point_clouds,
+            view_name=view_name,
         )
+
+        # Run PointNeXt model forward pass inside /process
+        pt_feat = run_pointnext_model(features["point_cloud"])
 
         response = {
             "dino_attn": features["dino_attn"].tolist(),
@@ -191,6 +190,7 @@ async def process_frame(payload: FramePayload):
             "point_cloud": features["point_cloud"].tolist(),
             "vggt_tracks": features["vggt_tracks"],
             "sam_mask": "",
+            "pointnext_feat": pt_feat.tolist(),
             "task_isolated_features": {
                 "dino_subspace": features["task_isolated_features"][
                     "dino_subspace"
