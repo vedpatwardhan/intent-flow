@@ -1147,15 +1147,17 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                         "proprioception": any_view_next["proprioception"],
                     }
 
-                    # Check for NaNs in combined features before encoding
+                    # Check for NaNs/Infs in combined features before encoding
                     for name, d_dict in [
                         ("current", combined_obs_t),
                         ("next", combined_obs_next),
                     ]:
                         for k, v in d_dict.items():
-                            if torch.is_tensor(v) and torch.isnan(v).any():
+                            if torch.is_tensor(v) and (
+                                torch.isnan(v).any() or torch.isinf(v).any()
+                            ):
                                 print(
-                                    f"⚠️ [NaN Warning] {name} observation contains NaN in feature: '{k}'!"
+                                    f"⚠️ [NaN/Inf Warning] {name} observation contains NaN/Inf in feature: '{k}'!"
                                 )
 
                     # s_t, s_next: Shape [1, 512] (shared state latent dimension)
@@ -1357,11 +1359,17 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 reduction="none",
             )
 
-            # Apply your reward scaling filters exactly as intended
-            combined_rewards = torch.clamp(
-                1.0 - batch_energy + 2.0 * batch_tactile, min=0.05
-            )
-            cfm_loss = (cfm_loss_elementwise * combined_rewards).mean()
+            # If energy is 0, exp(-0) = 1.0 (Maximum reward)
+            # If energy explodes to infinity, exp(-inf) = 0.0
+            energy_reward = torch.exp(-batch_energy)
+
+            # Combine the bounded objectives: Max value is 1.0 + 2.0 = 3.0
+            combined_rewards = energy_reward + 2.0 * batch_tactile
+
+            # Apply the reward weight directly to the matching vectors
+            cfm_loss = (
+                cfm_loss_elementwise * combined_rewards.unsqueeze(-1).unsqueeze(-1)
+            ).mean()
 
             # 2. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
