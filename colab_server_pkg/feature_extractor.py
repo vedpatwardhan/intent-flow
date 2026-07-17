@@ -437,7 +437,9 @@ def run_pointnext_model(point_cloud_np):
 
     # Structure OpenPoints contract [1, N, 3]
     pos = torch.tensor(cloud_data, dtype=torch.float32, device=device).unsqueeze(0)
-    x = pos.clone()  # Shape: [1, N, 3]
+
+    # x expects feature channel space layout: [Batch, Channels, Points] -> [1, 3, N]
+    x = pos.transpose(1, 2)
 
     data = {"pos": pos, "x": x}
 
