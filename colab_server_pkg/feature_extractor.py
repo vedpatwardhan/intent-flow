@@ -343,7 +343,7 @@ def extract_features_common(
     sam_mask_224 = np.zeros((224, 224), dtype=np.float32)
     vggt_local = []
     dino_subspace = np.array([], dtype=np.float32)
-    pointcloud_local = []
+    point_cloud_local = []
 
     view_annos = (ui_annotations or {}).get(view_name, {})
     if view_annos and (view_annos.get("crops") or view_annos.get("segments")):
