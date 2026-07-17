@@ -1,3 +1,5 @@
+import os
+import time
 import torch
 import numpy as np
 from PIL import Image
@@ -551,6 +553,18 @@ def extract_single_view_stage3_obs_features(
 
     # 1. PointNeXt: Always use the full point cloud for state representation
     pt_feat = run_pointnext_model(features["point_cloud"])
+
+    # --- DIAGNOSTIC FRAME CAPTURE BLOCK ---
+    # Automatically intercepts and extracts the frame if the feature space collapses into NaNs
+    if torch.isnan(pt_feat).any() or torch.isinf(pt_feat).any():
+        print(f"🚨 [DIAGNOSTIC DETECTION] NaN/Inf footprint triggered in PointNeXt features for view: {view_name}!")
+        pil_img = features.get("pil_frame")
+        if pil_img is not None:
+            os.makedirs("debug_anomalies", exist_ok=True)
+            save_path = f"debug_anomalies/anomaly_{view_name}_{int(time.time())}.png"
+            pil_img.save(save_path)
+            print(f"📸 Captured and saved offending visual context frame to: {save_path}")
+    # --------------------------------------
 
     # 2. VGGT: Always use the full tracks for state representation
     # Global VGGT
