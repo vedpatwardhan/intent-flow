@@ -393,8 +393,7 @@ async def run_stage3_training_loop(
                         "proprioception": sim.get_state_32()[:24].tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
-                        "ui_annotations": ui_annotations
-                        or {"crops": [], "vectors": [], "segments": []},
+                        "ui_annotations": {},
                         "is_easy_task": False,
                     }
 

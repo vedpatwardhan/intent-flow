@@ -407,6 +407,7 @@ def run_pointnext_model(point_cloud_np):
 
     try:
         cloud_data = np.array(point_cloud_np)
+        original_len = len(cloud_data)
 
         # Filter out NaN/Inf rows to prevent CUDA illegal memory access
         if len(cloud_data) > 0:
@@ -414,6 +415,11 @@ def run_pointnext_model(point_cloud_np):
                 axis=1
             )
             cloud_data = cloud_data[valid_rows]
+
+        filtered_len = len(cloud_data)
+        print(
+            f"[PointNeXt Log] Input points: {original_len} | Valid points (after NaN/Inf filter): {filtered_len}"
+        )
 
         if len(cloud_data) == 0:
             return torch.zeros(384, device=device)
@@ -469,7 +475,7 @@ def extract_single_view_stage3_obs_features(
         vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
 
     pointnext_isolated = features["task_isolated_features"]["pointnext_isolated"]
-    if len(pointnext_isolated) >= 32:
+    if len(pointnext_isolated) >= 64:
         pt_feat = run_pointnext_model(pointnext_isolated)
     else:
         pt_feat = run_pointnext_model(features["point_cloud"])
