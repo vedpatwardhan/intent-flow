@@ -108,6 +108,19 @@ def get_point_cloud(pil_frame: Image, frame: np.ndarray):
     y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
     z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
 
+    # Anti-Degeneracy Jitter for Collapsed Synthetic Views
+    # When the camera clips a face or hits a flat surface, the physical range drops.
+    # We add an imperceptible amount of noise to coordinates to prevent zero-variance CUDA overflows.
+    if max(x_range, y_range, z_range) < 1e-3:
+        xs_proj = xs_proj + np.random.normal(0, 1e-5, xs_proj.shape)
+        ys_proj = ys_proj + np.random.normal(0, 1e-5, ys_proj.shape)
+        zs_proj = zs_proj + np.random.normal(0, 1e-5, zs_proj.shape)
+
+        # Recalculate ranges with the broken degeneracy
+        x_range = xs_proj.max() - xs_proj.min()
+        y_range = ys_proj.max() - ys_proj.min()
+        z_range = zs_proj.max() - zs_proj.min()
+
     # Increase the floor to prevent hyper-inflating collapsed coordinates
     max_range = max(x_range, y_range, z_range, 1e-4)
 
