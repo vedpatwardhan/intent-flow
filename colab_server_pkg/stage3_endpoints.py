@@ -71,7 +71,7 @@ class Stage3StepPayload(BaseModel):
     text_prompt: str
     ui_annotations: dict
     is_easy_task: bool = False
-    point_clouds: Optional[dict] = None
+    point_clouds: dict | None = None
 
 
 class Stage3CalibrateTransition(BaseModel):
