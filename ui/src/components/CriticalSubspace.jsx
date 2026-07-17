@@ -331,7 +331,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
         <IsolatedFeatureCard
           title="PointNeXt 3D Cloud"
           frame={frame}
-          featureData={isolatedFeatures?.pointnext_isolated}
+          featureData={isolatedFeatures?.point_cloud_local}
           maskData={isolatedFeatures?.combined_mask_224}
           icon={Grid}
           color="var(--accent-purple)"

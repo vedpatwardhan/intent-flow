@@ -373,7 +373,7 @@ def extract_features_common(
         )
 
         dino_subspace = dino_attn * combined_mask
-        pointnext_isolated = get_filtered_point_cloud(
+        point_cloud_local = get_filtered_point_cloud(
             xs, ys, combined_mask, xs_proj, ys_proj, zs_proj, colors
         )
 
@@ -387,7 +387,7 @@ def extract_features_common(
         "task_isolated_features": {
             "dino_subspace": dino_subspace,
             "vggt_local": vggt_local,
-            "pointnext_isolated": pointnext_isolated,
+            "point_cloud_local": point_cloud_local,
             "sam_mask": sam_mask,
             "sam_mask_224": sam_mask_224,
             "combined_mask_224": combined_mask_224,
@@ -401,8 +401,9 @@ def run_pointnext_model(point_cloud_np):
     """
     # Explicitly check for initialization or empty data early
     if models.get("pointnext") is None:
-        print("❌ [PointNeXt Error] Model is not initialized in global state!")
-        return torch.zeros(384, device=device).cpu()
+        raise RuntimeError(
+            "❌ [PointNeXt Error] Model is not initialized in global state!"
+        )
 
     if point_cloud_np is None or len(point_cloud_np) == 0:
         print(
@@ -482,27 +483,27 @@ def extract_single_view_stage3_obs_features(
     if len(vision_feat) < 384:
         vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
 
-    pointnext_isolated = features["task_isolated_features"]["pointnext_isolated"]
-    if len(pointnext_isolated) >= 64:
-        pt_feat = run_pointnext_model(pointnext_isolated)
-    else:
-        pt_feat = run_pointnext_model(features["point_cloud"])
+    # 1. PointNeXt: Always use the full point cloud for state representation
+    pt_feat = run_pointnext_model(features["point_cloud"])
 
-    if len(pt_feat) < 384:
-        pt_feat = torch.cat([pt_feat, torch.zeros(384 - len(pt_feat))])
-
-    vggt_local = features["task_isolated_features"]["vggt_local"]
-    if len(vggt_local) > 0:
-        vggt_feat = torch.tensor(
-            np.array(vggt_local).flatten()[:768], dtype=torch.float32
-        )
-    else:
-        vggt_feat = torch.tensor(
-            np.array(features["vggt_tracks"]).flatten()[:768], dtype=torch.float32
-        )
-
+    # 2. VGGT: Always use the full tracks for state representation
+    # Global VGGT
+    vggt_feat = torch.tensor(
+        np.array(features["vggt_tracks"]).flatten()[:768], dtype=torch.float32
+    )
     if len(vggt_feat) < 768:
         vggt_feat = torch.cat([vggt_feat, torch.zeros(768 - len(vggt_feat))])
+
+    # Local VGGT
+    vggt_local = features["task_isolated_features"]["vggt_local"]
+    if len(vggt_local) > 0:
+        vggt_local = torch.tensor(
+            np.array(vggt_local).flatten()[:768], dtype=torch.float32
+        )
+        vggt_local = torch.cat([vggt_local, torch.zeros(768 - len(vggt_local))])
+    else:
+        vggt_local = torch.zeros(768 - len(vggt_feat))
+    features["task_isolated_features"]["vggt_local"] = vggt_local
 
     tactile_grid = torch.tensor(tactile, dtype=torch.float32)
     if tactile_grid.shape != (4, 4):

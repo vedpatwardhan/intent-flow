@@ -196,8 +196,8 @@ async def process_frame(payload: FramePayload):
                     "dino_subspace"
                 ].tolist(),
                 "vggt_local": features["task_isolated_features"]["vggt_local"],
-                "pointnext_isolated": np.array(
-                    features["task_isolated_features"]["pointnext_isolated"]
+                "point_cloud_local": np.array(
+                    features["task_isolated_features"]["point_cloud_local"]
                 ).tolist(),
                 "sam_mask": np.array(
                     features["task_isolated_features"]["sam_mask"]
