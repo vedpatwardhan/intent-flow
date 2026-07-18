@@ -259,7 +259,7 @@ def extract_single_view_stage3_obs_features(
         "features": features,
         "vision": vision_feat.unsqueeze(1),  # [1, 384]
         "pointnext": pt_feat.unsqueeze(1),  # [1, 384]
-        "vggt": vggt_feat.unsqueeze(1),  # [1, 224 x 224]
+        "vggt": vggt_feat.unsqueeze(1),  # [1, 224 * 224]
         "tactile": tactile.flatten().unsqueeze(1),  # [1, 16]
         "proprioception": proprioception.unsqueeze(1),  # [1, 58]
         "text": features["text_feat"].unsqueeze(1),  # [1, 512]

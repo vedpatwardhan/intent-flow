@@ -1,28 +1,14 @@
-import os
-import sys
-import base64
-import io
 from time import perf_counter
 import torch
 import numpy as np
-from PIL import Image
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 
 # Pre-trained encoders loaders
 from colab_server_pkg.config import app, device
 from colab_server_pkg.models_state import models
-from colab_server_pkg.image_utils import decode_base64_image
-from colab_server_pkg.feature_extractor import (
-    get_dino_attn_map,
-    get_clip_cosine_similarity,
-    get_vggt_point_tracks_base,
-    get_vggt_2d_tracks_from_mask,
-    get_segment_masks,
-    extract_features_common,
-    run_pointnext_model,
-)
+from colab_server_pkg.feature_extractor import extract_features_common
 from colab_server_pkg.stage3_endpoints import (
     Stage3StepPayload,
     Stage3CalibratePayload,
@@ -34,13 +20,10 @@ from colab_server_pkg.stage3_endpoints import (
 
 try:
     from transformers import (
-        pipeline,
         CLIPProcessor,
         CLIPModel,
         Sam2Model,
         Sam2Processor,
-        AutoImageProcessor,
-        AutoModelForDepthEstimation,
     )
     from huggingface_hub import hf_hub_download
 
