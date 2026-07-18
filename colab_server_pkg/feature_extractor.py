@@ -69,8 +69,8 @@ def get_vggt_motion_field(frames: list[str]) -> tuple:
     frames = [decode_base64_image(frame) for frame in frames]
     transform_pipeline = transforms.Compose(
         [
+            transforms.ToTensor(),
             transforms.Resize((224, 224)),
-            transforms.ToTensor(),  # Scales pixels to [0.0, 1.0] and transposes to [C, H, W]
         ]
     )
     processed_tensors = (
