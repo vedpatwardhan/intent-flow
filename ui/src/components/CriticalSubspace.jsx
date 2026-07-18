@@ -115,33 +115,37 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
 
       // Overlay specific feature
       if (renderType === 'heatmap' && featureData && featureData.length > 0) {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = 14;
-        tempCanvas.height = 14;
-        const tempCtx = tempCanvas.getContext('2d');
-        const imgData = tempCtx.createImageData(14, 14);
+        const rows = featureData.length;
+        const cols = featureData[0]?.length || 0;
+        if (cols > 0) {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = cols;
+          tempCanvas.height = rows;
+          const tempCtx = tempCanvas.getContext('2d');
+          const imgData = tempCtx.createImageData(cols, rows);
 
-        for (let r = 0; r < 14; r++) {
-          for (let c = 0; c < 14; c++) {
-            const val = featureData[r]?.[c] || 0.0;
-            const idx = (r * 14 + c) * 4;
-            if (val > 0.05) {
-              const [red, green, blue] = getJetRGB(val);
-              imgData.data[idx] = red;
-              imgData.data[idx + 1] = green;
-              imgData.data[idx + 2] = blue;
-              imgData.data[idx + 3] = Math.round(val * 0.5 * 255);
-            } else {
-              imgData.data[idx] = 0;
-              imgData.data[idx + 1] = 0;
-              imgData.data[idx + 2] = 0;
-              imgData.data[idx + 3] = 0;
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const val = featureData[r]?.[c] || 0.0;
+              const idx = (r * cols + c) * 4;
+              if (val > 0.05) {
+                const [red, green, blue] = getJetRGB(val);
+                imgData.data[idx] = red;
+                imgData.data[idx + 1] = green;
+                imgData.data[idx + 2] = blue;
+                imgData.data[idx + 3] = Math.round(val * 0.5 * 255);
+              } else {
+                imgData.data[idx] = 0;
+                imgData.data[idx + 1] = 0;
+                imgData.data[idx + 2] = 0;
+                imgData.data[idx + 3] = 0;
+              }
             }
           }
+          tempCtx.putImageData(imgData, 0, 0);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(tempCanvas, 0, 0, cols, rows, 0, 0, width, height);
         }
-        tempCtx.putImageData(imgData, 0, 0);
-        ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(tempCanvas, 0, 0, 14, 14, 0, 0, width, height);
       }
 
       if (renderType === 'tracks' && featureData && featureData.length > 0) {
@@ -366,16 +370,16 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
           />
         </div>
 
-        {/* Column 2: VGGT Trajectory Tracks */}
+        {/* Column 2: VGGT Motion Field */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <IsolatedFeatureCard
-            title="Global VGGT Tracks"
+            title="Global VGGT Motion"
             frame={frame}
             featureData={vggTracks}
             maskData={null}
             icon={Move}
             color="var(--accent-cyan)"
-            renderType="tracks"
+            renderType="heatmap"
           />
           <IsolatedFeatureCard
             title="Local VGGT Subspace"
@@ -384,7 +388,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
             maskData={isolatedFeatures?.combined_mask_224}
             icon={Move}
             color="var(--accent-cyan)"
-            renderType="tracks"
+            renderType="heatmap"
           />
         </div>
 

@@ -41,7 +41,7 @@ export default function App() {
   const [clipSimCache, setClipSimCache] = useState({});
   const [samMaskCache, setSamMaskCache] = useState({});
   const [pointCloudCache, setPointCloudCache] = useState({});
-  const [vggtTracksCache, setVggtTracksCache] = useState({});
+  const [motionFieldCache, setMotionFieldCache] = useState({});
   const [taskIsolatedFeaturesCache, setTaskIsolatedFeaturesCache] = useState({});
   const [recentCameras, setRecentCameras] = useState([]);
   const [isTraining, setIsTraining] = useState(false);
@@ -90,7 +90,7 @@ export default function App() {
       });
       return updated;
     });
-    setVggtTracksCache(prev => {
+    setMotionFieldCache(prev => {
       const updated = { ...prev };
       Object.keys(updated).forEach(cam => {
         if (!recentCameras.includes(cam)) delete updated[cam];
@@ -185,8 +185,8 @@ export default function App() {
         if (data.point_cloud !== undefined) {
           setPointCloudCache(prev => ({ ...prev, [currentCam]: data.point_cloud }));
         }
-        if (data.vggt_tracks !== undefined) {
-          setVggtTracksCache(prev => ({ ...prev, [currentCam]: data.vggt_tracks }));
+        if (data.motion_field !== undefined) {
+          setMotionFieldCache(prev => ({ ...prev, [currentCam]: data.motion_field }));
         }
         if (data.task_isolated_features !== undefined) {
           setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
@@ -342,7 +342,7 @@ export default function App() {
           clipSim={clipSimCache[activeCam]}
           samMask={samMaskCache[activeCam]}
           pointCloud={pointCloudCache[activeCam] || []}
-          vggtTracks={vggtTracksCache[activeCam] || []}
+          motionField={motionFieldCache[activeCam]}
           activeCam={activeCam}
           onCameraChange={setActiveCam}
           onInteraction={handleInteraction}

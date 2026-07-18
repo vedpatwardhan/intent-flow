@@ -151,7 +151,7 @@ last_colab_query_time = 0.0
 cached_dino_attn = None
 cached_clip_sim = None
 cached_sam_mask = None
-cached_vggt_tracks = []
+cached_motion_field = None
 cached_task_isolated_features = None
 
 
@@ -582,14 +582,14 @@ async def run_stage3_training_loop(
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
-    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_vggt_tracks, cached_task_isolated_features
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
     global ui_annotations
     global is_training_active
     await websocket.accept()
     print("UI Connected via WebSocket")
-    needs_colab_processing = (
-        True  # Auto-trigger default Colab processing request to populate panels on load
-    )
+
+    # Auto-trigger default Colab processing request to populate panels on load
+    needs_colab_processing = True
 
     index_id = sim.model.body("R_index_tip_link").id
     thumb_id = sim.model.body("R_thumb_tip_link").id
@@ -651,7 +651,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     cached_dino_attn = None
                     cached_clip_sim = None
                     cached_sam_mask = None
-                    cached_vggt_tracks = []
+                    cached_motion_field = None
                     cached_task_isolated_features = {}
                     print("Cleared active camera click selections.")
 
@@ -731,7 +731,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 pass
 
             # Step physics 16 times per tick
-            if not is_training_active:
+            if is_moving and not is_training_active:
                 for _ in range(16):
                     sim.sync_ctrl_to_qpos(sim.last_target_q)
                     sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [
@@ -749,19 +749,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     mujoco.mj_step(sim.model, sim.data)
 
                 # Check if slider movement completed
-                if is_moving:
-                    moving_check_steps += 1
-                    max_error = 0.0
-                    for i in sim.active_joints_this_command:
-                        j_id = sim.protocol_joint_ids[i]
-                        if j_id != -1:
-                            q_idx = sim.model.jnt_qposadr[j_id]
-                            error = abs(sim.data.qpos[q_idx] - sim.last_target_q[q_idx])
-                            if error > max_error:
-                                max_error = error
-                    if max_error < 0.02 or moving_check_steps > 30:
-                        is_moving = False
-                        needs_colab_processing = True
+                moving_check_steps += 1
+                max_error = 0.0
+                for i in sim.active_joints_this_command:
+                    j_id = sim.protocol_joint_ids[i]
+                    if j_id != -1:
+                        q_idx = sim.model.jnt_qposadr[j_id]
+                        error = abs(sim.data.qpos[q_idx] - sim.last_target_q[q_idx])
+                        if error > max_error:
+                            max_error = error
+                if max_error < 0.02 or moving_check_steps > 30:
+                    is_moving = False
+                    needs_colab_processing = True
 
             if is_training_active and last_sent_payload is not None:
                 ws_payload = copy.deepcopy(last_sent_payload)
@@ -855,6 +854,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Query Colab server for advanced frame processing (DINO, CLIP, SAM, VGGT)
             if colab_url and needs_colab_processing and not colab_is_processing:
                 # Retrieve the active camera's rendered image and resize to 224x224 for Colab processing
+                needs_colab_processing = False
                 sim.renderer.update_scene(sim.data, camera=active_camera)
                 rgb_active = sim.renderer.render()
                 if attack_active:
@@ -871,12 +871,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 if base64_frame_224:
                     frame_history.append(base64_frame_224)
                     colab_is_processing = True
-                    needs_colab_processing = False
                     last_colab_query_time = current_time
 
                     async def run_colab_query(payload_data):
                         global colab_is_processing
-                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_vggt_tracks, cached_task_isolated_features
+                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
                         nonlocal cached_data_updated
                         try:
                             async with httpx.AsyncClient() as client:
@@ -890,7 +889,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     cached_dino_attn = res_data.get("dino_attn")
                                     cached_clip_sim = res_data.get("clip_sim")
                                     cached_sam_mask = res_data.get("sam_mask")
-                                    cached_vggt_tracks = res_data.get("vggt_tracks")
+                                    cached_motion_field = res_data.get("motion_field")
                                     cached_task_isolated_features = res_data.get(
                                         "task_isolated_features"
                                     )
@@ -930,13 +929,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     ws_payload["dino_attn"] = cached_dino_attn
                     ws_payload["clip_sim"] = cached_clip_sim
                     ws_payload["sam_mask"] = cached_sam_mask
-                    ws_payload["vggt_tracks"] = cached_vggt_tracks
+                    ws_payload["motion_field"] = cached_motion_field
                     ws_payload["task_isolated_features"] = cached_task_isolated_features
                     cached_data_updated = False
 
                 await websocket.send_text(json.dumps(ws_payload))
             step_count += 1
             await asyncio.sleep(0.05)  # ~20fps
+
+            if step_count == 1:
+                # Process the secondary initialization frame manually for the startup frame history
+                act_init = np.full(32, np.nan, dtype=np.float32)
+                act_init[17] = sim.last_target_q[17] + 0.2
+                sim.process_target_32(act_init)
+                is_moving = True
+                moving_check_steps = 0
 
     except WebSocketDisconnect:
         print("UI Disconnected")

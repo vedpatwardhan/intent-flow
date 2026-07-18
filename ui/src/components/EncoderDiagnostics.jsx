@@ -32,12 +32,15 @@ const HeatmapCanvas = ({ dataMatrix, colorMap }) => {
 
     if (!dataMatrix || dataMatrix.length === 0) return;
 
-    // Create 14x14 pixel data
+    const rows = dataMatrix.length;
+    const cols = dataMatrix[0]?.length || 0;
+    if (cols === 0) return;
+
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = 14;
-    tempCanvas.height = 14;
+    tempCanvas.width = cols;
+    tempCanvas.height = rows;
     const tempCtx = tempCanvas.getContext('2d');
-    const imgData = tempCtx.createImageData(14, 14);
+    const imgData = tempCtx.createImageData(cols, rows);
 
     const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
     const getJetRGB = (v) => {
@@ -47,10 +50,10 @@ const HeatmapCanvas = ({ dataMatrix, colorMap }) => {
       return [Math.round(r), Math.round(g), Math.round(b)];
     };
 
-    for (let r = 0; r < 14; r++) {
-      for (let c = 0; c < 14; c++) {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
         const val = dataMatrix[r]?.[c] || 0.0;
-        const idx = (r * 14 + c) * 4;
+        const idx = (r * cols + c) * 4;
         if (val > 0.05) {
           const [red, green, blue] = getJetRGB(val);
           imgData.data[idx] = red;
@@ -70,7 +73,7 @@ const HeatmapCanvas = ({ dataMatrix, colorMap }) => {
     // Upscale to 240x240 with bilinear filtering
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(tempCanvas, 0, 0, 14, 14, 0, 0, 240, 240);
+    ctx.drawImage(tempCanvas, 0, 0, cols, rows, 0, 0, 240, 240);
   }, [dataMatrix, colorMap]);
 
   return (
@@ -97,7 +100,7 @@ export default function EncoderDiagnostics({
   clipSim,
   samMask,
   pointCloud,
-  vggtTracks,
+  motionField,
   activeCam,
   onCameraChange,
   onInteraction,
@@ -229,7 +232,7 @@ export default function EncoderDiagnostics({
   };
 
   const renderVggtTracks = () => {
-    if (!vggtTracks || vggtTracks.length === 0) {
+    if (!motionField || motionField.length === 0) {
       return (
         <div style={{
           position: 'absolute',
@@ -242,50 +245,11 @@ export default function EncoderDiagnostics({
           fontSize: '10px',
           fontFamily: 'monospace'
         }}>
-          Move objects in simulation to trace tracks...
+          Move objects in simulation to trace motion...
         </div>
       );
     }
-
-    return (
-      <svg viewBox="0 0 240 240" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-        <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 2 1 L 8 5 L 2 9" fill="none" stroke="var(--accent-cyan)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </marker>
-        </defs>
-        {vggtTracks.map((pt, idx) => {
-          if (pt.length < 4) return null;
-          const x1 = pt[0] * 240;
-          const y1 = pt[1] * 240;
-          const x2 = pt[2] * 240;
-          const y2 = pt[3] * 240;
-
-          // Amplify vector length slightly for clearer visualization
-          const scale = 2.0;
-          const dx = (x2 - x1) * scale;
-          const dy = (y2 - y1) * scale;
-          const targetX = x1 + dx;
-          const targetY = y1 + dy;
-
-          return (
-            <g key={idx}>
-              <line
-                x1={x1}
-                y1={y1}
-                x2={targetX}
-                y2={targetY}
-                stroke="var(--accent-cyan)"
-                strokeWidth="2"
-                opacity="0.8"
-                markerEnd="url(#arrow)"
-              />
-              <circle cx={x1} cy={y1} r="2.5" fill="var(--accent-cyan)" opacity="0.6" />
-            </g>
-          );
-        })}
-      </svg>
-    );
+    return <HeatmapCanvas dataMatrix={motionField} colorMap="cyan" />;
   };
 
   const renderPointNextCloud = () => {
@@ -749,7 +713,7 @@ export default function EncoderDiagnostics({
               isolatedFeatures={taskIsolatedFeatures}
               dinoAttn={dinoAttn}
               clipSim={clipSim}
-              vggTracks={vggtTracks}
+              vggTracks={motionField}
             />
           </div>
 
