@@ -869,6 +869,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 ).decode("utf-8")
 
                 if base64_frame_224:
+                    print("Appending Frame")
                     frame_history.append(base64_frame_224)
                     colab_is_processing = True
                     last_colab_query_time = current_time
@@ -890,6 +891,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                     cached_clip_sim = res_data.get("clip_sim")
                                     cached_sam_mask = res_data.get("sam_mask")
                                     cached_motion_field = res_data.get("motion_field")
+                                    print(
+                                        f"Motion Field: {np.array(cached_motion_field).shape}"
+                                    )
                                     cached_task_isolated_features = res_data.get(
                                         "task_isolated_features"
                                     )
@@ -932,6 +936,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     ws_payload["motion_field"] = cached_motion_field
                     ws_payload["task_isolated_features"] = cached_task_isolated_features
                     cached_data_updated = False
+                    print(np.array(ws_payload["motion_field"]).shape)
 
                 await websocket.send_text(json.dumps(ws_payload))
             step_count += 1

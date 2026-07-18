@@ -50,9 +50,23 @@ const HeatmapCanvas = ({ dataMatrix, colorMap }) => {
       return [Math.round(r), Math.round(g), Math.round(b)];
     };
 
+    // Find max value in matrix to normalize raw metric magnitudes (like VGGT)
+    let maxVal = 1e-8;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const val = dataMatrix[r]?.[c] || 0.0;
+        if (dataMatrix[r]?.[c] > maxVal) {
+          maxVal = dataMatrix[r][c];
+        }
+      }
+    }
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        let val = dataMatrix[r]?.[c] || 0.0;
+        // If this is the high-res 224x224 motion field, normalize to [0, 1] range for visual contrast
+        if (rows === 224) {
+          val = val / maxVal;
+        }
         const idx = (r * cols + c) * 4;
         if (val > 0.05) {
           const [red, green, blue] = getJetRGB(val);

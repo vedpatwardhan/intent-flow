@@ -18,18 +18,6 @@ const getCSSVariableValue = (variableName) => {
 
 const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, color, renderType }) => {
   const canvasRef = React.useRef(null);
-  const prevDataRef = React.useRef({ featureData: null, maskData: null });
-
-  const hasDataChanged = React.useMemo(() => {
-    const prev = prevDataRef.current;
-    const featureChanged = JSON.stringify(prev.featureData) !== JSON.stringify(featureData);
-    const maskChanged = JSON.stringify(prev.maskData) !== JSON.stringify(maskData);
-    return featureChanged || maskChanged;
-  }, [featureData, maskData]);
-
-  React.useEffect(() => {
-    prevDataRef.current = { featureData, maskData };
-  }, [featureData, maskData]);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -124,9 +112,23 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           const tempCtx = tempCanvas.getContext('2d');
           const imgData = tempCtx.createImageData(cols, rows);
 
+          // Find max value in matrix to normalize raw metric magnitudes (like VGGT)
+          let maxVal = 1e-8;
           for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
-              const val = featureData[r]?.[c] || 0.0;
+              if (featureData[r]?.[c] > maxVal) {
+                maxVal = featureData[r][c];
+              }
+            }
+          }
+
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              let val = featureData[r]?.[c] || 0.0;
+              // If this is the high-res 224x224 motion field, normalize to [0, 1] range for visual contrast
+              if (rows === 224) {
+                val = val / maxVal;
+              }
               const idx = (r * cols + c) * 4;
               if (val > 0.05) {
                 const [red, green, blue] = getJetRGB(val);
@@ -233,7 +235,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       }
     };
     img.src = frame;
-  }, [frame, hasDataChanged, renderType, color]);
+  }, [frame, featureData, maskData, renderType, color]);
 
   const getPlaceholderText = () => {
     if (maskData !== null) {
@@ -303,7 +305,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           ref={canvasRef}
           width={240}
           height={240}
-          style={{ width: '100%', height: '100%' }}
+          style={{ width: '90%', height: '90%' }}
         />
       </div>
     </div>
@@ -319,7 +321,6 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
       height: '100%',
       gap: '12px',
       paddingRight: '16px',
-      overflowY: 'auto'
     }}>
       <div className="panel-header" style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -384,7 +385,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
           <IsolatedFeatureCard
             title="Local VGGT Subspace"
             frame={frame}
-            featureData={isolatedFeatures?.vggt_local}
+            featureData={isolatedFeatures?.motion_field_subspace}
             maskData={isolatedFeatures?.combined_mask_224}
             icon={Move}
             color="var(--accent-cyan)"

@@ -235,7 +235,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col" style={{ height: '100vh', overflow: 'hidden' }}>
       {/* Header Navbar with Navigation Tabs */}
       <header className="app-header">
         <div className="header-left">
@@ -332,28 +332,34 @@ export default function App() {
       )}
 
       {activePage === 'trajectories' && (
-        <TrajectoryExplorer />
+        <div className="flex-grow" style={{ minHeight: 0, overflow: 'hidden' }}>
+          <TrajectoryExplorer />
+        </div>
       )}
       {activePage === 'encoders' && (
-        <EncoderDiagnostics
-          frame={frames?.[activeCam] || frames?.world_center}
-          frames={frames}
-          dinoAttn={dinoAttnCache[activeCam]}
-          clipSim={clipSimCache[activeCam]}
-          samMask={samMaskCache[activeCam]}
-          pointCloud={pointCloudCache[activeCam] || []}
-          motionField={motionFieldCache[activeCam]}
-          activeCam={activeCam}
-          onCameraChange={setActiveCam}
-          onInteraction={handleInteraction}
-          taskIsolatedFeatures={taskIsolatedFeaturesCache[activeCam]}
-          isTraining={isTraining}
-          trainingProgress={trainingProgress}
-          trainingStatus={trainingStatus}
-        />
+        <div className="flex-grow" style={{ minHeight: 0, overflow: 'hidden' }}>
+          <EncoderDiagnostics
+            frame={frames?.[activeCam] || frames?.world_center}
+            frames={frames}
+            dinoAttn={dinoAttnCache[activeCam]}
+            clipSim={clipSimCache[activeCam]}
+            samMask={samMaskCache[activeCam]}
+            pointCloud={pointCloudCache[activeCam] || []}
+            motionField={motionFieldCache[activeCam]}
+            activeCam={activeCam}
+            onCameraChange={setActiveCam}
+            onInteraction={handleInteraction}
+            taskIsolatedFeatures={taskIsolatedFeaturesCache[activeCam]}
+            isTraining={isTraining}
+            trainingProgress={trainingProgress}
+            trainingStatus={trainingStatus}
+          />
+        </div>
       )}
       {activePage === 'skills' && (
-        <SkillComposer />
+        <div className="flex-grow" style={{ minHeight: 0, overflow: 'hidden' }}>
+          <SkillComposer />
+        </div>
       )}
     </div>
   );
