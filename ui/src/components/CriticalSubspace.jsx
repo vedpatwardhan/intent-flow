@@ -231,6 +231,16 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
     img.src = frame;
   }, [frame, hasDataChanged, renderType, color]);
 
+  const getPlaceholderText = () => {
+    if (maskData !== null) {
+      return "Waiting for annotations...";
+    }
+    if (renderType === 'tracks') {
+      return "Move objects in simulation to trace tracks...";
+    }
+    return "Waiting for GPU features...";
+  };
+
   if (!featureData || (Array.isArray(featureData) && featureData.length === 0)) {
     return (
       <div style={{
@@ -241,7 +251,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
-        height: '270px'
+        height: '300px'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#64748b' }}>
           <Icon size={12} />
@@ -256,9 +266,8 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           borderRadius: '4px',
           fontSize: '9px',
           color: '#475569',
-          minHeight: '200px'
         }}>
-          Waiting for annotations...
+          {getPlaceholderText()}
         </div>
       </div>
     );
@@ -272,8 +281,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       padding: '8px',
       display: 'flex',
       flexDirection: 'column',
-      gap: '6px',
-      height: '270px'
+      gap: '6px'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color, fontWeight: 600 }}>
         <Icon size={12} />
@@ -281,8 +289,8 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       </div>
       <div style={{
         position: 'relative',
-        width: '240px',
-        height: '240px',
+        width: '100%',
+        aspectRatio: '1',
         background: '#000',
         borderRadius: '4px',
         overflow: 'hidden'
@@ -298,64 +306,108 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
   );
 };
 
-export default function CriticalSubspace({ frame, isolatedFeatures }) {
+export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, clipSim, vggTracks }) {
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent-green)', display: 'flex', flexDirection: 'column', height: 'fit-content', gap: '12px' }}>
-      <div className="panel-header" style={{ marginBottom: '8px' }}>
-        <h2 className="panel-title">
-          <Eye className="text-green-400" size={16} />
-          Critical Subspace
-        </h2>
-        <p className="panel-subtitle">Task-isolated latent features</p>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-        <IsolatedFeatureCard
-          title="DINOv3 Spatial Attention"
-          frame={frame}
-          featureData={isolatedFeatures?.dino_subspace}
-          maskData={isolatedFeatures?.combined_mask_224}
-          icon={Eye}
-          color="var(--accent-amber)"
-          renderType="heatmap"
-        />
-        <IsolatedFeatureCard
-          title="VGGT Trajectory Tracks"
-          frame={frame}
-          featureData={isolatedFeatures?.vggt_local}
-          maskData={isolatedFeatures?.combined_mask_224}
-          icon={Move}
-          color="var(--accent-cyan)"
-          renderType="tracks"
-        />
-
-        <IsolatedFeatureCard
-          title="Tactile Features"
-          frame={frame}
-          featureData={isolatedFeatures?.tactile_active}
-          maskData={isolatedFeatures?.combined_mask_224}
-          icon={Target}
-          color="var(--accent-red)"
-        />
+    <div className="panel" style={{
+      borderColor: 'var(--accent-green)',
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      gap: '12px',
+      paddingRight: '16px',
+      overflowY: 'auto'
+    }}>
+      <div className="panel-header" style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Eye className="text-indigo-400" size={16} />
+            Representations Dashboard
+          </h2>
+          <p className="panel-subtitle">Vertical comparison of global and task-isolated features</p>
+        </div>
+        <div style={{
+          padding: '4px 8px',
+          background: isolatedFeatures ? 'rgba(34, 197, 94, 0.05)' : 'rgba(148, 163, 184, 0.05)',
+          border: isolatedFeatures ? '1px solid rgba(34, 197, 94, 0.2)' : '1px solid rgba(148, 163, 184, 0.2)',
+          borderRadius: '4px',
+          fontSize: '9px',
+          color: isolatedFeatures ? '#86efac' : '#94a3b8',
+          fontFamily: 'monospace'
+        }}>
+          {isolatedFeatures ? 'ACTIVE • Mask Applied' : 'INACTIVE • No Annotations'}
+        </div>
       </div>
 
       <div style={{
-        marginTop: '8px',
-        padding: '6px',
-        background: 'rgba(34, 197, 94, 0.05)',
-        border: '1px solid rgba(34, 197, 94, 0.2)',
-        borderRadius: '4px',
-        fontSize: '8px',
-        color: '#86efac',
-        fontFamily: 'monospace',
-        textAlign: 'center'
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gap: '12px',
+        flexGrow: 1
       }}>
-        <span style={{ fontWeight: 600 }}>
-          {isolatedFeatures ? 'ACTIVE' : 'INACTIVE'}
-        </span>
-        <span style={{ opacity: 0.8, marginLeft: '6px' }}>
-          {isolatedFeatures ? 'Mask Applied' : 'No Annotations'}
-        </span>
+        {/* Column 1: DINOv3 Spatial Attention */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <IsolatedFeatureCard
+            title="Global DINOv3 Attention"
+            frame={frame}
+            featureData={dinoAttn}
+            maskData={null}
+            icon={Eye}
+            color="var(--accent-amber)"
+            renderType="heatmap"
+          />
+          <IsolatedFeatureCard
+            title="Local DINOv3 Subspace"
+            frame={frame}
+            featureData={isolatedFeatures?.dino_subspace}
+            maskData={isolatedFeatures?.combined_mask_224}
+            icon={Eye}
+            color="var(--accent-amber)"
+            renderType="heatmap"
+          />
+        </div>
+
+        {/* Column 2: VGGT Trajectory Tracks */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <IsolatedFeatureCard
+            title="Global VGGT Tracks"
+            frame={frame}
+            featureData={vggTracks}
+            maskData={null}
+            icon={Move}
+            color="var(--accent-cyan)"
+            renderType="tracks"
+          />
+          <IsolatedFeatureCard
+            title="Local VGGT Subspace"
+            frame={frame}
+            featureData={isolatedFeatures?.vggt_local}
+            maskData={isolatedFeatures?.combined_mask_224}
+            icon={Move}
+            color="var(--accent-cyan)"
+            renderType="tracks"
+          />
+        </div>
+
+        {/* Column 3: CLIP & Tactile */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <IsolatedFeatureCard
+            title="Global CLIP Similarity"
+            frame={frame}
+            featureData={clipSim}
+            maskData={null}
+            icon={Target}
+            color="var(--accent-red)"
+            renderType="heatmap"
+          />
+          <IsolatedFeatureCard
+            title="Local Tactile Features"
+            frame={frame}
+            featureData={isolatedFeatures?.tactile_active}
+            maskData={isolatedFeatures?.combined_mask_224}
+            icon={Target}
+            color="var(--accent-red)"
+          />
+        </div>
       </div>
     </div>
   );

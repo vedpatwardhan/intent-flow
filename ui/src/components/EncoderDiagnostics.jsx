@@ -729,88 +729,28 @@ export default function EncoderDiagnostics({
             </button>
           </div>
 
-          {/* Row 1: Unified Workspace + Critical Subspace */}
+          {/* Single Grid Row: Unified Workspace + Vertical Modality Dashboard */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '0.6fr 1.4fr',
-            gap: '12px',
-            flexShrink: 0
+            gridTemplateColumns: '420px 1fr',
+            gap: '16px',
+            flexGrow: 1,
+            minHeight: 0,
+            overflow: 'hidden'
           }}>
-            <UnifiedWorkspace frames={frames} activeCam={activeCam} onInteraction={onInteraction} samMask={samMask} />
-            <CriticalSubspace frame={activeFrame} isolatedFeatures={taskIsolatedFeatures} />
-          </div>
-
-          {/* Dedicated Row 2: Visual Overlays Grid (Slightly Enlarged to 240px squares) */}
-          <div style={{ overflowY: 'auto', flexGrow: 1, paddingRight: '2px' }}>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: '12px'
-            }}>
-
-              {/* DINOv3 Attn Map */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-amber)' }}>
-                <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-amber)' }}>
-                    <Target size={11} />
-                    DINOv3 Spatial Attention
-                  </span>
-                </div>
-                <div
-                  className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
-                >
-                  {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {renderHeatmapOverlay(dinoAttn, 'jet')}
-                </div>
-                <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Attention overlays.
-                </div>
-              </div>
-
-              {/* CLIP Attention Heatmap */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-red)' }}>
-                <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-red)' }}>
-                    <ImageIcon size={11} />
-                    CLIP Cosine Similarity
-                  </span>
-                </div>
-                <div
-                  className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}
-                >
-                  {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {renderHeatmapOverlay(clipSim, 'jet')}
-                </div>
-                <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Token: <code style={{ color: 'var(--accent-red)' }}>"{inputText}"</code>
-                </div>
-              </div>
-
-              {/* VGGT Point Tracks */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-cyan)' }}>
-                <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-cyan)' }}>
-                    <Move size={11} />
-                    VGGT Trajectory Tracks
-                  </span>
-                </div>
-                <div
-                  className="diagnostics-viewport"
-                  style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)', opacity: 0.85 }}
-                >
-                  {activeFrame && <img src={activeFrame} alt="camera" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
-                  {renderVggtTracks()}
-                </div>
-                <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Vector tracks.
-                </div>
-              </div>
-
-
-
-            </div>
+            <UnifiedWorkspace
+              frames={frames}
+              activeCam={activeCam}
+              onInteraction={onInteraction}
+              samMask={samMask}
+            />
+            <CriticalSubspace
+              frame={activeFrame}
+              isolatedFeatures={taskIsolatedFeatures}
+              dinoAttn={dinoAttn}
+              clipSim={clipSim}
+              vggTracks={vggtTracks}
+            />
           </div>
 
         </div>

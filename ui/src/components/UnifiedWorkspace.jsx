@@ -390,7 +390,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
   return (
     <>
       {overlay}
-      <div className="panel" style={{ borderColor: 'var(--accent-cyan)', ...panelStyles }}>
+      <div className="panel" style={{ borderColor: 'var(--accent-cyan)', height: 'fit-content', ...panelStyles }}>
         <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
           <div>
             <h2 className="panel-title">
@@ -452,7 +452,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
           </div>
         </div>
 
-        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '600px' : '300px', margin: '0 auto' }}>
+        <div style={{ position: 'relative', width: '100%', maxWidth: isMaximized ? '600px' : '100%', margin: '0 auto' }}>
           <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
             {activeFrame ? (
               <>
