@@ -840,12 +840,22 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             payload.proprioception,
                             view_name=view_name,
                         )
+                        goal_key = next(iter(goal_obs_dict.keys()))
+                        print(
+                            f"Shapes: {goal_obs_dict[goal_key]['vision'].shape} "
+                            f"{goal_obs_dict[goal_key]['pointnext'].shape} "
+                            f"{goal_obs_dict[goal_key]['vggt'].shape} "
+                            f"{goal_obs_dict[goal_key]['text'].shape} "
+                            f"{goal_obs_dict[goal_key]['tactile'].shape} "
+                            f"{goal_obs_dict[goal_key]['proprioception'].shape}"
+                        )
 
                         # Zero out the motion field for goal images
                         goal_obs_dict["vggt"] = torch.zeros_like(goal_obs_dict["vggt"])
 
                         # Pass features through respective adapters and MSAT
                         goal_latent = encode_obs_to_latent(goal_obs_dict, state)
+                        print(f"Goal Latent Shape: {goal_latent.shape}")
                         goal_latents.append(goal_latent)
 
         print("Goal Latents Shape:", goal_latents[0].shape)
@@ -872,13 +882,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 f"{combined_obs['proprioception'].shape}"
             )
 
+            # Get state latents
             s_t = encode_obs_to_latent(combined_obs, state)
             print(f"[Stage3 Step] s_t shape: {s_t.shape}")
 
             # Query the goal latents using the current state s_t via MultiheadAttention
-            stacked_goals = torch.stack(
-                goal_latents, dim=1
-            )  # [1, num_goals, latent_dim]
+            # [1, num_goals, latent_dim]
+            stacked_goals = torch.stack(goal_latents, dim=1)
             print(f"[Stage3 Step] stacked_goals shape: {stacked_goals.shape}")
 
             query = s_t.unsqueeze(1)  # [1, 1, latent_dim]
