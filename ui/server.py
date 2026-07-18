@@ -32,78 +32,11 @@ class GR1SimulationServer(GR1MuJoCoBase):
         super().__init__(restrict_ik=True)
 
     def _render_needs_depth(self) -> bool:
-        return True
+        return False
 
     def get_point_cloud_numpy(self, cam_name: str, rgb_224: np.ndarray) -> list:
-        # 1. Render and capture depth buffer
-        self.renderer.enable_depth_rendering()
-        self.renderer.update_scene(self.data, camera=cam_name)
-        depth_cam = self.renderer.render().copy()
-        self.renderer.disable_depth_rendering()
-
-        # 2. Metric depth (meters) is returned directly by MuJoCo's Python renderer
-        near = self.model.vis.map.znear
-        far = self.model.vis.map.zfar
-        metric_depth = depth_cam
-
-        # 3. Resize to 224x224 matching image shape
-        metric_depth_224 = cv2.resize(
-            metric_depth, (224, 224), interpolation=cv2.INTER_NEAREST
-        )
-
-        # 4. Grid generation (70x70) on 224x224 resolution
-        w, h = 224, 224
-        grid_x, grid_y = np.meshgrid(
-            np.linspace(0, w - 1, 70).astype(int),
-            np.linspace(0, h - 1, 70).astype(int),
-        )
-        xs = grid_x.flatten()
-        ys = grid_y.flatten()
-        zs = metric_depth_224[ys, xs]
-
-        # 5. Projection: Emulate disparity convention where closer is larger and farther is smaller
-        focal_length = max(w, h)
-        cx = w / 2.0
-        cy = h / 2.0
-        zs_proj = far - zs
-        xs_proj = (xs - cx) * zs_proj / focal_length
-        ys_proj = (cy - ys) * zs_proj / focal_length
-
-        # 6. Colors
-        colors = rgb_224[ys, xs]
-        rs = colors[:, 0] / 255.0
-        gs = colors[:, 1] / 255.0
-        bs = colors[:, 2] / 255.0
-
-        # 7. Foreground mask selection to define the normalized coordinate frame bounds
-        foreground_mask = zs < 3.0
-        if foreground_mask.sum() > 0:
-            fg_xs = xs_proj[foreground_mask]
-            fg_ys = ys_proj[foreground_mask]
-            fg_zs = zs_proj[foreground_mask]
-            x_range = fg_xs.max() - fg_xs.min()
-            y_range = fg_ys.max() - fg_ys.min()
-            z_range = fg_zs.max() - fg_zs.min()
-            mean_x = fg_xs.mean()
-            mean_y = fg_ys.mean()
-            mean_z = fg_zs.mean()
-        else:
-            x_range = xs_proj.max() - xs_proj.min() if len(xs_proj) > 0 else 0
-            y_range = ys_proj.max() - ys_proj.min() if len(ys_proj) > 0 else 0
-            z_range = zs_proj.max() - zs_proj.min() if len(zs_proj) > 0 else 0
-            mean_x = xs_proj.mean()
-            mean_y = ys_proj.mean()
-            mean_z = zs_proj.mean()
-
-        max_range = max(x_range, y_range, z_range, 1e-4)
-
-        # 8. Normalization (Apply scale multiplier of 1.4 and translation of -0.15)
-        xs_norm = (xs_proj - mean_x) / max_range * 1.4
-        ys_norm = (ys_proj - mean_y) / max_range * 1.4 - 0.15
-        zs_norm = (zs_proj - mean_z) / max_range * 1.4
-
-        point_cloud = np.stack([xs_norm, ys_norm, zs_norm, rs, gs, bs], axis=1)
-        return point_cloud.tolist()
+        # Bypassed to eliminate depth rendering and point cloud calculation overhead
+        return []
 
     def _handle_ik_pickup_logic(self, phase=0, offset_cm=5):
         """Standard multi-phase IK solver for the red cube."""

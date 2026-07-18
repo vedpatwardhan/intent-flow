@@ -328,15 +328,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures }) {
           color="var(--accent-cyan)"
           renderType="tracks"
         />
-        <IsolatedFeatureCard
-          title="PointNeXt 3D Cloud"
-          frame={frame}
-          featureData={isolatedFeatures?.point_cloud_local}
-          maskData={isolatedFeatures?.combined_mask_224}
-          icon={Grid}
-          color="var(--accent-purple)"
-          renderType="pointcloud"
-        />
+
         <IsolatedFeatureCard
           title="Tactile Features"
           frame={frame}

@@ -808,21 +808,7 @@ export default function EncoderDiagnostics({
                 </div>
               </div>
 
-              {/* PointNeXt 3D Cloud */}
-              <div className="panel" style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderColor: 'var(--accent-purple)' }}>
-                <div className="panel-header" style={{ marginBottom: '2px' }}>
-                  <span className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--accent-purple)' }}>
-                    <Target size={11} />
-                    PointNeXt 3D Cloud
-                  </span>
-                </div>
-                <div className="diagnostics-viewport" style={{ position: 'relative', width: '270px', height: '270px', margin: '0 auto', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-glass)' }}>
-                  {renderPointNextCloud()}
-                </div>
-                <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center', fontFamily: 'monospace' }}>
-                  Projected 3D cloud.
-                </div>
-              </div>
+
 
             </div>
           </div>
