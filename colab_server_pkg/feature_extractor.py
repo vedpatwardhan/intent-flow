@@ -391,7 +391,7 @@ def run_pointnext_model(point_cloud_np):
     )
 
     # x expects feature channel space layout: [Batch, Channels, Points] -> [1, 3, N]
-    x = pos.transpose(1, 2)
+    x = pos.transpose(1, 2).clone().contiguous()
     print(
         f"[PointNeXt Log] X Shape: {x.shape} "
         f"[{torch.min(x).item()} - {torch.max(x).item()}]"
