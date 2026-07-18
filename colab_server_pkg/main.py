@@ -107,60 +107,8 @@ def load_pretrained_models():
     vggt_model.eval()
     models["vggt"] = vggt_model
 
-    print("Loading PointNeXt...")
-    try:
-        from openpoints.models import build_model_from_cfg
-        from easydict import EasyDict
-
-        cfg = EasyDict(
-            {
-                "model": {
-                    "NAME": "BaseSeg",
-                    "encoder_args": {
-                        "NAME": "PointNextEncoder",
-                        "blocks": [1, 1, 1, 1, 1, 1],
-                        "strides": [1, 2, 2, 2, 2, 1],
-                        "width": 32,
-                        "in_channels": 3,  # x, y, z
-                        "sa_layers": 3,
-                        "sa_use_res": True,
-                        "group_args": {
-                            "NAME": "ballquery",
-                            "radius": 0.15,
-                            "nsample": 32,
-                        },
-                        "conv_args": {
-                            "order": "conv-norm-act",
-                        },
-                        "norm_args": {
-                            "norm": "bn",
-                        },
-                        "act_args": {
-                            "act": "relu",
-                        },
-                    },
-                    "conv_args": {
-                        "order": "conv-norm-act",
-                    },
-                    "norm_args": {
-                        "norm": "bn",
-                    },
-                    "act_args": {
-                        "act": "relu",
-                    },
-                    "decoder_args": {"NAME": "PointNextDecoder"},
-                    "cls_args": {
-                        "NAME": "SegHead",
-                        "num_classes": 384,
-                    },
-                }
-            }
-        )
-        models["pointnext"] = build_model_from_cfg(cfg.model).to(device)
-        models["pointnext"].eval()
-    except Exception as e:
-        print(f"Warning: Failed to load PointNeXt model ({e}). Using mock/fallback.")
-        models["pointnext"] = None
+    # Point cloud encoder is decommissioned. Setting to None to trigger downstream mock bypass.
+    models["pointnext"] = None
 
     print("All available models initialized successfully.")
 
