@@ -69,7 +69,7 @@ class FramePayload(BaseModel):
         None  # {"crops": [], "vectors": [], "segments": []}
     )
     history_frames: Optional[List[str]] = []  # Previous base64 frames for VGGT tracking
-    point_clouds: Optional[dict] = None
+    view_name: str = "world_center"
 
 
 @app.on_event("startup")
@@ -117,36 +117,27 @@ def load_pretrained_models():
 async def process_frame(payload: FramePayload):
     try:
         start = perf_counter()
-        point_clouds = payload.point_clouds or {}
-        view_name = next(iter(point_clouds.keys())) if point_clouds else "world_center"
 
         features = extract_features_common(
-            payload.frame,
-            payload.history_frames,
-            payload.text_prompt,
-            payload.ui_annotations,
-            point_clouds=payload.point_clouds,
-            view_name=view_name,
+            payload.frame,  # str
+            payload.history_frames,  # list[str]
+            payload.text_prompt,  # str
+            payload.ui_annotations,  # dict
+            payload.view_name,  # str
         )
-
-        # Run PointNeXt model forward pass inside /process
-        pt_feat = run_pointnext_model(features["point_cloud"])
 
         response = {
             "dino_attn": features["dino_attn"].tolist(),
             "clip_sim": features["clip_sim"].tolist(),
-            "point_cloud": features["point_cloud"].tolist(),
-            "vggt_tracks": features["vggt_tracks"],
+            "motion_field": features["motion_field"].tolist(),
             "sam_mask": "",
-            "pointnext_feat": pt_feat.tolist(),
             "task_isolated_features": {
                 "dino_subspace": features["task_isolated_features"][
                     "dino_subspace"
                 ].tolist(),
-                "vggt_local": features["task_isolated_features"]["vggt_local"],
-                "point_cloud_local": np.array(
-                    features["task_isolated_features"]["point_cloud_local"]
-                ).tolist(),
+                "motion_field_subspace": features["task_isolated_features"][
+                    "motion_field_subspace"
+                ].tolist(),
                 "sam_mask": np.array(
                     features["task_isolated_features"]["sam_mask"]
                 ).tolist(),

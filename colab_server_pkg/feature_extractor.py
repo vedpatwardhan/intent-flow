@@ -62,116 +62,40 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
     return sim_norm, text_feat_raw.squeeze(0).cpu()
 
 
-def get_vggt_point_tracks_base(history_frames: list[str]) -> tuple:
-    if len(history_frames) < 2:
-        history_frames = [history_frames[0], history_frames[0]]
-    while len(history_frames) > 2:
-        history_frames.pop(0)
-    frames_np = [decode_base64_image(f) for f in history_frames]
+def get_vggt_motion_field(frames: list[str]) -> tuple:
+    if len(frames) < 2:
+        raise IndexError("Motion vectors require atleast two frames of history.")
+    frames = frames[-2:]
+    frames = [decode_base64_image(frame) for frame in frames]
+    transform_pipeline = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),  # Scales pixels to [0.0, 1.0] and transposes to [C, H, W]
+        ]
+    )
+    processed_tensors = (
+        torch.stack([transform_pipeline(frame) for frame in frames], dim=0)
+        .unsqueeze(0)
+        .to(device)
+    )
 
-    seq_len = len(frames_np)
-    h, w = frames_np[0].shape[:2]
-
-    tensor_list = []
-    for f in frames_np:
-        t = torch.from_numpy(f).permute(2, 0, 1).float() / 255.0
-        tensor_list.append(t)
-
-    video_tensor = torch.stack(tensor_list, dim=0).unsqueeze(0).to(device)
-
+    # Execute model forward pass
     with torch.no_grad():
-        vggt_outputs = models["vggt"](video_tensor)
-        wp_raw = vggt_outputs["world_points"].squeeze(0).cpu().numpy()
-        wp_conf = vggt_outputs["world_points_conf"].squeeze(0).cpu().numpy()
+        outputs = models["vggt"](processed_tensors)
+        # Shape: [2, 224, 224, 3]
+        world_points = outputs["world_points"].squeeze(0).cpu().numpy()
 
-    if wp_raw.shape[0] == seq_len:
-        wp_clean_4d = np.transpose(wp_raw, (1, 2, 0, 3))
-        wp_conf_clean = np.transpose(wp_conf, (1, 2, 0))
-    else:
-        wp_clean_4d = wp_raw
-        wp_conf_clean = wp_conf
+    # Extract the absolute spatial positioning fields
+    wp_t0 = world_points[0]  # Shape: [224, 224, 3]
+    wp_t1 = world_points[1]  # Shape: [224, 224, 3]
 
-    subsample_step = 6
-    wp_frame2 = wp_clean_4d[:, :, -1, :]
+    # Delta trajectories matrix = Point(t1) - Point(t0)
+    dx = wp_t1[:, :, 0] - wp_t0[:, :, 0]  # [224, 224]
+    dy = wp_t1[:, :, 1] - wp_t0[:, :, 1]  # [224, 224]
 
-    y_idx, x_idx = np.indices((h, w))
-    seeds_grid = np.stack((x_idx, y_idx), axis=-1).astype(np.float32)
-
-    pt_sampled = wp_clean_4d[::subsample_step, ::subsample_step, :, :]
-    seeds_sampled = seeds_grid[::subsample_step, ::subsample_step, :]
-    conf_sampled = wp_conf_clean[::subsample_step, ::subsample_step, 0]
-
-    pt_flat = pt_sampled.reshape(-1, seq_len, 3)
-    seeds_flat = seeds_sampled.reshape(-1, 2)
-    conf_flat = conf_sampled.flatten()
-
-    ix = seeds_flat[:, 0].astype(np.int32)
-    iy = seeds_flat[:, 1].astype(np.int32)
-
-    rgb_values = frames_np[0][iy, ix]
-    foreground_mask = np.any(rgb_values > 15, axis=1)
-    confidence_mask = conf_flat > 0.3
-    base_mask = foreground_mask & confidence_mask
-    return pt_flat, seeds_flat, wp_frame2, base_mask, frames_np, seq_len, h, w
-
-
-def get_vggt_2d_tracks_from_mask(
-    pt_flat: np.ndarray,
-    seeds_flat: np.ndarray,
-    wp_frame2: np.ndarray,
-    valid_mask: np.ndarray,
-    seq_len: int,
-    h: int,
-    w: int,
-) -> list:
-    pt_flat_filtered = pt_flat[valid_mask]
-    seeds_flat_filtered = seeds_flat[valid_mask]
-
-    num_valid_seeds = seeds_flat_filtered.shape[0]
-    if num_valid_seeds == 0:
-        return []
-
-    x_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
-    y_ui = np.zeros((num_valid_seeds, seq_len), dtype=np.float32)
-
-    x_ui[:, 0] = seeds_flat_filtered[:, 0]
-    y_ui[:, 0] = seeds_flat_filtered[:, 1]
-
-    search_radius = 20
-
-    for idx in range(num_valid_seeds):
-        sx, sy = int(seeds_flat_filtered[idx, 0]), int(seeds_flat_filtered[idx, 1])
-        p1_3d = pt_flat_filtered[idx, 0, :]
-
-        x_start = max(0, sx - search_radius)
-        x_end = min(w, sx + search_radius + 1)
-        y_start = max(0, sy - search_radius)
-        y_end = min(h, sy + search_radius + 1)
-
-        local_wp_f2 = wp_frame2[y_start:y_end, x_start:x_end, :]
-        local_dists = np.linalg.norm(local_wp_f2 - p1_3d, axis=2)
-        best_local_idx = np.argmin(local_dists)
-
-        local_h, local_w = local_dists.shape
-        match_local_y = best_local_idx // local_w
-        match_local_x = best_local_idx % local_w
-
-        x_ui[idx, 1] = x_start + match_local_x
-        y_ui[idx, 1] = y_start + match_local_y
-
-    distances = np.hypot(x_ui[:, 1] - x_ui[:, 0], y_ui[:, 1] - y_ui[:, 0])
-    motion_mask = (distances > 4.0) & (distances < float(search_radius))
-    valid_indices = np.where(motion_mask)[0]
-
-    tracks_224 = []
-    for idx in valid_indices:
-        x1_norm = float(x_ui[idx, 0] / w)
-        y1_norm = float(y_ui[idx, 0] / h)
-        x2_norm = float(x_ui[idx, 1] / w)
-        y2_norm = float(y_ui[idx, 1] / h)
-        tracks_224.append([x1_norm, y1_norm, x2_norm, y2_norm])
-
-    return tracks_224
+    # Magnitude = sqrt(dx^2 + dy^2)
+    motion_magnitude = np.sqrt(dx**2 + dy**2)  # [224, 224]
+    return motion_magnitude
 
 
 def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
@@ -217,52 +141,33 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
     return sam_combined_mask, sam_combined_mask_224
 
 
+def pad_features(feature, target_dim):
+    if len(feature) < target_dim:
+        feature = torch.cat([feature, torch.zeros(target_dim - len(feature))])
+    return feature
+
+
 def extract_features_common(
-    frame_str,
-    history_frames,
-    text_prompt,
-    ui_annotations,
-    point_clouds=None,
-    view_name="world_center",
+    frame_str: str,
+    history_frames: list[str],
+    text_prompt: str,
+    ui_annotations: dict[str, list],
+    view_name: str = "world_center",
 ):
     frame = decode_base64_image(frame_str)
     pil_frame = Image.fromarray(frame)
     h, w, _ = frame.shape
 
-    # Extract history frames specific to the active view_name from the dict history representation
-    view_history = []
-    for h_f in history_frames:
-        if isinstance(h_f, dict):
-            if view_name in h_f:
-                view_history.append(h_f[view_name])
-            elif "world_center" in h_f:
-                view_history.append(h_f["world_center"])
-            elif len(h_f) > 0:
-                view_history.append(list(h_f.values())[0])
-        else:
-            view_history.append(h_f)
-
-    dino_attn = get_dino_attn_map(frame)
+    dino_attn = get_dino_attn_map(frame)  # [14, 14]
     clip_sim, text_feat = get_clip_cosine_similarity(text_prompt, pil_frame)
-
-    if point_clouds and view_name in point_clouds:
-        point_cloud = np.array(point_clouds[view_name])
-    else:
-        point_cloud = np.zeros((4900, 6), dtype=np.float32)
-    pt_flat, seeds_flat, wp_frame2, base_mask, _, seq_len, _, _ = (
-        get_vggt_point_tracks_base(view_history)
-    )
-    vggt_tracks = get_vggt_2d_tracks_from_mask(
-        pt_flat, seeds_flat, wp_frame2, base_mask, seq_len, h, w
-    )
+    motion_field = get_vggt_motion_field(history_frames)  # [224, 224]
 
     combined_mask = np.zeros((14, 14), dtype=np.float32)
     combined_mask_224 = np.zeros((224, 224), dtype=np.float32)
     sam_mask = np.zeros((14, 14), dtype=np.float32)
     sam_mask_224 = np.zeros((224, 224), dtype=np.float32)
-    vggt_local = []
     dino_subspace = np.array([], dtype=np.float32)
-    point_cloud_local = []
+    motion_field_subspace = np.array([], dtype=np.float32)
 
     view_annos = (ui_annotations or {}).get(view_name, {})
     if view_annos and (view_annos.get("crops") or view_annos.get("segments")):
@@ -272,7 +177,6 @@ def extract_features_common(
             x_end = int(((crop["x"] + crop["width"]) / 224) * 14)
             y_end = int(((crop["y"] + crop["height"]) / 224) * 14)
             combined_mask[y_start:y_end, x_start:x_end] = 1.0
-
             cx = int(crop["x"])
             cy = int(crop["y"])
             cw = int(crop["width"])
@@ -282,40 +186,18 @@ def extract_features_common(
         sam_mask, sam_mask_224 = get_segment_masks(view_annos, pil_frame)
         combined_mask = np.maximum(combined_mask, sam_mask)
         combined_mask_224 = np.maximum(combined_mask_224, sam_mask_224)
-
-        mx = np.clip(((seeds_flat[:, 0] / w) * 14).astype(np.int32), 0, 13)
-        my = np.clip(((seeds_flat[:, 1] / h) * 14).astype(np.int32), 0, 13)
-        workspace_mask = combined_mask[my, mx] > 0.0
-        local_valid_mask = base_mask & workspace_mask
-        vggt_local = get_vggt_2d_tracks_from_mask(
-            pt_flat, seeds_flat, wp_frame2, local_valid_mask, seq_len, h, w
-        )
-
         dino_subspace = dino_attn * combined_mask
-
-        # Direct 1-to-1 grid mapping from the 70x70 point cloud to the 14x14 mask
-        grid_x, grid_y = np.meshgrid(
-            np.linspace(0, 223, 70).astype(int),
-            np.linspace(0, 223, 70).astype(int),
-        )
-        xs_grid = grid_x.flatten()
-        ys_grid = grid_y.flatten()
-        mask_xs = np.clip(xs_grid // 16, 0, 13)
-        mask_ys = np.clip(ys_grid // 16, 0, 13)
-        local_mask = combined_mask[mask_ys, mask_xs] > 0.5
-        point_cloud_local = point_cloud[local_mask].tolist()
+        motion_field_subspace = motion_field * combined_mask_224
 
     return {
         "dino_attn": dino_attn,
         "clip_sim": clip_sim,
         "text_feat": text_feat,
-        "point_cloud": point_cloud,
-        "vggt_tracks": vggt_tracks,
+        "motion_field": motion_field,
         "pil_frame": pil_frame,
         "task_isolated_features": {
             "dino_subspace": dino_subspace,
-            "vggt_local": vggt_local,
-            "point_cloud_local": point_cloud_local,
+            "motion_field_subspace": motion_field_subspace,
             "sam_mask": sam_mask,
             "sam_mask_224": sam_mask_224,
             "combined_mask_224": combined_mask_224,
@@ -323,23 +205,14 @@ def extract_features_common(
     }
 
 
-def run_pointnext_model(point_cloud_np):
-    """
-    Run PointNeXt encoder on point cloud [NumPoints, >=3] to extract 384-dim feature token.
-    """
-    # Return a zero tensor immediately to maintain compatibility and eliminate 3D encoder overhead
-    return torch.zeros(384, device=device).cpu()
-
-
 def extract_single_view_stage3_obs_features(
-    frame_str,
-    history_frames,
-    text_prompt,
-    ui_annotations,
-    tactile,
-    proprioception,
-    point_clouds=None,
-    view_name="world_center",
+    frame_str: str,
+    history_frames: list[str],
+    text_prompt: str,
+    ui_annotations: dict[str, list],
+    tactile: list[float],
+    proprioception: list[list],
+    view_name: str = "world_center",
 ):
     """
     Core low-level function that processes features for a single RGB view, maps all modality
@@ -350,84 +223,46 @@ def extract_single_view_stage3_obs_features(
         history_frames,
         text_prompt,
         ui_annotations,
-        point_clouds=point_clouds,
         view_name=view_name,
     )
 
+    # Pad DINO to 384 dimensions
     dino_attn = features["dino_attn"]
-    vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32)
-    if len(vision_feat) < 384:
-        vision_feat = torch.cat([vision_feat, torch.zeros(384 - len(vision_feat))])
-
-    # 1. PointNeXt: Always use the full point cloud for state representation
-    pt_feat = run_pointnext_model(features["point_cloud"])
-
-    # --- DIAGNOSTIC FRAME CAPTURE BLOCK ---
-    # Automatically intercepts and extracts the frame if the feature space collapses into NaNs
-    if torch.isnan(pt_feat).any() or torch.isinf(pt_feat).any():
-        print(
-            f"🚨 [DIAGNOSTIC DETECTION] NaN/Inf footprint triggered in PointNeXt features for view: {view_name}!"
-        )
-        pil_img = features.get("pil_frame")
-        if pil_img is not None:
-            os.makedirs("debug_anomalies", exist_ok=True)
-            save_path = f"debug_anomalies/anomaly_{view_name}_{int(time.time())}.png"
-            pil_img.save(save_path)
-            print(
-                f"📸 Captured and saved offending visual context frame to: {save_path}"
-            )
-    # --------------------------------------
-
-    # 2. VGGT: Always use the full tracks for state representation
-    # Global VGGT
-    vggt_feat = torch.tensor(
-        np.array(features["vggt_tracks"]).flatten()[:768], dtype=torch.float32
+    vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32).to(
+        device
     )
-    if len(vggt_feat) < 768:
-        vggt_feat = torch.cat([vggt_feat, torch.zeros(768 - len(vggt_feat))])
+    vision_feat = pad_features(vision_feat, 384)
+    dino_subspace = torch.tensor(
+        features["task_isolated_features"]["dino_subspace"].flatten()[:384],
+        dtype=torch.float32,
+    ).to(device)
+    dino_subspace = pad_features(dino_subspace, 384)
+    features["task_isolated_features"]["dino_subspace"] = dino_subspace
 
-    # Local VGGT
-    vggt_local = features["task_isolated_features"]["vggt_local"]
-    if len(vggt_local) > 0:
-        vggt_local = torch.tensor(
-            np.array(vggt_local).flatten()[:768], dtype=torch.float32
-        )
-        vggt_local = torch.cat([vggt_local, torch.zeros(768 - len(vggt_local))])
-    else:
-        vggt_local = torch.zeros(768 - len(vggt_feat))
-    features["task_isolated_features"]["vggt_local"] = vggt_local
+    # Flatten Motion Field --> 224 x 224
+    vggt_feat = torch.tensor(
+        features["motion_field"].flatten(), dtype=torch.float32
+    ).to(device)
+    vggt_subspace = torch.tensor(
+        features["task_isolated_features"]["motion_field_subspace"].flatten(),
+        dtype=torch.float32,
+    )
+    features["task_isolated_features"]["vggt_subspace"] = vggt_subspace
 
-    tactile_grid = torch.tensor(tactile, dtype=torch.float32)
-    if tactile_grid.shape != (4, 4):
-        padded_tac = torch.zeros(4, 4)
-        h_tac = min(tactile_grid.shape[0], 4)
-        w_tac = min(tactile_grid.shape[1], 4)
-        padded_tac[:h_tac, :w_tac] = tactile_grid[:h_tac, :w_tac]
-        tactile_grid = padded_tac
+    # LEGACY: PointNeXt representation with zeros
+    pt_feat = torch.zeros(384, device=device).cpu()
 
-    proprio = torch.tensor(proprioception[:24], dtype=torch.float32)
-    if len(proprio) < 24:
-        proprio = torch.cat([proprio, torch.zeros(24 - len(proprio))])
-
-    text_feat_raw = features["text_feat"][:512]
-    if len(text_feat_raw) < 512:
-        text_feat_raw = torch.cat(
-            [text_feat_raw, torch.zeros(512 - len(text_feat_raw))]
-        )
+    # Pad Proprioception to 58 dimension
+    proprioception = pad_features(proprioception, 58)
 
     obs_dict = {
         "features": features,
-        "vision": vision_feat.unsqueeze(0).to(device),
-        "pointnext": pt_feat.unsqueeze(0).to(device),
-        "vggt": vggt_feat.unsqueeze(0).to(device),
-        "tactile": tactile_grid.unsqueeze(0).to(device),
-        "proprioception": proprio.unsqueeze(0).to(device),
-        "text": text_feat_raw.unsqueeze(0).unsqueeze(0).to(device),
-        "dino_attn": features["dino_attn"],
-        "clip_sim": features["clip_sim"],
-        "point_cloud": features["point_cloud"],
-        "vggt_tracks": features["vggt_tracks"],
-        "task_isolated_features": features["task_isolated_features"],
+        "vision": vision_feat.unsqueeze(1),  # [1, 384]
+        "pointnext": pt_feat.unsqueeze(1),  # [1, 384]
+        "vggt": vggt_feat.unsqueeze(1),  # [1, 224 x 224]
+        "tactile": tactile.flatten().unsqueeze(1),  # [1, 16]
+        "proprioception": proprioception.unsqueeze(1),  # [1, 58]
+        "text": features["text_feat"].unsqueeze(1),  # [1, 512]
     }
     return obs_dict
 
@@ -439,20 +274,19 @@ def extract_stage3_obs_features(payload):
         if hasattr(payload, "frames")
         else {"world_center": payload.frame}
     )
-    point_clouds = getattr(payload, "point_clouds", None)
     obs_dict = {}
 
     # Process each view and extract features
     for view_name, frame_str in frames_dict.items():
+        history_frames = [frames[view_name] for frames in history_frames]
         obs_dict[view_name] = extract_single_view_stage3_obs_features(
-            frame_str,
-            payload.history_frames,
-            payload.text_prompt,
-            payload.ui_annotations,
-            payload.tactile,
-            payload.proprioception,
-            point_clouds=point_clouds,
-            view_name=view_name,
+            frame_str,  # str
+            history_frames,  # list[str]
+            payload.text_prompt,  # str
+            payload.ui_annotations,  # dict[str, list]
+            payload.tactile,  # list[float]
+            payload.proprioception,  # list[list]
+            view_name=view_name,  # str
         )
 
     return obs_dict

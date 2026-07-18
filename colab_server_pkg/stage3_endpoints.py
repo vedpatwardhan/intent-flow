@@ -64,7 +64,7 @@ from trainers.stage3.trainer import GNNSkillLibrary
 
 
 class Stage3StepPayload(BaseModel):
-    frames: dict  # Multi-view frames: {camera_name: base64_image}
+    frames: dict[str, str]  # Multi-view frames: {camera_name: base64_image}
     history_frames: List[dict[str, str]]
     proprioception: List[float]
     tactile: List[List[float]]
@@ -90,7 +90,7 @@ class Stage3DistillPayload(BaseModel):
     reward: float
 
 
-def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
+def encode_obs_to_latent(obs_dict, state):
     """
     Passes observation features through the respective adapter blocks and the
     Multi-Stream Action Transformer (MSAT) to yield the multi-modal latent state.
@@ -104,51 +104,21 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
                     f"[{v.min().item():.6f}, {v.max().item():.6f}]"
                 )
 
-        if override_vision_token is not None:
-            vis_tok = override_vision_token
-        else:
-            vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
-            if torch.isnan(vis_tok).any():
-                print("⚠️ [NaN Debug] vis_tok contains NaN!")
-
-        txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"].squeeze(1))
-        if torch.isnan(txt_tok).any():
-            print("⚠️ [NaN Debug] txt_tok contains NaN!")
-
+        # Adapters
+        vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
+        txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
         pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
-        if torch.isnan(pt_tok).any():
-            print("⚠️ [NaN Debug] pt_tok contains NaN!")
-
         vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
-        if torch.isnan(vggt_tok).any():
-            print("⚠️ [NaN Debug] vggt_tok contains NaN!")
+        tactile_tok = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
+        proprio_tok = state.stage3_models["state_adapter"](obs_dict["proprioception"])
 
-        tactile_emb = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
-        if torch.isnan(tactile_emb).any():
-            print("⚠️ [NaN Debug] tactile_emb contains NaN!")
-
-        # Pad proprioception to 58 dimensions and project using state_adapter
-        proprio = obs_dict["proprioception"]
-        if proprio.size(-1) < 58:
-            proprio = torch.cat(
-                [
-                    proprio,
-                    torch.zeros(
-                        proprio.size(0), 58 - proprio.size(-1), device=proprio.device
-                    ),
-                ],
-                dim=-1,
-            )
-        proprio_tok = state.stage3_models["state_adapter"](proprio)
-        if torch.isnan(proprio_tok).any():
-            print("⚠️ [NaN Debug] proprio_tok contains NaN!")
-
+        # MSAT
         modality_dict = {
             "vision": vis_tok,
             "text": txt_tok,
             "pointnext": pt_tok,
             "vggt": vggt_tok,
-            "tactile": tactile_emb,
+            "tactile": tactile_tok,
             "proprioception": proprio_tok,
         }
         out = state.stage3_models["msat"](modality_dict)
@@ -159,18 +129,11 @@ def encode_obs_to_latent(obs_dict, state, override_vision_token=None):
 
 def get_combined_obs(obs_views, any_view):
     return {
-        "vision": torch.cat(
-            [obs_views[view]["vision"].unsqueeze(1) for view in obs_views],
-            dim=1,
-        ),
+        "vision": torch.cat([obs_views[view]["vision"] for view in obs_views], dim=1),
         "pointnext": torch.cat(
-            [obs_views[view]["pointnext"].unsqueeze(1) for view in obs_views],
-            dim=1,
+            [obs_views[view]["pointnext"] for view in obs_views], dim=1
         ),
-        "vggt": torch.cat(
-            [obs_views[view]["vggt"].unsqueeze(1) for view in obs_views],
-            dim=1,
-        ),
+        "vggt": torch.cat([obs_views[view]["vggt"] for view in obs_views], dim=1),
         "text": any_view["text"],
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],
@@ -840,15 +803,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
-        # perturb the observation images
-        # obs_dict = generate_perturbations(payload) # returns a list of obs_dicts
-
         # get all global and filtered features
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
                 obs_dict = extract_stage3_obs_features(payload)
 
                 # Construct goal states from crops/segments/arrows
+                # {view_name: [goal_img1, goal_img2, goal_img3, goal_img4]}
                 goal_images = construct_goal_states(obs_dict, payload.ui_annotations)
 
                 # Save debug visualization plots via dedicated helper function
@@ -865,16 +826,23 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             "utf-8"
                         )
 
-                        # Extract goal observation features using the low-level single-view function directly
+                        # Extract goal observation features using the low-level
+                        # single-view function directly
+                        history_frames = [
+                            frames[view_name] for frames in history_frames
+                        ]
                         goal_obs_dict = extract_single_view_stage3_obs_features(
                             goal_img_str,
-                            payload.history_frames,
+                            history_frames,
                             payload.text_prompt,
                             payload.ui_annotations,
                             payload.tactile,
                             payload.proprioception,
                             view_name=view_name,
                         )
+
+                        # Zero out the motion field for goal images
+                        goal_obs_dict["vggt"] = torch.zeros_like(goal_obs_dict["vggt"])
 
                         # Pass features through respective adapters and MSAT
                         goal_latent = encode_obs_to_latent(goal_obs_dict, state)
@@ -891,17 +859,18 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 f"{obs_dict[any_view_key]['vggt'].shape} "
                 f"{obs_dict[any_view_key]['text'].shape} "
                 f"{obs_dict[any_view_key]['tactile'].shape} "
-                f"{obs_dict[any_view_key]['proprioception'].shape} "
+                f"{obs_dict[any_view_key]['proprioception'].shape}"
             )
             combined_obs = get_combined_obs(obs_dict, any_view)
-
-            print(f"[Stage3 Step] combined_obs visual stream shapes:")
-            print(f"  - vision: {combined_obs['vision'].shape}")
-            print(f"  - pointnext: {combined_obs['pointnext'].shape}")
-            print(f"  - vggt: {combined_obs['vggt'].shape}")
-            print(f"  - text: {combined_obs['text'].shape}")
-            print(f"  - tactile: {combined_obs['tactile'].shape}")
-            print(f"  - proprioception: {combined_obs['proprioception'].shape}")
+            print(
+                f"[Stage3 Step] combined_obs visual stream shapes:"
+                f"{combined_obs['vision'].shape} "
+                f"{combined_obs['pointnext'].shape} "
+                f"{combined_obs['vggt'].shape} "
+                f"{combined_obs['text'].shape} "
+                f"{combined_obs['tactile'].shape} "
+                f"{combined_obs['proprioception'].shape}"
+            )
 
             s_t = encode_obs_to_latent(combined_obs, state)
             print(f"[Stage3 Step] s_t shape: {s_t.shape}")

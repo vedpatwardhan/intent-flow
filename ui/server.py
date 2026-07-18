@@ -31,13 +31,6 @@ class GR1SimulationServer(GR1MuJoCoBase):
     def __init__(self):
         super().__init__(restrict_ik=True)
 
-    def _render_needs_depth(self) -> bool:
-        return False
-
-    def get_point_cloud_numpy(self, cam_name: str, rgb_224: np.ndarray) -> list:
-        # Bypassed to eliminate depth rendering and point cloud calculation overhead
-        return []
-
     def _handle_ik_pickup_logic(self, phase=0, offset_cm=5):
         """Standard multi-phase IK solver for the red cube."""
         self.current_phase = phase + 1
@@ -158,7 +151,6 @@ last_colab_query_time = 0.0
 cached_dino_attn = None
 cached_clip_sim = None
 cached_sam_mask = None
-cached_point_cloud = []
 cached_vggt_tracks = []
 cached_task_isolated_features = None
 
@@ -241,7 +233,6 @@ async def run_stage3_training_loop(
 
             # Capture all 5 camera views for multi-view processing
             frames_all_views = {}
-            point_clouds_all_views = {}
             for cam_name in sim.cam_names:
                 sim.renderer.update_scene(sim.data, camera=cam_name)
                 rgb_cam = sim.renderer.render()
@@ -253,9 +244,6 @@ async def run_stage3_training_loop(
                     "data:image/jpeg;base64,"
                     + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
                 )
-                point_clouds_all_views[cam_name] = sim.get_point_cloud_numpy(
-                    cam_name, np.array(img_cam_224)
-                )
 
             if len(frame_history) < 2:
                 frame_history.append(frames_all_views)
@@ -263,7 +251,7 @@ async def run_stage3_training_loop(
                 frame_history.pop(0)
                 frame_history.append(frames_all_views)
 
-            proprio_list = sim.get_state_32()[:24].tolist()
+            proprio_list = sim.get_state_32().tolist()
             if any(np.isnan(val) for val in proprio_list):
                 print(
                     f"⚠️ [NaN Warning] MuJoCo joint proprioception contains NaN at step {env_step}! Simulator exploded."
@@ -278,7 +266,6 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
-                "point_clouds": point_clouds_all_views,
             }
 
             action_taken_ensemble = None
@@ -402,22 +389,12 @@ async def run_stage3_training_loop(
                     track_next_obs = {
                         "frames": frames_all_views_next,
                         "history_frames": list(frame_history),
-                        "proprioception": sim.get_state_32()[:24].tolist(),
+                        "proprioception": sim.get_state_32().tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
                         "ui_annotations": {},
                         "is_easy_task": False,
                     }
-
-                    if h == action_np.shape[1] - 1:
-                        point_clouds_next = {}
-                        for cam_name in sim.cam_names:
-                            img_cam_next = Image.fromarray(step_frames[cam_name])
-                            img_cam_next_224 = img_cam_next.resize((224, 224))
-                            point_clouds_next[cam_name] = sim.get_point_cloud_numpy(
-                                cam_name, np.array(img_cam_next_224)
-                            )
-                        track_next_obs["point_clouds"] = point_clouds_next
 
                     # Keep track 0's final step outcomes as the committed path for the environment
                     if track_idx == 0 and h == action_np.shape[1] - 1:
@@ -444,7 +421,6 @@ async def run_stage3_training_loop(
                         assigned_obs = copy.deepcopy(
                             perturbed_payloads[visual_variant_idx]
                         )
-                        assigned_obs["point_clouds"] = current_obs["point_clouds"]
 
                         transitions.append(
                             {
@@ -606,7 +582,7 @@ async def run_stage3_training_loop(
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
-    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_vggt_tracks, cached_task_isolated_features
     global ui_annotations
     global is_training_active
     await websocket.accept()
@@ -675,7 +651,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     cached_dino_attn = None
                     cached_clip_sim = None
                     cached_sam_mask = None
-                    cached_point_cloud = []
                     cached_vggt_tracks = []
                     cached_task_isolated_features = {}
                     print("Cleared active camera click selections.")
@@ -894,11 +869,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 ).decode("utf-8")
 
                 if base64_frame_224:
-                    # Generate point cloud for active_camera natively in sim server
-                    pc_active = sim.get_point_cloud_numpy(
-                        active_camera, np.array(img_224)
-                    )
-
                     frame_history.append(base64_frame_224)
                     colab_is_processing = True
                     needs_colab_processing = False
@@ -906,7 +876,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     async def run_colab_query(payload_data):
                         global colab_is_processing
-                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_point_cloud, cached_vggt_tracks, cached_task_isolated_features
+                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_vggt_tracks, cached_task_isolated_features
                         nonlocal cached_data_updated
                         try:
                             async with httpx.AsyncClient() as client:
@@ -920,7 +890,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                     cached_dino_attn = res_data.get("dino_attn")
                                     cached_clip_sim = res_data.get("clip_sim")
                                     cached_sam_mask = res_data.get("sam_mask")
-                                    cached_point_cloud = res_data.get("point_cloud")
                                     cached_vggt_tracks = res_data.get("vggt_tracks")
                                     cached_task_isolated_features = res_data.get(
                                         "task_isolated_features"
@@ -949,7 +918,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "text_modifier": text_modifier,
                         "ui_annotations": ui_annotations,
                         "history_frames": list(frame_history),
-                        "point_clouds": {active_camera: pc_active},
+                        "view_name": active_camera,
                     }
                     asyncio.create_task(run_colab_query(post_payload))
 
@@ -961,7 +930,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     ws_payload["dino_attn"] = cached_dino_attn
                     ws_payload["clip_sim"] = cached_clip_sim
                     ws_payload["sam_mask"] = cached_sam_mask
-                    ws_payload["point_cloud"] = cached_point_cloud
                     ws_payload["vggt_tracks"] = cached_vggt_tracks
                     ws_payload["task_isolated_features"] = cached_task_isolated_features
                     cached_data_updated = False
