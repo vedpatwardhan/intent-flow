@@ -364,12 +364,22 @@ def run_pointnext_model(point_cloud_np):
 
     # Center coordinates safely to stabilize MLPs
     print(
-        "[PointNeXt Log] Cloud Data Bounds Before Norm: "
+        "[PointNeXt Log] Cloud Data Bounds Before Centering: "
         f"[{np.min(cloud_data)} - {np.max(cloud_data)}]"
     )
     cloud_data = cloud_data - np.mean(cloud_data, axis=0, keepdims=True)
     print(
-        "[PointNeXt Log] Cloud Data Bounds After Norm: "
+        "[PointNeXt Log] Cloud Data Bounds After Centering: "
+        f"[{np.min(cloud_data)} - {np.max(cloud_data)}]"
+    )
+
+    # Strict Unit Sphere Range Normalization
+    # Calculate the absolute maximum distance from the center across all axes
+    spatial_amplitude = np.max(np.abs(cloud_data))
+    if spatial_amplitude > 1e-6:
+        cloud_data = cloud_data / spatial_amplitude
+    print(
+        "[PointNeXt Log] Cloud Data Bounds After Normalization: "
         f"[{np.min(cloud_data)} - {np.max(cloud_data)}]"
     )
 
