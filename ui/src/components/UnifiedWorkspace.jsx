@@ -21,9 +21,9 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
 
   const tools = [
     { id: 'select', label: 'Select', icon: MousePointer, color: 'var(--accent-primary, #6366f1)' },
-    { id: 'segment', label: 'SAM Segment', icon: Crosshair, color: 'var(--accent-purple)' },
+    { id: 'segment', label: 'Segment', icon: Crosshair, color: 'var(--accent-purple)' },
     { id: 'vector', label: 'Motion Vector', icon: Navigation, color: 'var(--accent-cyan)' },
-    { id: 'crop', label: 'Target Crop', icon: Target, color: 'var(--accent-green)' }
+    { id: 'crop', label: 'Crop', icon: Target, color: 'var(--accent-green)' }
   ];
 
   const activeFrame = frames?.[activeCam];
