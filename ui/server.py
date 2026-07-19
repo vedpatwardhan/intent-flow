@@ -136,7 +136,7 @@ colab_url = colab_url or os.environ.get("COLAB_URL")
 click_x = None
 click_y = None
 click_type = None
-text_prompt = "cube block"
+text_prompt = "red cube"
 text_modifier = None
 frame_history = deque(maxlen=5)
 frame_all_views = {}
@@ -238,7 +238,7 @@ async def run_stage3_training_loop(
 
             current_obs = {
                 "frames": frame_all_views,
-                "history_frames": list(frame_history),
+                "history_frames": frame_history,
                 "proprioception": proprio_list,
                 "tactile": tactile_grid,
                 "text_prompt": text_prompt or "grasp cube",
@@ -246,6 +246,10 @@ async def run_stage3_training_loop(
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
             }
+            print(
+                f"Frame History: {len(frame_history)}, "
+                f"Views: {list(frame_all_views.keys())}"
+            )
 
             action_taken_ensemble = None
             energy_ensemble = None
