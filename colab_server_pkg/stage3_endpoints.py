@@ -843,14 +843,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             payload.proprioception,
                             view_name=view_name,
                         )
-                        goal_key = next(iter(goal_obs_dict.keys()))
                         print(
-                            f"Shapes: {goal_obs_dict[goal_key]['vision'].shape} "
-                            f"{goal_obs_dict[goal_key]['pointnext'].shape} "
-                            f"{goal_obs_dict[goal_key]['vggt'].shape} "
-                            f"{goal_obs_dict[goal_key]['text'].shape} "
-                            f"{goal_obs_dict[goal_key]['tactile'].shape} "
-                            f"{goal_obs_dict[goal_key]['proprioception'].shape}"
+                            f"Shapes: {goal_obs_dict['vision'].shape} "
+                            f"{goal_obs_dict['pointnext'].shape} "
+                            f"{goal_obs_dict['vggt'].shape} "
+                            f"{goal_obs_dict['text'].shape} "
+                            f"{goal_obs_dict['tactile'].shape} "
+                            f"{goal_obs_dict['proprioception'].shape}"
                         )
 
                         # Zero out the motion field for goal images
