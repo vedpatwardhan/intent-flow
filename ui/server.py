@@ -945,7 +945,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if step_count == 1:
                 # Process the secondary initialization frame manually for the startup frame history
                 act_init = np.full(32, np.nan, dtype=np.float32)
-                act_init[17] = sim.last_target_q[17] + 0.2
+                act_init[17] = sim.last_target_q[17] + 0.3
                 sim.process_target_32(act_init)
                 is_moving = True
                 moving_check_steps = 0
