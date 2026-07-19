@@ -84,27 +84,21 @@ class BadWorldAttacker:
 
             # --- STEP 3 & 4: CONVERT RAW IMAGE DISTORTIONS INTO GROUNDED LATENTS ---
             # 4. Extract visual down-stream tokens (DINO, CLIP, SAM, VGGT) natively from the new visual feeds
-            obs_features = extract_obs_features_fn(temp_payload)
+            obs_views = extract_obs_features_fn(temp_payload)
 
             # Combine multi-view observations by concatenating across views
-            any_view = next(iter(obs_features.values()))
+            any_view = next(iter(obs_views.values()))
             combined_obs = {
                 "vision": torch.cat(
-                    [
-                        obs_features[view]["vision"].unsqueeze(1)
-                        for view in obs_features
-                    ],
+                    [obs_views[view]["vision"].unsqueeze(0) for view in obs_views],
                     dim=1,
                 ),
                 "pointnext": torch.cat(
-                    [
-                        obs_features[view]["pointnext"].unsqueeze(1)
-                        for view in obs_features
-                    ],
+                    [obs_views[view]["pointnext"].unsqueeze(0) for view in obs_views],
                     dim=1,
                 ),
                 "vggt": torch.cat(
-                    [obs_features[view]["vggt"].unsqueeze(1) for view in obs_features],
+                    [obs_views[view]["vggt"].unsqueeze(0) for view in obs_views],
                     dim=1,
                 ),
                 "text": any_view["text"],
@@ -114,6 +108,7 @@ class BadWorldAttacker:
 
             # 5. Map features through adapters and MSAT to yield physically safe multi-modal states
             with torch.no_grad():
+                # [1, latent_dim]
                 s_t_variant = encode_obs_fn(combined_obs, state).detach()
                 perturbed_latent_list = (
                     s_t_variant
@@ -130,7 +125,8 @@ class BadWorldAttacker:
             ensemble_size * num_trajectories_per_obs
         )  # 16 unique lookahead tracks
 
-        # Replicate the 4 visual latents 4 times to build the full 16-batch combinatorial grid context [16, 512]
+        # Replicate the 4 visual latents 4 times to build the
+        # full 16-batch combinatorial grid context [16, 512]
         s_t_ensemble = torch.repeat_interleave(
             s_t_base_variants, num_trajectories_per_obs, dim=0
         )

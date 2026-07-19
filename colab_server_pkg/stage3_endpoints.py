@@ -894,11 +894,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Query the goal latents using the current state s_t via MultiheadAttention
             # [1, num_goals, latent_dim]
-            stacked_goals = torch.cat(goal_latents, dim=0).unsqueeze(0)
+            stacked_goals = torch.stack(goal_latents, dim=1)
             print(f"[Stage3 Step] stacked_goals shape: {stacked_goals.shape}")
 
             s_target, _ = state.stage3_models["goal_attention"](
-                s_t, stacked_goals, stacked_goals
+                s_t.unsqueeze(0), stacked_goals, stacked_goals
             )
             s_target = state.stage3_models["latent_adapter"](s_target)
             print(f"[Stage3 Step] s_target shape: {s_target.shape}")
