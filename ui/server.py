@@ -294,13 +294,25 @@ async def run_stage3_training_loop(
 
                 # Initialize frame recording buffer
                 track_frames = []
+                recording_history_frames = []
 
                 # Capture starting frame (t=0)
                 start_frames = {}
+                frames_all_views_start = {}
                 for cam_name in sim.cam_names:
                     sim.renderer.update_scene(sim.data, camera=cam_name)
-                    start_frames[cam_name] = sim.renderer.render().copy()
+                    rgb_cam_start = sim.renderer.render().copy()
+                    start_frames[cam_name] = rgb_cam_start.copy()
+                    img_cam_start = Image.fromarray(rgb_cam_start)
+                    img_cam_start_224 = img_cam_start.resize((224, 224))
+                    buf_cam_start = io.BytesIO()
+                    img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
+                    frames_all_views_start[cam_name] = (
+                        "data:image/jpeg;base64,"
+                        + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
+                    )
                 track_frames.append(start_frames)
+                recording_history_frames.append(frames_all_views_start)
 
                 track_actions_flat = []
 
@@ -352,6 +364,7 @@ async def run_stage3_training_loop(
                             + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
                         )
                     track_frames.append(step_frames)
+                    recording_history_frames.append(frames_all_views_next)
 
                     index_pos = sim.data.xpos[index_id]
                     thumb_pos = sim.data.xpos[thumb_id]
@@ -370,7 +383,7 @@ async def run_stage3_training_loop(
 
                     track_next_obs = {
                         "frames": frames_all_views_next,
-                        "history_frames": list(track_frames),
+                        "history_frames": recording_history_frames,
                         "proprioception": sim.get_state_32().tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",

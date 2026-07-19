@@ -945,6 +945,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Capture the true 16-batch size returned directly out of your attacker pass
         ensemble_size = a_candidates.shape[0]  # 16
+        print(f"[DEBUG] perturbed_payloads length: {len(perturbed_payloads)}")
+        print(f"[DEBUG] s_t_ensemble shape: {s_t_ensemble.shape}")
+        print(f"[DEBUG] action_candidates shape: {a_candidates.shape}")
 
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.01
