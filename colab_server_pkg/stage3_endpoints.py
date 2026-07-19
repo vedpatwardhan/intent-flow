@@ -491,7 +491,10 @@ def ensure_stage3_models():
                     m_state_dict[k[len(prefix) :]] = v
             if len(m_state_dict) > 0 and module_name in state.stage3_models:
                 state.stage3_models[module_name].load_state_dict(
-                    m_state_dict, strict=(module_name != "flow_matcher")
+                    m_state_dict,
+                    strict=(
+                        module_name != "flow_matcher" and module_name != "vggt_adapter"
+                    ),
                 )
     else:
         print(
