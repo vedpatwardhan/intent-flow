@@ -122,20 +122,31 @@ class VGGTAdapter(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: Raw global or local heatmap tensor of shape [Batch, 1, 224, 224]
+            x: Raw global or local heatmap tensor of shape [Batch, Channels/Views, 224, 224] or [Batch, 224, 224]
         """
-        # Ensure the tensor has the correct channel/spatial dimensions for pooling
-        if x.dim() == 3:  # If passed as [Batch, 224, 224]
+        # Handle multi-view input [Batch, Views, 224, 224] where Views > 1
+        is_multi_view = x.dim() == 4 and x.shape[1] > 1
+
+        if is_multi_view:
+            B, V, H, W = x.shape
+            x = x.view(B * V, 1, H, W)
+        elif x.dim() == 3:  # If passed as [Batch, 224, 224]
             x = x.unsqueeze(1)
 
-        # Step 1: Downsample from [Batch, 1, 224, 224] -> [Batch, 1, 16, 16]
+        # Step 1: Downsample to 16x16 grid
         x = self.spatial_pool(x)
 
-        # Step 2: Flatten spatial topology -> [Batch, 256]
+        # Step 2: Flatten spatial topology -> [Batch (* Views), 256]
         x = x.flatten(1)
 
-        # Step 3: Project up to internal token dimensions -> [Batch, 768]
+        # Step 3: Project up to internal token dimensions -> [Batch (* Views), 768]
         x = self.token_expansion(x)
 
-        # Step 4: Adapt to the shared embedding space -> [Batch, 512]
-        return self.net(x)
+        # Step 4: Adapt to the shared embedding space -> [Batch (* Views), 512]
+        x = self.net(x)
+
+        if is_multi_view:
+            # Restore batch and view dimensions
+            x = x.view(B, V, -1)
+
+        return x

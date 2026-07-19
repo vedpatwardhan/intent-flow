@@ -129,11 +129,15 @@ def encode_obs_to_latent(obs_dict, state):
 
 def get_combined_obs(obs_views, any_view):
     return {
-        "vision": torch.cat([obs_views[view]["vision"] for view in obs_views], dim=0),
-        "pointnext": torch.cat(
-            [obs_views[view]["pointnext"] for view in obs_views], dim=0
+        "vision": torch.cat(
+            [obs_views[view]["vision"].unsqueeze(0) for view in obs_views], dim=1
         ),
-        "vggt": torch.cat([obs_views[view]["vggt"] for view in obs_views], dim=0),
+        "pointnext": torch.cat(
+            [obs_views[view]["pointnext"].unsqueeze(0) for view in obs_views], dim=1
+        ),
+        "vggt": torch.cat(
+            [obs_views[view]["vggt"].unsqueeze(0) for view in obs_views], dim=1
+        ),
         "text": any_view["text"],
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],
@@ -875,7 +879,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             )
             combined_obs = get_combined_obs(obs_dict, any_view)
             print(
-                f"[Stage3 Step] combined_obs visual stream shapes:"
+                f"[Stage3 Step] combined_obs visual stream shapes: "
                 f"{combined_obs['vision'].shape} "
                 f"{combined_obs['pointnext'].shape} "
                 f"{combined_obs['vggt'].shape} "
@@ -884,20 +888,18 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 f"{combined_obs['proprioception'].shape}"
             )
 
-            # Get state latents
+            # Get state latents [1, latent_dim]
             s_t = encode_obs_to_latent(combined_obs, state)
             print(f"[Stage3 Step] s_t shape: {s_t.shape}")
 
             # Query the goal latents using the current state s_t via MultiheadAttention
             # [1, num_goals, latent_dim]
-            stacked_goals = torch.stack(goal_latents, dim=1)
+            stacked_goals = torch.cat(goal_latents, dim=0).unsqueeze(0)
             print(f"[Stage3 Step] stacked_goals shape: {stacked_goals.shape}")
 
-            query = s_t.unsqueeze(1)  # [1, 1, latent_dim]
-            s_target_attn, _ = state.stage3_models["goal_attention"](
-                query, stacked_goals, stacked_goals
+            s_target, _ = state.stage3_models["goal_attention"](
+                s_t, stacked_goals, stacked_goals
             )
-            s_target = s_target_attn.squeeze(1)
             s_target = state.stage3_models["latent_adapter"](s_target)
             print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
