@@ -900,7 +900,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             s_target, _ = state.stage3_models["goal_attention"](
                 s_t.unsqueeze(0), stacked_goals, stacked_goals
             )
-            s_target = state.stage3_models["latent_adapter"](s_target)
+            s_target = state.stage3_models["latent_adapter"](s_target.squeeze(0))
             print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)

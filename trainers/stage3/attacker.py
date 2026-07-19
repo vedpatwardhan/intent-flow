@@ -121,9 +121,8 @@ class BadWorldAttacker:
 
         # --- STEP 5 & 6: EXPLODE GRID TO 16 AND SAMPLE TRAJECTORIES DIRECTLY HERE ---
         num_trajectories_per_obs = 4
-        total_ensemble_size = (
-            ensemble_size * num_trajectories_per_obs
-        )  # 16 unique lookahead tracks
+        # 16 unique lookahead tracks
+        total_ensemble_size = ensemble_size * num_trajectories_per_obs
 
         # Replicate the 4 visual latents 4 times to build the
         # full 16-batch combinatorial grid context [16, 512]
