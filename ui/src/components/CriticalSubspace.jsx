@@ -24,8 +24,8 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const width = 240;
-    const height = 240;
+    const width = 480;
+    const height = 480;
 
     const resolvedColor = color.startsWith('var(')
       ? getCSSVariableValue(color.slice(4, -1))
@@ -303,8 +303,8 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       }}>
         <canvas
           ref={canvasRef}
-          width={240}
-          height={240}
+          width={480}
+          height={480}
           style={{
             position: 'absolute',
             inset: 0,
