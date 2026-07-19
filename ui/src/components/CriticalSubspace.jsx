@@ -287,16 +287,16 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
       padding: '8px',
       display: 'flex',
       flexDirection: 'column',
-      gap: '6px'
+      gap: '6px',
+      height: '300px'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color, fontWeight: 600 }}>
         <Icon size={12} />
         <span>{title}</span>
       </div>
       <div style={{
+        flex: 1,
         position: 'relative',
-        width: '100%',
-        aspectRatio: '1',
         background: '#000',
         borderRadius: '4px',
         overflow: 'hidden'
@@ -305,7 +305,13 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           ref={canvasRef}
           width={240}
           height={240}
-          style={{ width: '90%', height: '90%' }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain'
+          }}
         />
       </div>
     </div>
@@ -318,7 +324,7 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
       borderColor: 'var(--accent-green)',
       display: 'flex',
       flexDirection: 'column',
-      height: '100%',
+      height: 'fit-content',
       gap: '12px',
       paddingRight: '16px',
     }}>
