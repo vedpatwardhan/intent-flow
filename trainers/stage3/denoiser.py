@@ -28,20 +28,27 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         """
         Calculates CFM loss using independent timeline timesteps t_i for each joint
         with the official ComboStoc blending scheme to preserve sync coherence.
+            x_1 - [ensemble_size, horizon, action_dim]
+            s_t - [ensemble_size, latent_dim]
+            s_target - [ensemble_size, latent_dim]
         """
         batch_size = x_1.size(0)
+        horizon = x_1.size(1)
         x_0 = torch.randn_like(x_1)
 
         # 1. Sample unsynced independent timelines
-        t_unsync = torch.rand(batch_size, self.action_dim, device=x_1.device)
+        # [ensemble_size, horizon, action_dim]
+        t_unsync = torch.rand(batch_size, horizon, self.action_dim, device=x_1.device)
 
         # 2. Sample synced uniform timeline
-        t_sync = torch.rand(batch_size, 1, device=x_1.device).expand(
-            -1, self.action_dim
+        # [ensemble_size, horizon, action_dim]
+        t_sync = torch.rand(batch_size, horizon, 1, device=x_1.device).expand(
+            -1, -1, self.action_dim
         )
 
         # 3. Blend them using the ComboStoc blend scheme (blends uniform and unsynced)
-        progress = torch.rand(batch_size, 1, device=x_1.device)
+        # [ensemble_size, 1, 1]
+        progress = torch.rand(batch_size, 1, 1, device=x_1.device)
         t = t_sync * (1.0 - progress) + t_unsync * progress
 
         # Interpolate flow path along independent timesteps
