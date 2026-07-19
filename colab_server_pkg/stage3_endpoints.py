@@ -129,11 +129,11 @@ def encode_obs_to_latent(obs_dict, state):
 
 def get_combined_obs(obs_views, any_view):
     return {
-        "vision": torch.cat([obs_views[view]["vision"] for view in obs_views], dim=1),
+        "vision": torch.cat([obs_views[view]["vision"] for view in obs_views], dim=0),
         "pointnext": torch.cat(
-            [obs_views[view]["pointnext"] for view in obs_views], dim=1
+            [obs_views[view]["pointnext"] for view in obs_views], dim=0
         ),
-        "vggt": torch.cat([obs_views[view]["vggt"] for view in obs_views], dim=1),
+        "vggt": torch.cat([obs_views[view]["vggt"] for view in obs_views], dim=0),
         "text": any_view["text"],
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],

@@ -241,12 +241,10 @@ def extract_single_view_stage3_obs_features(
     dino_subspace = pad_features(dino_subspace, 384)
     features["task_isolated_features"]["dino_subspace"] = dino_subspace
 
-    # Flatten Motion Field --> 224 x 224
-    vggt_feat = torch.tensor(
-        features["motion_field"].flatten(), dtype=torch.float32
-    ).to(device)
+    # Motion Field --> 224, 224
+    vggt_feat = torch.tensor(features["motion_field"], dtype=torch.float32).to(device)
     vggt_subspace = torch.tensor(
-        features["task_isolated_features"]["motion_field_subspace"].flatten(),
+        features["task_isolated_features"]["motion_field_subspace"],
         dtype=torch.float32,
     ).to(device)
     features["task_isolated_features"]["vggt_subspace"] = vggt_subspace
@@ -261,7 +259,7 @@ def extract_single_view_stage3_obs_features(
         "features": features,
         "vision": vision_feat.unsqueeze(0),  # [1, 384]
         "pointnext": pt_feat.unsqueeze(0),  # [1, 384]
-        "vggt": vggt_feat.unsqueeze(0),  # [1, 224 * 224]
+        "vggt": vggt_feat.unsqueeze(0),  # [1, 224, 224]
         "tactile": torch.tensor(tactile).to(device).flatten().unsqueeze(0),  # [1, 16]
         "proprioception": proprioception.unsqueeze(0),  # [1, 58]
         "text": features["text_feat"].unsqueeze(0),  # [1, 512]
