@@ -278,7 +278,7 @@ def extract_stage3_obs_features(payload):
 
     # Process each view and extract features
     for view_name, frame_str in frames_dict.items():
-        history_frames = [frames[view_name] for frames in history_frames]
+        history_frames = [frames[view_name] for frames in payload.history_frames]
         obs_dict[view_name] = extract_single_view_stage3_obs_features(
             frame_str,  # str
             history_frames,  # list[str]

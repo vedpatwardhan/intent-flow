@@ -16,8 +16,6 @@ import copy
 # Add parent directory (latent-flow root) to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from gr1_config import COMPACT_WIRE_JOINTS
-from gr1_protocol import StandardScaler
 from simulation_base import GR1MuJoCoBase
 import mujoco
 
@@ -141,6 +139,7 @@ click_type = None
 text_prompt = "cube block"
 text_modifier = None
 frame_history = deque(maxlen=5)
+frame_all_views = {}
 ui_annotations = {}
 
 colab_is_processing = False
@@ -231,26 +230,6 @@ async def run_stage3_training_loop(
             tactile_grid[0][0] = touch_index
             tactile_grid[1][1] = touch_thumb
 
-            # Capture all 5 camera views for multi-view processing
-            frames_all_views = {}
-            for cam_name in sim.cam_names:
-                sim.renderer.update_scene(sim.data, camera=cam_name)
-                rgb_cam = sim.renderer.render()
-                img_cam = Image.fromarray(rgb_cam)
-                img_cam_224 = img_cam.resize((224, 224))
-                buf_cam = io.BytesIO()
-                img_cam_224.save(buf_cam, format="JPEG", quality=75)
-                frames_all_views[cam_name] = (
-                    "data:image/jpeg;base64,"
-                    + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
-                )
-
-            if len(frame_history) < 2:
-                frame_history.append(frames_all_views)
-            else:
-                frame_history.pop(0)
-                frame_history.append(frames_all_views)
-
             proprio_list = sim.get_state_32().tolist()
             if any(np.isnan(val) for val in proprio_list):
                 print(
@@ -258,7 +237,7 @@ async def run_stage3_training_loop(
                 )
 
             current_obs = {
-                "frames": frames_all_views,
+                "frames": frame_all_views,
                 "history_frames": list(frame_history),
                 "proprioception": proprio_list,
                 "tactile": tactile_grid,
@@ -388,7 +367,7 @@ async def run_stage3_training_loop(
 
                     track_next_obs = {
                         "frames": frames_all_views_next,
-                        "history_frames": list(frame_history),
+                        "history_frames": list(track_frames),
                         "proprioception": sim.get_state_32().tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
@@ -855,78 +834,81 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Retrieve the active camera's rendered image and resize to 224x224 for Colab processing
                 needs_colab_processing = False
                 sim.renderer.update_scene(sim.data, camera=active_camera)
-                rgb_active = sim.renderer.render()
-                if attack_active:
-                    rgb_active = rgb_active.copy()
-                    rgb_active[:, :, 0] = np.clip(rgb_active[:, :, 0] + 50, 0, 255)
-                img_active = Image.fromarray(rgb_active)
-                img_224 = img_active.resize((224, 224))
-                buf_224 = io.BytesIO()
-                img_224.save(buf_224, format="JPEG", quality=75)
-                base64_frame_224 = "data:image/jpeg;base64," + base64.b64encode(
-                    buf_224.getvalue()
-                ).decode("utf-8")
 
-                if base64_frame_224:
-                    colab_is_processing = True
-                    last_colab_query_time = current_time
+                # Render frames from all cameras
+                for cam_name in sim.cam_names:
+                    sim.renderer.update_scene(sim.data, camera=cam_name)
+                    rgb_cam = sim.renderer.render()
+                    img_cam = Image.fromarray(rgb_cam)
+                    img_cam_224 = img_cam.resize((224, 224))
+                    buf_cam = io.BytesIO()
+                    img_cam_224.save(buf_cam, format="JPEG", quality=75)
+                    frame_all_views[cam_name] = (
+                        "data:image/jpeg;base64,"
+                        + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
+                    )
 
-                    # append the first frame or any frame with actual movement
-                    if is_moving or step_count == 0:
-                        print("Appending Frame")
-                        frame_history.append(base64_frame_224)
-                        is_moving = False
+                colab_is_processing = True
+                last_colab_query_time = current_time
 
-                    async def run_colab_query(payload_data):
-                        global colab_is_processing
-                        global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
-                        nonlocal cached_data_updated
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                r = await client.post(
-                                    f"{colab_url}/process",
-                                    json=payload_data,
-                                    timeout=10.0,
+                # Append the first frame or any frame with actual movement
+                if is_moving or step_count == 0:
+                    print("Appending Frame")
+                    frame_history.append(frame_all_views.copy())
+                    is_moving = False
+
+                async def run_colab_query(payload_data):
+                    global colab_is_processing
+                    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
+                    nonlocal cached_data_updated
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            r = await client.post(
+                                f"{colab_url}/process",
+                                json=payload_data,
+                                timeout=10.0,
+                            )
+                            if r.status_code == 200:
+                                res_data = r.json()
+                                cached_dino_attn = res_data.get("dino_attn")
+                                cached_clip_sim = res_data.get("clip_sim")
+                                cached_sam_mask = res_data.get("sam_mask")
+                                cached_motion_field = res_data.get("motion_field")
+                                print(
+                                    f"Motion Field: {np.array(cached_motion_field).shape}"
                                 )
-                                if r.status_code == 200:
-                                    res_data = r.json()
-                                    cached_dino_attn = res_data.get("dino_attn")
-                                    cached_clip_sim = res_data.get("clip_sim")
-                                    cached_sam_mask = res_data.get("sam_mask")
-                                    cached_motion_field = res_data.get("motion_field")
+                                cached_task_isolated_features = res_data.get(
+                                    "task_isolated_features"
+                                )
+                                if cached_task_isolated_features:
                                     print(
-                                        f"Motion Field: {np.array(cached_motion_field).shape}"
+                                        f"[server.py] Received task_isolated_features from Colab: {list(cached_task_isolated_features.keys())}"
                                     )
-                                    cached_task_isolated_features = res_data.get(
-                                        "task_isolated_features"
+                                else:
+                                    print(
+                                        "[server.py] No task_isolated_features in Colab response"
                                     )
-                                    if cached_task_isolated_features:
-                                        print(
-                                            f"[server.py] Received task_isolated_features from Colab: {list(cached_task_isolated_features.keys())}"
-                                        )
-                                    else:
-                                        print(
-                                            "[server.py] No task_isolated_features in Colab response"
-                                        )
-                                    cached_data_updated = True
-                        except Exception as e:
-                            print("Colab communication error:")
-                            traceback.print_exc()
-                        finally:
-                            colab_is_processing = False
+                                cached_data_updated = True
+                    except Exception as e:
+                        print("Colab communication error:")
+                        traceback.print_exc()
+                    finally:
+                        colab_is_processing = False
 
-                    post_payload = {
-                        "frame": base64_frame_224,
-                        "click_x": click_x,
-                        "click_y": click_y,
-                        "click_type": click_type,
-                        "text_prompt": text_prompt,
-                        "text_modifier": text_modifier,
-                        "ui_annotations": ui_annotations,
-                        "history_frames": list(frame_history),
-                        "view_name": active_camera,
-                    }
-                    asyncio.create_task(run_colab_query(post_payload))
+                post_payload = {
+                    "frame": frame_all_views[active_camera],
+                    "click_x": click_x,
+                    "click_y": click_y,
+                    "click_type": click_type,
+                    "text_prompt": text_prompt,
+                    "text_modifier": text_modifier,
+                    "ui_annotations": ui_annotations,
+                    "history_frames": [
+                        frames[active_camera] for frames in frame_history
+                    ],
+                    "view_name": active_camera,
+                }
+                asyncio.create_task(run_colab_query(post_payload))
 
             if is_moving or cached_data_updated or (step_count % 20 == 0):
                 should_send = True

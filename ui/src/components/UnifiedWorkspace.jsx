@@ -426,7 +426,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
                 onClick={deleteSelected}
                 className="btn-phase btn-phase-action"
                 style={{ padding: '6px 10px', color: '#ef4444', borderColor: '#ef4444', display: 'flex', alignItems: 'center', gap: '4px' }}
-                title="Delete Selected"
+                title="Delete"
               >
                 <Trash2 size={14} />
               </button>
