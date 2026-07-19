@@ -182,14 +182,14 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_episodes = 5
+    num_epochs = 5
     max_steps = 20
 
     print(
-        f"[Training] Starting Stage 3 training sandbox: {num_episodes} episodes, {max_steps} steps."
+        f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."
     )
 
-    for ep_idx in range(num_episodes):
+    for ep_idx in range(num_epochs):
         if ep_idx > 0:
             sim.reset_env(lock_posture=True)
 
@@ -198,10 +198,10 @@ async def run_stage3_training_loop(
             json.dumps(
                 {
                     "type": "training_progress",
-                    "status": f"Episode {ep_idx + 1}/{num_episodes} in progress...",
-                    "progress": float(ep_idx) / num_episodes,
-                    "episode": ep_idx + 1,
-                    "total_episodes": num_episodes,
+                    "status": f"Epoch {ep_idx + 1}/{num_epochs} in progress...",
+                    "progress": float(ep_idx) / num_epochs,
+                    "epoch": ep_idx + 1,
+                    "total_epochs": num_epochs,
                 }
             )
         )
@@ -565,8 +565,8 @@ async def run_stage3_training_loop(
                 "type": "training_progress",
                 "status": "Training Completed Successfully!",
                 "progress": 1.0,
-                "episode": num_episodes,
-                "total_episodes": num_episodes,
+                "epoch": num_epochs,
+                "total_epochs": num_epochs,
             }
         )
     )
@@ -882,7 +882,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             r = await client.post(
                                 f"{colab_url}/process",
                                 json=payload_data,
-                                timeout=10.0,
+                                timeout=100.0,
                             )
                             if r.status_code == 200:
                                 res_data = r.json()
