@@ -1305,10 +1305,12 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             )
 
             # Request unreduced batch loss elements using our new flag
+            embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
             cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
-                x_1=batch_action_3d,        # [ensemble_size, horizon, action_dim]
-                s_t=batch_s_t,              # [ensemble_size, latent_dim]
-                s_target=s_target_batch,    # [ensemble_size, latent_dim]
+                x_1=batch_action_3d,  # [ensemble_size, horizon, action_dim]
+                s_t=batch_s_t,  # [ensemble_size, latent_dim]
+                s_target=s_target_batch,  # [ensemble_size, latent_dim]
+                embodiment_id=embodiment_id,
                 reduction="none",
             )
 
