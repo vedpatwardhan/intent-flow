@@ -832,7 +832,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         # Extract goal observation features using the low-level
                         # single-view function directly
                         history_frames = [
-                            frames[view_name] for frames in history_frames
+                            frames[view_name] for frames in payload.history_frames
                         ]
                         goal_obs_dict = extract_single_view_stage3_obs_features(
                             goal_img_str,

@@ -143,7 +143,9 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
 
 def pad_features(feature, target_dim):
     if len(feature) < target_dim:
-        feature = torch.cat([feature, torch.zeros(target_dim - len(feature))])
+        feature = torch.cat(
+            [feature, torch.zeros(target_dim - len(feature), device=feature.device)]
+        )
     return feature
 
 
@@ -250,17 +252,17 @@ def extract_single_view_stage3_obs_features(
     features["task_isolated_features"]["vggt_subspace"] = vggt_subspace
 
     # LEGACY: PointNeXt representation with zeros
-    pt_feat = torch.zeros(384, device=device).cpu()
+    pt_feat = torch.zeros(384, device=device)
 
     # Pad Proprioception to 58 dimension
-    proprioception = pad_features(proprioception, 58)
+    proprioception = pad_features(torch.tensor(proprioception).to(device), 58)
 
     obs_dict = {
         "features": features,
         "vision": vision_feat.unsqueeze(1),  # [1, 384]
         "pointnext": pt_feat.unsqueeze(1),  # [1, 384]
         "vggt": vggt_feat.unsqueeze(1),  # [1, 224 * 224]
-        "tactile": tactile.flatten().unsqueeze(1),  # [1, 16]
+        "tactile": torch.tensor(tactile).to(device).flatten().unsqueeze(1),  # [1, 16]
         "proprioception": proprioception.unsqueeze(1),  # [1, 58]
         "text": features["text_feat"].unsqueeze(1),  # [1, 512]
     }
