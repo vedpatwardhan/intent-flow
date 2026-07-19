@@ -259,12 +259,12 @@ def extract_single_view_stage3_obs_features(
 
     obs_dict = {
         "features": features,
-        "vision": vision_feat.unsqueeze(1),  # [1, 384]
-        "pointnext": pt_feat.unsqueeze(1),  # [1, 384]
-        "vggt": vggt_feat.unsqueeze(1),  # [1, 224 * 224]
-        "tactile": torch.tensor(tactile).to(device).flatten().unsqueeze(1),  # [1, 16]
-        "proprioception": proprioception.unsqueeze(1),  # [1, 58]
-        "text": features["text_feat"].unsqueeze(1),  # [1, 512]
+        "vision": vision_feat.unsqueeze(0),  # [1, 384]
+        "pointnext": pt_feat.unsqueeze(0),  # [1, 384]
+        "vggt": vggt_feat.unsqueeze(0),  # [1, 224 * 224]
+        "tactile": torch.tensor(tactile).to(device).flatten().unsqueeze(0),  # [1, 16]
+        "proprioception": proprioception.unsqueeze(0),  # [1, 58]
+        "text": features["text_feat"].unsqueeze(0),  # [1, 512]
     }
     return obs_dict
 
