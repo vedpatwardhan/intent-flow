@@ -759,7 +759,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         if error > max_error:
                             max_error = error
                 if max_error < 0.02 or moving_check_steps > 30:
-                    is_moving = False
                     needs_colab_processing = True
 
             if is_training_active and last_sent_payload is not None:
@@ -869,10 +868,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 ).decode("utf-8")
 
                 if base64_frame_224:
-                    print("Appending Frame")
-                    frame_history.append(base64_frame_224)
                     colab_is_processing = True
                     last_colab_query_time = current_time
+
+                    # append the first frame or any frame with actual movement
+                    if is_moving or step_count == 0:
+                        print("Appending Frame")
+                        frame_history.append(base64_frame_224)
+                        is_moving = False
 
                     async def run_colab_query(payload_data):
                         global colab_is_processing
