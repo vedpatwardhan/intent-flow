@@ -59,7 +59,7 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
         sim = torch.matmul(patches_projected, text_feat.T).view(14, 14).cpu().numpy()
         sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
 
-    return sim_norm, text_feat_raw.squeeze(0).cpu()
+    return sim_norm, text_feat_raw.squeeze(0)
 
 
 def get_vggt_motion_field(frames: list[str]) -> tuple:
@@ -248,7 +248,7 @@ def extract_single_view_stage3_obs_features(
     vggt_subspace = torch.tensor(
         features["task_isolated_features"]["motion_field_subspace"].flatten(),
         dtype=torch.float32,
-    )
+    ).to(device)
     features["task_isolated_features"]["vggt_subspace"] = vggt_subspace
 
     # LEGACY: PointNeXt representation with zeros
