@@ -1158,23 +1158,14 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         )
 
         state.stage3_optimizer.zero_grad()
+
         # z_action: Shape [batch_size, 512] (projected action trajectory latents)
-        print(
-            f"batch_action bounds: [{batch_action.min().item():.6f}, {batch_action.max().item():.6f}]"
-        )
         z_action = state.stage3_models["action_adapter"](batch_action)
+
         # z_action_16: Shape [batch_size, 16] (bottleneck dynamics conditioning latent)
-        print(
-            f"z_action bounds: [{z_action.min().item():.6f}, {z_action.max().item():.6f}]"
-        )
         z_action_16 = state.stage3_models["action_down_proj"](z_action)
+
         # s_next_pred: Shape [batch_size, 512] (predicted macro-step outcome latent state)
-        print(
-            f"batch_s_t bounds: [{batch_s_t.min().item():.6f}, {batch_s_t.max().item():.6f}]"
-        )
-        print(
-            f"z_action_16 bounds: [{z_action_16.min().item():.6f}, {z_action_16.max().item():.6f}]"
-        )
         s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
 
         # Dynamics loss (predictor update without goal attention) - Scalar loss
@@ -1296,11 +1287,22 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 [state.stage3_trajectory_history[idx][5] for idx in indices], dim=0
             )
 
-            # 1. Generative Flow Matcher Loss (CFM) via Native Blended ComboStoc Method
+            # Generative Flow Matcher Loss (CFM) via Native Blended ComboStoc Method
             B_size = batch_action.size(0)
 
             # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
             batch_action_3d = batch_action.view(B_size, 7, 58)
+
+            print(
+                "Shapes: \n"
+                f"\tbatch_s_t: {batch_s_t.shape}\n"
+                f"\tbatch_action: {batch_action.shape}\n"
+                f"\tbatch_s_next: {batch_s_next.shape}\n"
+                f"\tbatch_energy: {batch_energy.shape}\n"
+                f"\tbatch_tactile: {batch_tactile.shape}\n"
+                f"\ts_target_batch: {s_target_batch.shape}\n"
+                f"\tbatch_action_3d: {batch_action_3d.shape}"
+            )
 
             # Request unreduced batch loss elements using our new flag
             cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
