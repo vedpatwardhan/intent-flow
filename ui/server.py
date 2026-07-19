@@ -192,7 +192,6 @@ async def run_stage3_training_loop(
     for ep_idx in range(num_episodes):
         if ep_idx > 0:
             sim.reset_env(lock_posture=True)
-        frame_history = []
 
         # Reflected in the progress bar on the UI
         await websocket.send_text(
@@ -238,7 +237,7 @@ async def run_stage3_training_loop(
 
             current_obs = {
                 "frames": frame_all_views,
-                "history_frames": frame_history,
+                "history_frames": list(frame_history),
                 "proprioception": proprio_list,
                 "tactile": tactile_grid,
                 "text_prompt": text_prompt or "grasp cube",
