@@ -890,9 +890,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Capture the true 16-batch size returned directly out of your attacker pass
         ensemble_size = a_candidates.shape[0]  # 16
-        print(f"[DEBUG] perturbed_payloads length: {len(perturbed_payloads)}")
-        print(f"[DEBUG] s_t_ensemble shape: {s_t_ensemble.shape}")
-        print(f"[DEBUG] action_candidates shape: {a_candidates.shape}")
 
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.01
@@ -966,6 +963,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 t_j = 1.0 - steering_timelines_expanded
 
                 # Sculpt action parameters along the tracking vector field
+                print(f"\tGuidance mask: {t_j}\n\tEta: {eta}\n\tGradient: {grad_a}")
+
                 a_candidates = a_candidates - eta * grad_a * t_j
 
                 # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
@@ -984,14 +983,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     steering_timelines_expanded, 0.0, 1.0
                 )
 
-            a_candidates = a_candidates.clone().detach()
-
-        # --- DIAGNOSTIC TELEMETRY LOGGING ---
-        log_action_bounds(a_candidates)
+        # Detach the candidates after the loop
+        final_actions = a_candidates.clone().detach()
+        log_action_bounds(final_actions)
 
         # Extract only the immediate multi-step prediction slice if needed,
         # or output the unrolled trajectory block back to your motor script loader!
-        final_actions = a_candidates.detach()
         with torch.no_grad():
             final_energies = torch.mean((s_goal_pred - s_target_expanded) ** 2, dim=-1)
 
