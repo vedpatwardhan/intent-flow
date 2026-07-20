@@ -317,7 +317,7 @@ def construct_goal_states(obs_dict, ui_annotations):
             print(f"Inpainting failed in construct_goal_states: {e}")
             clean_bg = pil_frame
 
-        blurred_bg = clean_bg.filter(ImageFilter.GaussianBlur(radius=15))
+        blurred_bg = clean_bg.filter(ImageFilter.GaussianBlur(radius=10))
 
         arrangements = [
             ("left", x2 - w1, y2 + (h2 - h1) // 2),
