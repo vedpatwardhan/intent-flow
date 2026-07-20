@@ -99,10 +99,9 @@ def encode_obs_to_latent(obs_dict, state):
         # Print input bounds for debugging NaNs
         for k, v in obs_dict.items():
             if torch.is_tensor(v):
-                print(
-                    f"   [Input Debug] {k} bounds: "
-                    f"[{v.min().item():.6f}, {v.max().item():.6f}]"
-                )
+                print("   [Input Debug] bounds", end=" | ")
+                print(f"{k}: [{v.min().item():.3f}, {v.max().item():.3f}]", end=" | ")
+        print()
 
         # Adapters
         vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
@@ -122,26 +121,7 @@ def encode_obs_to_latent(obs_dict, state):
             "proprioception": proprio_tok,
         }
         out = state.stage3_models["msat"](modality_dict)
-        if torch.isnan(out).any():
-            print("⚠️ [NaN Debug] msat output contains NaN!")
         return out
-
-
-def get_combined_obs(obs_views, any_view):
-    return {
-        "vision": torch.cat(
-            [obs_views[view]["vision"].unsqueeze(0) for view in obs_views], dim=1
-        ),
-        "pointnext": torch.cat(
-            [obs_views[view]["pointnext"].unsqueeze(0) for view in obs_views], dim=1
-        ),
-        "vggt": torch.cat(
-            [obs_views[view]["vggt"].unsqueeze(0) for view in obs_views], dim=1
-        ),
-        "text": any_view["text"],
-        "tactile": any_view["tactile"],
-        "proprioception": any_view["proprioception"],
-    }
 
 
 def construct_goal_states(obs_dict, ui_annotations):
@@ -813,7 +793,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # get all global and filtered features
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
-                obs_dict = extract_stage3_obs_features(payload)
+                obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
                 # Construct goal states from crops/segments/arrows
                 # {view_name: [goal_img1, goal_img2, goal_img3, goal_img4]}
@@ -847,61 +827,26 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             payload.proprioception,
                             view_name=view_name,
                         )
-                        print(
-                            f"Shapes: {goal_obs_dict['vision'].shape} "
-                            f"{goal_obs_dict['pointnext'].shape} "
-                            f"{goal_obs_dict['vggt'].shape} "
-                            f"{goal_obs_dict['text'].shape} "
-                            f"{goal_obs_dict['tactile'].shape} "
-                            f"{goal_obs_dict['proprioception'].shape}"
-                        )
 
                         # Zero out the motion field for goal images
                         goal_obs_dict["vggt"] = torch.zeros_like(goal_obs_dict["vggt"])
 
                         # Pass features through respective adapters and MSAT
                         goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                        print(f"Goal Latent Shape: {goal_latent.shape}")
                         goal_latents.append(goal_latent)
 
-        print("Goal Latents Shape:", goal_latents[0].shape)
         with torch.no_grad():
-            # Combine multi-view observations by concatenating visual streams across views
-            any_view = next(iter(obs_dict.values()))
-            any_view_key = next(iter(obs_dict.keys()))
-            print(
-                f"Shapes: {obs_dict[any_view_key]['vision'].shape} "
-                f"{obs_dict[any_view_key]['pointnext'].shape} "
-                f"{obs_dict[any_view_key]['vggt'].shape} "
-                f"{obs_dict[any_view_key]['text'].shape} "
-                f"{obs_dict[any_view_key]['tactile'].shape} "
-                f"{obs_dict[any_view_key]['proprioception'].shape}"
-            )
-            combined_obs = get_combined_obs(obs_dict, any_view)
-            print(
-                f"[Stage3 Step] combined_obs visual stream shapes: "
-                f"{combined_obs['vision'].shape} "
-                f"{combined_obs['pointnext'].shape} "
-                f"{combined_obs['vggt'].shape} "
-                f"{combined_obs['text'].shape} "
-                f"{combined_obs['tactile'].shape} "
-                f"{combined_obs['proprioception'].shape}"
-            )
-
             # Get state latents [1, latent_dim]
             s_t = encode_obs_to_latent(combined_obs, state)
-            print(f"[Stage3 Step] s_t shape: {s_t.shape}")
 
             # Query the goal latents using the current state s_t via MultiheadAttention
             # [1, num_goals, latent_dim]
             stacked_goals = torch.stack(goal_latents, dim=1)
-            print(f"[Stage3 Step] stacked_goals shape: {stacked_goals.shape}")
-
             s_target, _ = state.stage3_models["goal_attention"](
                 s_t.unsqueeze(0), stacked_goals, stacked_goals
             )
+            # [1, latent_dim]
             s_target = state.stage3_models["latent_adapter"](s_target.squeeze(0))
-            print(f"[Stage3 Step] s_target shape: {s_target.shape}")
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7
@@ -1087,16 +1032,8 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             )
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
-                    obs_t_views = extract_stage3_obs_features(trans.current_obs)
-                    obs_next_views = extract_stage3_obs_features(trans.next_obs)
-
-                    # Combine multi-view observations for current observation (t)
-                    any_view_t = next(iter(obs_t_views.values()))
-                    combined_obs_t = get_combined_obs(obs_t_views, any_view_t)
-
-                    # Combine multi-view observations for next observation (t+1)
-                    any_view_next = next(iter(obs_next_views.values()))
-                    combined_obs_next = get_combined_obs(obs_next_views, any_view_next)
+                    _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
+                    _, combined_obs_next = extract_stage3_obs_features(trans.next_obs)
 
                     # Check for NaNs/Infs in combined features before encoding
                     for name, d_dict in [
@@ -1108,17 +1045,18 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                                 torch.isnan(v).any() or torch.isinf(v).any()
                             ):
                                 print(
-                                    f"⚠️ [NaN/Inf Warning] {name} observation contains NaN/Inf in feature: '{k}'!"
+                                    f"⚠️ [NaN/Inf Warning] {name} observation contains "
+                                    f"NaN/Inf in feature: '{k}'!"
                                 )
 
                     # s_t, s_next: Shape [1, 512] (shared state latent dimension)
                     s_t = encode_obs_to_latent(combined_obs_t, state).detach()
                     s_next = encode_obs_to_latent(combined_obs_next, state).detach()
                     print(
-                        f"s_t bounds: [{s_t.min().item():.6f}, {s_t.max().item():.6f}]"
-                    )
-                    print(
-                        f"s_next bounds: [{s_next.min().item():.6f}, {s_next.max().item():.6f}]"
+                        f"[CALIBRATE] s_t bounds: [{s_t.min().item():.6f}, "
+                        f"{s_t.max().item():.6f}] "
+                        f"s_next bounds: [{s_next.min().item():.6f}, "
+                        f"{s_next.max().item():.6f}]"
                     )
 
             if s_t_first is None:

@@ -84,27 +84,7 @@ class BadWorldAttacker:
 
             # --- STEP 3 & 4: CONVERT RAW IMAGE DISTORTIONS INTO GROUNDED LATENTS ---
             # 4. Extract visual down-stream tokens (DINO, CLIP, SAM, VGGT) natively from the new visual feeds
-            obs_views = extract_obs_features_fn(temp_payload)
-
-            # Combine multi-view observations by concatenating across views
-            any_view = next(iter(obs_views.values()))
-            combined_obs = {
-                "vision": torch.cat(
-                    [obs_views[view]["vision"].unsqueeze(0) for view in obs_views],
-                    dim=1,
-                ),
-                "pointnext": torch.cat(
-                    [obs_views[view]["pointnext"].unsqueeze(0) for view in obs_views],
-                    dim=1,
-                ),
-                "vggt": torch.cat(
-                    [obs_views[view]["vggt"].unsqueeze(0) for view in obs_views],
-                    dim=1,
-                ),
-                "text": any_view["text"],
-                "tactile": any_view["tactile"],
-                "proprioception": any_view["proprioception"],
-            }
+            _, combined_obs = extract_obs_features_fn(temp_payload)
 
             # 5. Map features through adapters and MSAT to yield physically safe multi-modal states
             with torch.no_grad():

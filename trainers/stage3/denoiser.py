@@ -120,15 +120,17 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             else:
                 x_t = x_t + v_step
 
-            print(
-                f"   Step {i:02d} -> "
-                f"State s_t Bounds: [{s_t.min().item():.4f}, {s_t.max().item():.4f}] | "
-                f"State s_target Bounds: [{s_target.min().item():.4f}, {s_target.max().item():.4f}] | "
-                f"Velocity Field Bounds: [{v_min:.4f}, {v_max:.4f}] | "
-                f"Noise Step Bounds: [{noise_min:.4f}, {noise_max:.4f}] | "
-                f"Resulting x_t Bounds: [{x_t.min().item():.4f}, {x_t.max().item():.4f}] | "
-                f"Resulting t_vals Bounds: [{t_vals.min().item():.4f}, {t_vals.max().item():.4f}]"
-            )
+            if (i + 1) % (num_steps // 2) == 0:
+                print(
+                    f"   Step {i:02d} Bounds -> "
+                    f"velocity: [{v_min:.3f}, {v_max:.3f}] | "
+                    f"noise: [{noise_min:.3f}, {noise_max:.3f}] | "
+                    f"x_t: [{x_t.min().item():.3f}, {x_t.max().item():.3f}] | "
+                    f"t_vals: [{t_vals.min().item():.3f}, {t_vals.max().item():.3f}] | "
+                    f"s_t: [{s_t.min().item():.3f}, {s_t.max().item():.3f}] | "
+                    f"s_target: [{s_target.min().item():.3f}, "
+                    f"{s_target.max().item():.3f}]"
+                )
 
         return x_t
 

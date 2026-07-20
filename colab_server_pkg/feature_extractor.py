@@ -289,4 +289,18 @@ def extract_stage3_obs_features(payload):
             view_name=view_name,  # str
         )
 
-    return obs_dict
+    any_view = next(iter(obs_dict.values()))
+    return obs_dict, {
+        "vision": torch.cat(
+            [obs_dict[view]["vision"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "pointnext": torch.cat(
+            [obs_dict[view]["pointnext"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "vggt": torch.cat(
+            [obs_dict[view]["vggt"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "text": any_view["text"],
+        "tactile": any_view["tactile"],
+        "proprioception": any_view["proprioception"],
+    }
