@@ -305,7 +305,7 @@ def save_stage3_debug_plots(payload, obs_dict: dict, goal_images: dict):
 def save_stage3_goal_features_plots(goal_feature_maps):
     """
     Saves a 4x3 plot for each view containing the DINO, CLIP, and VGGT motion
-    representations for each of the 4 goal variants.
+    representations overlaid on top of their respective goal images.
     """
     names = ["Left", "Right", "Top", "Bottom"]
     for view_name, features_list in goal_feature_maps.items():
@@ -314,21 +314,33 @@ def save_stage3_goal_features_plots(goal_feature_maps):
 
         fig, axes = plt.subplots(4, 3, figsize=(12, 16))
         for row_idx, (name, maps) in enumerate(zip(names, features_list)):
+            goal_img = maps["goal_img"]
+            img_w, img_h = goal_img.size
+
             # 1. DINO Attention map
             ax_dino = axes[row_idx, 0]
-            ax_dino.imshow(maps["dino"], cmap="viridis")
+            ax_dino.imshow(goal_img)
+            ax_dino.imshow(
+                maps["dino"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+            )
             ax_dino.set_title(f"{name} Goal - DINO Attn")
             ax_dino.axis("off")
 
             # 2. CLIP Similarity map
             ax_clip = axes[row_idx, 1]
-            ax_clip.imshow(maps["clip"], cmap="viridis")
+            ax_clip.imshow(goal_img)
+            ax_clip.imshow(
+                maps["clip"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+            )
             ax_clip.set_title(f"{name} Goal - CLIP Sim")
             ax_clip.axis("off")
 
             # 3. VGGT Motion Field map
             ax_motion = axes[row_idx, 2]
-            ax_motion.imshow(maps["motion"], cmap="hot")
+            ax_motion.imshow(goal_img)
+            ax_motion.imshow(
+                maps["motion"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+            )
             ax_motion.set_title(f"{name} Goal - VGGT Motion")
             ax_motion.axis("off")
 

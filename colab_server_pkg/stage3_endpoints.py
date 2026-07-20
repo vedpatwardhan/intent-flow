@@ -570,6 +570,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         # Capture raw feature maps before adapter projection
                         goal_feature_maps[view_name].append(
                             {
+                                "goal_img": goal_img,
                                 "dino": goal_obs_dict["features"]["dino_attn"],
                                 "clip": goal_obs_dict["features"]["clip_sim"],
                                 "motion": goal_obs_dict["features"]["motion_field"],
