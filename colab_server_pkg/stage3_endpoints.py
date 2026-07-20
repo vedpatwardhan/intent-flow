@@ -892,7 +892,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         ensemble_size = a_candidates.shape[0]  # 16
 
         # Learning rate for action adjustment and timeline rollback scale
-        eta = 0.01
+        eta = 0.2
         timeline_rollback_rate = 0.05
         error_threshold = 0.02
 
@@ -951,33 +951,36 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Compute energy and gradient (distance to goal)
             energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
-
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
+            # Normalize gradients per ensemble instance to stabilize steering step size
+            grad_norm = grad_a.norm(dim=(1, 2), keepdim=True) + 1e-8
+            grad_a_normalized = grad_a / grad_norm
+
             # Masked Energy Guidance matching 3D coordinates
-            with torch.no_grad():
-                # Dynamically calculate the guidance mask (shape: [4, 7, 58])
-                t_j = 1.0 - steering_timelines_expanded
+            # Dynamically calculate the guidance mask (shape: [4, 7, 58])
+            t_j = 1.0 - steering_timelines_expanded
 
-                # Sculpt action parameters along the tracking vector field
-                print(f"grad_a: {torch.all(grad_a == 0)}, t_j: {torch.all(t_j == 0)}")
-                a_candidates = a_candidates - eta * grad_a * t_j
+            # Sculpt action parameters along the tracking vector field
+            diff = eta * grad_a_normalized * t_j
+            print(f"diff bounds: {diff.min()} {diff.max()}")
+            a_candidates = a_candidates - diff
 
-                # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
-                # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
-                joint_errors = grad_a.abs().mean(dim=(0, 1))
+            # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
+            # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
+            joint_errors = grad_a_normalized.abs().mean(dim=(0, 1))
 
-                # Identify indices breaching our task accuracy threshold
-                drifting_joints_mask = joint_errors > error_threshold
+            # Identify indices breaching our task accuracy threshold
+            drifting_joints_mask = joint_errors > error_threshold
 
-                # Apply Localized Timeline Rollback to the time maps of drifting dimensions
-                # Decrementing 't' opens up 't_j', granting more gradient flexibility next step
-                steering_timelines_expanded[
-                    :, :, drifting_joints_mask
-                ] -= timeline_rollback_rate
-                steering_timelines_expanded = torch.clamp(
-                    steering_timelines_expanded, 0.0, 1.0
-                )
+            # Apply Localized Timeline Rollback to the time maps of drifting dimensions
+            # Decrementing 't' opens up 't_j', granting more gradient flexibility next step
+            steering_timelines_expanded[
+                :, :, drifting_joints_mask
+            ] -= timeline_rollback_rate
+            steering_timelines_expanded = torch.clamp(
+                steering_timelines_expanded, 0.0, 1.0
+            )
 
         # Detach the candidates after the loop
         final_actions = a_candidates.clone().detach()
