@@ -52,14 +52,14 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
         patches = norm_states[0, 1:]
         patches_projected = models["clip"].visual_projection(patches)
 
-        text_feat = text_feat_raw / text_feat_raw.norm(dim=-1, keepdim=True)
-        patches_projected = patches_projected / patches_projected.norm(
-            dim=-1, keepdim=True
+        text_feat = torch.nn.functional.normalize(text_feat_raw, p=2, dim=-1)
+        patches_projected = torch.nn.functional.normalize(
+            patches_projected, p=2, dim=-1
         )
         sim = torch.matmul(patches_projected, text_feat.T).view(14, 14).cpu().numpy()
         sim_norm = (sim.max() - sim) / (sim.max() - sim.min() + 1e-8)
 
-    return sim_norm, text_feat_raw.squeeze(0)
+    return sim_norm, text_feat.squeeze(0)
 
 
 def get_vggt_motion_field(frames: list[str]) -> tuple:

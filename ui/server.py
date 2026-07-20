@@ -229,7 +229,8 @@ async def run_stage3_training_loop(
             tactile_grid[0][0] = touch_index
             tactile_grid[1][1] = touch_thumb
 
-            proprio_list = sim.get_state_32().tolist()
+            # Scale proprioception to [-1.0, 1.0] using the simulator's built-in unscaler
+            proprio_list = sim.unscaler.scale_state(sim.get_state_32()).tolist()
             if any(np.isnan(val) for val in proprio_list):
                 print(
                     f"⚠️ [NaN Warning] MuJoCo joint proprioception contains NaN at step {env_step}! Simulator exploded."
@@ -384,7 +385,9 @@ async def run_stage3_training_loop(
                     track_next_obs = {
                         "frames": frames_all_views_next,
                         "history_frames": recording_history_frames,
-                        "proprioception": sim.get_state_32().tolist(),
+                        "proprioception": sim.unscaler.scale_state(
+                            sim.get_state_32()
+                        ).tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
                         "ui_annotations": {},

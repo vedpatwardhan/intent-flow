@@ -658,15 +658,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 raw_min = a_candidates.min().item()
                 raw_max = a_candidates.max().item()
                 raw_mean = a_candidates.mean().item()
+                bound_safe = raw_min < -1.0 or raw_max > 1.0
                 print(
-                    f"🔍 [DIAGNOSTIC] /step Unclipped Bounds -> Min: {raw_min:.4f} "
-                    f"| Max: {raw_max:.4f} | Mean: {raw_mean:.4f}"
+                    f"🔍 [DIAGNOSTIC] Action Bounds: ",
+                    "SAFE " if bound_safe else "UNSAFE ",
+                    f"| Min: {raw_min:.4f} | Max: {raw_max:.4f} | Mean: {raw_mean:.4f}",
                 )
-                if raw_min < -1.0 or raw_max > 1.0:
-                    print(
-                        f"⚠️  [WARNING] Action candidates are drifting outside "
-                        "[-1, 1] range!"
-                    )
 
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
