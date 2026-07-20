@@ -183,7 +183,7 @@ async def run_stage3_training_loop(
     }
 
     num_epochs = 5
-    max_steps = 20
+    max_steps = 5
 
     print(
         f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."
