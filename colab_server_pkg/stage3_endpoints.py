@@ -97,9 +97,9 @@ def encode_obs_to_latent(obs_dict, state):
     """
     with torch.amp.autocast("cuda"):
         # Print input bounds for debugging NaNs
+        print("   [Input Debug] bounds", end=" | ")
         for k, v in obs_dict.items():
             if torch.is_tensor(v):
-                print("   [Input Debug] bounds", end=" | ")
                 print(f"{k}: [{v.min().item():.3f}, {v.max().item():.3f}]", end=" | ")
         print()
 
@@ -925,35 +925,32 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # --- DIAGNOSTIC TELEMETRY LOGGING ---
             log_action_bounds(a_candidates)
 
-            with torch.amp.autocast("cuda"):
-                # Flatten step layouts to match ActionAdapter's footprint contract
-                a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
+            # Flatten step layouts to match ActionAdapter's footprint contract
+            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
 
-                # Get the action representation and next latent state
-                z_action = state.stage3_models["action_adapter"](a_flat)
-                z_action_16 = state.stage3_models["action_down_proj"](z_action)
+            # Get the action representation and next latent state
+            z_action = state.stage3_models["action_adapter"](a_flat)
+            z_action_16 = state.stage3_models["action_down_proj"](z_action)
 
-                s_next_pred = state.stage3_models["predictor"](
-                    s_t_ensemble, z_action_16
-                )
+            s_next_pred = state.stage3_models["predictor"](s_t_ensemble, z_action_16)
 
-                # [16, 1, 512]
-                s_next_pred_expanded = s_next_pred.unsqueeze(1)
+            # [16, 1, 512]
+            s_next_pred_expanded = s_next_pred.unsqueeze(1)
 
-                # Expand the 4 RAW foveated goal orientations [16, 4, 512]
-                stacked_goals_expanded = stacked_goals.expand(ensemble_size, -1, -1)
+            # Expand the 4 RAW foveated goal orientations [16, 4, 512]
+            stacked_goals_expanded = stacked_goals.expand(ensemble_size, -1, -1)
 
-                # Query the 4 goal perspectives using the predicted next state vector
-                s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
-                    s_next_pred_expanded, stacked_goals_expanded, stacked_goals_expanded
-                )
-                s_goal_pred_attn = s_goal_pred_attn.squeeze(1)  # Shape: [16, 512]
+            # Query the 4 goal perspectives using the predicted next state vector
+            s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
+                s_next_pred_expanded, stacked_goals_expanded, stacked_goals_expanded
+            )
+            s_goal_pred_attn = s_goal_pred_attn.squeeze(1)  # Shape: [16, 512]
 
-                # Project the foveated pool back into aligned task space [16, 512]
-                s_goal_pred = state.stage3_models["latent_adapter"](s_goal_pred_attn)
+            # Project the foveated pool back into aligned task space [16, 512]
+            s_goal_pred = state.stage3_models["latent_adapter"](s_goal_pred_attn)
 
-                # Compute energy and gradient (distance to goal)
-                energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
+            # Compute energy and gradient (distance to goal)
+            energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
 
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
@@ -963,8 +960,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 t_j = 1.0 - steering_timelines_expanded
 
                 # Sculpt action parameters along the tracking vector field
-                print(f"\tGuidance mask: {t_j}\n\tEta: {eta}\n\tGradient: {grad_a}")
-
+                print(f"grad_a: {torch.all(grad_a == 0)}, t_j: {torch.all(t_j == 0)}")
                 a_candidates = a_candidates - eta * grad_a * t_j
 
                 # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
