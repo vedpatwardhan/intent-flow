@@ -321,7 +321,11 @@ def save_stage3_goal_features_plots(goal_feature_maps):
             ax_dino = axes[row_idx, 0]
             ax_dino.imshow(goal_img)
             ax_dino.imshow(
-                maps["dino"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+                maps["dino"],
+                cmap="jet",
+                alpha=0.3,
+                extent=[0, img_w, img_h, 0],
+                interpolation="bilinear",
             )
             ax_dino.set_title(f"{name} Goal - DINO Attn")
             ax_dino.axis("off")
@@ -330,7 +334,11 @@ def save_stage3_goal_features_plots(goal_feature_maps):
             ax_clip = axes[row_idx, 1]
             ax_clip.imshow(goal_img)
             ax_clip.imshow(
-                maps["clip"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+                maps["clip"],
+                cmap="jet",
+                alpha=0.3,
+                extent=[0, img_w, img_h, 0],
+                interpolation="bilinear",
             )
             ax_clip.set_title(f"{name} Goal - CLIP Sim")
             ax_clip.axis("off")
@@ -339,7 +347,11 @@ def save_stage3_goal_features_plots(goal_feature_maps):
             ax_motion = axes[row_idx, 2]
             ax_motion.imshow(goal_img)
             ax_motion.imshow(
-                maps["motion"], cmap="jet", alpha=0.5, extent=[0, img_w, img_h, 0]
+                maps["motion"],
+                cmap="jet",
+                alpha=0.3,
+                extent=[0, img_w, img_h, 0],
+                interpolation="bilinear",
             )
             ax_motion.set_title(f"{name} Goal - VGGT Motion")
             ax_motion.axis("off")
