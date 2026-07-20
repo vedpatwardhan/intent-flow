@@ -588,11 +588,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # Get state latents [1, latent_dim]
             s_t = encode_obs_to_latent(combined_obs, state)
 
-            # Query the goal latents using the current state s_t via MultiheadAttention
+            # Query the goal latents using the scaled current state s_t via MultiheadAttention
             # [1, num_goals, latent_dim]
             stacked_goals = torch.stack(goal_latents, dim=1)
+            tau = 10.0  # Temperature scale to break softmax saturation
+            s_t_scaled = s_t.unsqueeze(0) / tau
             s_target, _ = state.stage3_models["goal_attention"](
-                s_t.unsqueeze(0), stacked_goals, stacked_goals
+                s_t_scaled, stacked_goals, stacked_goals
             )
             # [1, latent_dim]
             s_target = state.stage3_models["latent_adapter"](s_target.squeeze(0))
@@ -682,13 +684,14 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # [16, 1, 512]
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
+            s_next_pred_scaled = s_next_pred_expanded / tau
 
             # Expand the 4 RAW foveated goal orientations [16, 4, 512]
             stacked_goals_expanded = stacked_goals.expand(ensemble_size, -1, -1)
 
-            # Query the 4 goal perspectives using the predicted next state vector
+            # Query the 4 goal perspectives using the scaled predicted next state vector
             s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
-                s_next_pred_expanded, stacked_goals_expanded, stacked_goals_expanded
+                s_next_pred_scaled, stacked_goals_expanded, stacked_goals_expanded
             )
             s_goal_pred_attn = s_goal_pred_attn.squeeze(1)  # Shape: [16, 512]
 
@@ -743,7 +746,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             energy_val = final_energies[i].item()
             action_norm = final_actions[i].norm().item()
             print(
-                f"  Track {i:02d}: Energy = {energy_val:.6f} | Action Norm = {action_norm:.4f}"
+                f"  Track {i:02d}: Energy = {energy_val:.10f} | Action Norm = {action_norm:.4f}"
             )
         print("---------------------------------")
 
@@ -1016,10 +1019,12 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
             # 3. Goal Attention Loss
+            tau = 10.0  # Temperature scale to match inference
             s_next_pred_expanded = s_next_pred.unsqueeze(1)
+            s_next_pred_scaled = s_next_pred_expanded / tau
             s_target_expanded = s_target_batch.unsqueeze(1)
             s_goal_pred, _ = state.stage3_models["goal_attention"](
-                s_next_pred_expanded, s_target_expanded, s_target_expanded
+                s_next_pred_scaled, s_target_expanded, s_target_expanded
             )
             s_goal_pred = s_goal_pred.squeeze(1)
             goal_attention_loss = F.mse_loss(s_goal_pred, s_target_batch)
