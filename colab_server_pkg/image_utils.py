@@ -1,7 +1,15 @@
 import base64
 import io
+import os
+import cv2
 import numpy as np
-from PIL import Image
+import torch
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from PIL import Image, ImageDraw, ImageFilter
 
 
 def decode_base64_image(base64_str: str) -> np.ndarray:
@@ -10,3 +18,325 @@ def decode_base64_image(base64_str: str) -> np.ndarray:
     img_data = base64.b64decode(base64_str)
     img = Image.open(io.BytesIO(img_data)).convert("RGB")
     return np.array(img)
+
+
+def save_stage3_debug_plots(payload, obs_dict: dict, goal_images: dict):
+    """
+    Decodes multi-view frames, creates semi-transparent overlays for annotations,
+    and saves debug_stage3_step.png and debug_goal_states.png.
+    """
+    camera_names = [
+        "world_center",
+        "world_top",
+        "world_left",
+        "world_right",
+        "world_wrist",
+    ]
+    decoded_images = {}
+    for cam in camera_names:
+        if cam in payload.frames:
+            try:
+                decoded_images[cam] = Image.fromarray(
+                    decode_base64_image(payload.frames[cam])
+                )
+            except Exception as e:
+                print(f"Error decoding {cam} in save_stage3_debug_plots: {e}")
+                decoded_images[cam] = Image.new("RGB", (224, 224), (0, 0, 0))
+        else:
+            decoded_images[cam] = Image.new("RGB", (224, 224), (0, 0, 0))
+
+    # 1. Dynamic subplots plot
+    N = len(payload.ui_annotations) if payload.ui_annotations else 0
+    total_plots = 5 + N
+    cols = 3
+    rows = (total_plots + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows))
+    if total_plots == 1:
+        axes = np.array([axes])
+    else:
+        axes = axes.flatten()
+
+    # Turn off axis on all subplots initially
+    for ax in axes:
+        ax.axis("off")
+
+    # Plot base 5 camera views
+    for idx, cam in enumerate(camera_names):
+        axes[idx].imshow(decoded_images[cam])
+        axes[idx].set_title(cam)
+
+    # Plot each annotated view overlay
+    for idx, (view_name, view_annos) in enumerate(payload.ui_annotations.items()):
+        if view_name not in decoded_images:
+            continue
+
+        # Subplot index starts at 5
+        plot_idx = 5 + idx
+        if plot_idx >= len(axes):
+            break
+
+        try:
+            overlay_img = decoded_images[view_name].copy().convert("RGBA")
+            crops = view_annos.get("crops", [])
+            segments = view_annos.get("segments", [])
+            vectors = view_annos.get("vectors", [])
+            img_w, img_h = decoded_images[view_name].size
+
+            active_annos = crops + segments
+            if len(active_annos) >= 2:
+                p0_anno = active_annos[0]
+                p1_anno = active_annos[1]
+
+                view_features_dict = obs_dict.get("view_features", {})
+                task_isolated = view_features_dict.get(view_name, {}).get(
+                    "task_isolated_features", {}
+                )
+                sam_mask_224 = task_isolated.get("sam_mask_224", None)
+
+                def get_coords(anno):
+                    scale_x = img_w / 224.0
+                    scale_y = img_h / 224.0
+                    is_crop_type = "width" in anno
+                    if is_crop_type:
+                        x = int(anno["x"] * scale_x)
+                        y = int(anno["y"] * scale_y)
+                        w = int(anno["width"] * scale_x)
+                        h = int(anno["height"] * scale_y)
+                        mask = Image.new("L", (w, h), 255)
+                    else:
+                        if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
+                            try:
+                                mask_np_224 = (
+                                    np.array(sam_mask_224)
+                                    if isinstance(sam_mask_224, torch.Tensor)
+                                    else sam_mask_224
+                                )
+                                mask_uint8 = (mask_np_224 > 0).astype(np.uint8) * 255
+                                num_labels, labels = cv2.connectedComponents(mask_uint8)
+
+                                cx_scaled = min(223, max(0, int(anno["x"])))
+                                cy_scaled = min(223, max(0, int(anno["y"])))
+                                lbl = labels[cy_scaled, cx_scaled]
+
+                                if lbl == 0:
+                                    window = labels[
+                                        max(0, cy_scaled - 5) : min(224, cy_scaled + 6),
+                                        max(0, cx_scaled - 5) : min(224, cx_scaled + 6),
+                                    ]
+                                    non_zero = window[window > 0]
+                                    if len(non_zero) > 0:
+                                        lbl = non_zero[0]
+
+                                if lbl > 0:
+                                    segment_mask_224 = (labels == lbl).astype(
+                                        np.float32
+                                    )
+                                    mask_pil = Image.fromarray(
+                                        (segment_mask_224 * 255).astype(np.uint8)
+                                    )
+                                    mask_resized = mask_pil.resize(
+                                        (img_w, img_h), Image.NEAREST
+                                    )
+                                    mask_np = np.array(mask_resized)
+
+                                    indices = np.argwhere(mask_np > 0)
+                                    y_min, x_min = indices.min(axis=0)
+                                    y_max, x_max = indices.max(axis=0)
+
+                                    x = int(x_min)
+                                    y = int(y_min)
+                                    w = int(x_max - x_min + 1)
+                                    h = int(y_max - y_min + 1)
+                                    mask = mask_resized.crop((x, y, x + w, y + h))
+                                else:
+                                    raise ValueError(
+                                        "No matching component label found"
+                                    )
+                            except Exception as e:
+                                print(
+                                    f"Fallback to circle due to components error: {e}"
+                                )
+                                cx = int(anno["x"] * scale_x)
+                                cy = int(anno["y"] * scale_y)
+                                r = int(25 * scale_x)
+                                x = max(0, cx - r)
+                                y = max(0, cy - r)
+                                w = min(img_w - x, 2 * r)
+                                h = min(img_h - y, 2 * r)
+                                mask = Image.new("L", (w, h), 0)
+                                draw = ImageDraw.Draw(mask)
+                                draw.ellipse(
+                                    (cx - r - x, cy - r - y, cx + r - x, cy + r - y),
+                                    fill=255,
+                                )
+                        else:
+                            cx = int(anno["x"] * scale_x)
+                            cy = int(anno["y"] * scale_y)
+                            r = int(25 * scale_x)
+                            x = max(0, cx - r)
+                            y = max(0, cy - r)
+                            w = min(img_w - x, 2 * r)
+                            h = min(img_h - y, 2 * r)
+                            mask = Image.new("L", (w, h), 0)
+                            draw = ImageDraw.Draw(mask)
+                            draw.ellipse(
+                                (cx - r - x, cy - r - y, cx + r - x, cy + r - y),
+                                fill=255,
+                            )
+                    return x, y, w, h, mask
+
+                x1, y1, w1, h1, mask1 = get_coords(p0_anno)
+                x2, y2, w2, h2, mask2 = get_coords(p1_anno)
+
+                # Swap based on vector direction
+                if vectors and len(vectors) > 0:
+                    vec = vectors[0]
+                    scale_x = img_w / 224.0
+                    scale_y = img_h / 224.0
+                    start_x = vec["start"][0] * scale_x
+                    start_y = vec["start"][1] * scale_y
+                    ctr0_x = x1 + w1 / 2.0
+                    ctr0_y = y1 + h1 / 2.0
+                    ctr1_x = x2 + w2 / 2.0
+                    ctr1_y = y2 + h2 / 2.0
+                    d0_start = (ctr0_x - start_x) ** 2 + (ctr0_y - start_y) ** 2
+                    d1_start = (ctr1_x - start_x) ** 2 + (ctr1_y - start_y) ** 2
+                    if d1_start < d0_start:
+                        x1, y1, w1, h1, mask1, x2, y2, w2, h2, mask2 = (
+                            x2,
+                            y2,
+                            w2,
+                            h2,
+                            mask2,
+                            x1,
+                            y1,
+                            w1,
+                            h1,
+                            mask1,
+                        )
+
+                # Paste overlays
+                # Patch 1 (moving): semi-transparent cyan
+                cyan_color = Image.new("RGBA", (w1, h1), (0, 255, 255, 80))
+                overlay_img.paste(cyan_color, (x1, y1), mask1)
+
+                # Patch 2 (fixed): semi-transparent magenta
+                magenta_color = Image.new("RGBA", (w2, h2), (255, 0, 255, 80))
+                overlay_img.paste(magenta_color, (x2, y2), mask2)
+        except Exception as e:
+            print(f"Error drawing overlays for {view_name}: {e}")
+            overlay_img = decoded_images[view_name]
+
+        axes[plot_idx].imshow(overlay_img)
+        axes[plot_idx].set_title(f"Annotations & Patches ({view_name})")
+        axes[plot_idx].axis("on")
+
+        img_w, img_h = decoded_images[view_name].size
+        scale_x = img_w / 224.0
+        scale_y = img_h / 224.0
+
+        crops = view_annos.get("crops", [])
+        for crop in crops:
+            rect = patches.Rectangle(
+                (crop["x"] * scale_x, crop["y"] * scale_y),
+                crop["width"] * scale_x,
+                crop["height"] * scale_y,
+                linewidth=2,
+                edgecolor="lime",
+                facecolor="none",
+            )
+            axes[plot_idx].add_patch(rect)
+
+        segments = view_annos.get("segments", [])
+        for seg in segments:
+            x = seg.get("x", 0) * scale_x
+            y = seg.get("y", 0) * scale_y
+            axes[plot_idx].plot(
+                x, y, marker="x", color="red", markersize=8, markeredgewidth=2
+            )
+
+        vectors = view_annos.get("vectors", [])
+        for vec in vectors:
+            start_x = vec["start"][0] * scale_x
+            start_y = vec["start"][1] * scale_y
+            end_x = vec["end"][0] * scale_x
+            end_y = vec["end"][1] * scale_y
+            axes[plot_idx].annotate(
+                "",
+                xy=(end_x, end_y),
+                xytext=(start_x, start_y),
+                arrowprops=dict(
+                    arrowstyle="->", color="cyan", lw=2.5, mutation_scale=15
+                ),
+            )
+
+    plt.tight_layout()
+    output_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "debug_stage3_step.png"
+    )
+    plt.savefig(output_path)
+    plt.close()
+
+    # 2. goal states plot per view
+    for view_name, goal_data in goal_images.items():
+        images = goal_data.get("goal_frames", [])
+        if not images:
+            continue
+        fig_goals, axes_goals = plt.subplots(2, 2, figsize=(10, 10))
+        axes_goals = axes_goals.flatten()
+        names = ["left", "right", "top", "bottom"]
+        for idx, (name, img) in enumerate(zip(names, images)):
+            axes_goals[idx].imshow(img)
+            axes_goals[idx].set_title(
+                f"Goal State ({view_name}): Patch 1 on {name.capitalize()} of Patch 2"
+            )
+            axes_goals[idx].axis("off")
+        plt.tight_layout()
+        goals_output_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            f"debug_goal_states_{view_name}.png",
+        )
+        plt.savefig(goals_output_path)
+        plt.close()
+
+
+def save_stage3_goal_features_plots(goal_feature_maps):
+    """
+    Saves a 4x3 plot for each view containing the DINO, CLIP, and VGGT motion
+    representations for each of the 4 goal variants.
+    """
+    names = ["Left", "Right", "Top", "Bottom"]
+    for view_name, features_list in goal_feature_maps.items():
+        if len(features_list) < 4:
+            continue
+
+        fig, axes = plt.subplots(4, 3, figsize=(12, 16))
+        for row_idx, (name, maps) in enumerate(zip(names, features_list)):
+            # 1. DINO Attention map
+            ax_dino = axes[row_idx, 0]
+            ax_dino.imshow(maps["dino"], cmap="viridis")
+            ax_dino.set_title(f"{name} Goal - DINO Attn")
+            ax_dino.axis("off")
+
+            # 2. CLIP Similarity map
+            ax_clip = axes[row_idx, 1]
+            ax_clip.imshow(maps["clip"], cmap="viridis")
+            ax_clip.set_title(f"{name} Goal - CLIP Sim")
+            ax_clip.axis("off")
+
+            # 3. VGGT Motion Field map
+            ax_motion = axes[row_idx, 2]
+            ax_motion.imshow(maps["motion"], cmap="hot")
+            ax_motion.set_title(f"{name} Goal - VGGT Motion")
+            ax_motion.axis("off")
+
+        plt.tight_layout()
+        output_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            f"debug_goal_features_{view_name}.png",
+        )
+        plt.savefig(output_path)
+        plt.close()
