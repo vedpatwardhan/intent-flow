@@ -1,5 +1,4 @@
-import os
-import time
+import cv2
 import torch
 import numpy as np
 from PIL import Image
@@ -309,21 +308,102 @@ def extract_stage3_obs_features(payload):
 def construct_stage3_latent_goal_features(payload):
     """
     Constructs on-manifold target goal representation (s_target) by applying post-extraction
-    latent feature transformations across DINOv3, CLIP, and VGGT feature maps.
-    All input camera frames remain 100% clean, unblurred, and uncorrupted.
+    latent feature transformations across DINOv3, CLIP, and VGGT feature maps ONLY for views
+    that have active UI annotations (crops and intent vectors).
     """
     # 1. Extract clean base features from unblurred original camera frames
-    obs_dict, encoded_tuple = extract_stage3_obs_features(payload)
+    obs_dict, _ = extract_stage3_obs_features(payload)
 
     ui_annotations = getattr(payload, "ui_annotations", {}) or {}
-    crops = ui_annotations.get("crops", [])
-    vectors = ui_annotations.get("vectors", [])
 
-    # If annotations are available, apply post-extraction feature transformations
-    if len(crops) >= 2 and len(vectors) >= 1:
+    for view_name, view_annos in ui_annotations.items():
+        # Retrieve annotations for the view
+        crops = view_annos.get("crops", [])
+        segments = view_annos.get("segments", [])
+        vectors = view_annos.get("vectors", [])
+
+        # Transform only if view has at least 2 active annotations and 1 vector
+        active_annos = crops + segments
+        if len(active_annos) < 2 or len(vectors) < 1:
+            continue
+
+        # Sample and process first two annotations and first vector
+        p0_anno, p1_anno = active_annos[0], active_annos[1]
         vec = vectors[0]
+        view_features = obs_dict[view_name]["features"]
+        sam_mask_224 = view_features.get("task_isolated_features", {}).get(
+            "sam_mask_224", None
+        )
+
+        # Helper to extract segment binary mask and SAM component centroid
+        def extract_segment_mask_and_center(anno, sam_mask_224_in):
+            is_crop_type = "width" in anno and "height" in anno
+            if is_crop_type:
+                cx = anno["x"] + anno["width"] / 2.0
+                cy = anno["y"] + anno["height"] / 2.0
+                mask_224 = np.zeros((224, 224), dtype=np.float32)
+                x1 = min(223, max(0, int(anno["x"])))
+                y1 = min(223, max(0, int(anno["y"])))
+                x2 = min(224, max(x1 + 1, int(anno["x"] + anno["width"])))
+                y2 = min(224, max(y1 + 1, int(anno["y"] + anno["height"])))
+                mask_224[y1:y2, x1:x2] = 1.0
+                return mask_224, cx, cy
+
+            cx, cy = float(anno.get("x", 0)), float(anno.get("y", 0))
+            if sam_mask_224_in is not None and np.sum(sam_mask_224_in) > 0:
+                try:
+                    mask_np_224 = (
+                        np.array(sam_mask_224_in)
+                        if isinstance(sam_mask_224_in, torch.Tensor)
+                        else sam_mask_224_in
+                    )
+                    mask_uint8 = (mask_np_224 > 0).astype(np.uint8) * 255
+                    num_labels, labels = cv2.connectedComponents(mask_uint8)
+
+                    cx_scaled = min(223, max(0, int(cx)))
+                    cy_scaled = min(223, max(0, int(cy)))
+                    lbl = labels[cy_scaled, cx_scaled]
+
+                    if lbl == 0:
+                        window = labels[
+                            max(0, cy_scaled - 5) : min(224, cy_scaled + 6),
+                            max(0, cx_scaled - 5) : min(224, cx_scaled + 6),
+                        ]
+                        non_zero = window[window > 0]
+                        if len(non_zero) > 0:
+                            lbl = non_zero[0]
+
+                    if lbl > 0:
+                        segment_mask_224 = (labels == lbl).astype(np.float32)
+                        indices = np.argwhere(segment_mask_224 > 0)
+                        if len(indices) > 0:
+                            y_min, x_min = indices.min(axis=0)
+                            y_max, x_max = indices.max(axis=0)
+                            cx = (x_min + x_max) / 2.0
+                            cy = (y_min + y_max) / 2.0
+                        return segment_mask_224, cx, cy
+                except Exception as e:
+                    print(f"Error extracting SAM component mask: {e}")
+
+            mask_224 = np.zeros((224, 224), dtype=np.float32)
+            px = min(223, max(0, int(cx)))
+            py = min(223, max(0, int(cy)))
+            mask_224[py, px] = 1.0
+            return mask_224, cx, cy
+
+        p0_mask_224, c0_x, c0_y = extract_segment_mask_and_center(p0_anno, sam_mask_224)
+        p1_mask_224, c1_x, c1_y = extract_segment_mask_and_center(p1_anno, sam_mask_224)
         start_x, start_y = vec["start"][0], vec["start"][1]
         end_x, end_y = vec["end"][0], vec["end"][1]
+
+        # Vector-to-Patch Distance Matching (Start vs End Swapping)
+        # Ensure p0 is strictly closest to vector start (moving source: Hand)
+        d0_start = (c0_x - start_x) ** 2 + (c0_y - start_y) ** 2
+        d1_start = (c1_x - start_x) ** 2 + (c1_y - start_y) ** 2
+        if d1_start < d0_start:
+            p0_anno, p1_anno = p1_anno, p0_anno
+            p0_mask_224, p1_mask_224 = p1_mask_224, p0_mask_224
+            c0_x, c0_y, c1_x, c1_y = c1_x, c1_y, c0_x, c0_y
 
         # Normalized movement vector
         dx = end_x - start_x
@@ -331,56 +411,44 @@ def construct_stage3_latent_goal_features(payload):
         dist = np.sqrt(dx * dx + dy * dy) + 1e-8
         dir_x, dir_y = dx / dist, dy / dist
 
-        # Extract 14x14 patch coordinates for Hand (Segment 0) and Target (Segment 1)
+        # Convert 224x224 SAM centroids to 14x14 grid patch indices
         grid_h, grid_w = 14, 14
-        h_start, h_end = int(start_y * grid_h), int(end_y * grid_h)
-        w_start, w_end = int(start_x * grid_w), int(end_x * grid_w)
+        h_start = min(13, max(0, int((c0_y / 224.0) * grid_h)))
+        w_start = min(13, max(0, int((c0_x / 224.0) * grid_w)))
+        h_end = min(13, max(0, int((c1_y / 224.0) * grid_h)))
+        w_end = min(13, max(0, int((c1_x / 224.0) * grid_w)))
 
-        for view_name in obs_dict:
-            view_features = obs_dict[view_name]["features"]
-            sam_mask_14 = view_features["task_isolated_features"]["sam_mask"]
-            combined_mask_224 = view_features["task_isolated_features"][
-                "combined_mask_224"
-            ]
+        # --- A. VGGT Latent Transformation (Forward Trajectory Field Overwrite) ---
+        # Overwrite velocity vectors strictly over p0_mask_224 (moving hand segment)
+        vggt_tensor = obs_dict[view_name]["vggt"]  # [1, 224, 224]
+        mask_224_tensor = torch.tensor(p0_mask_224, dtype=torch.float32, device=device)
+        trajectory_field_x = torch.full_like(vggt_tensor, dir_x) * mask_224_tensor
+        trajectory_field_y = torch.full_like(vggt_tensor, dir_y) * mask_224_tensor
+        vggt_transformed = vggt_tensor + 0.5 * (trajectory_field_x + trajectory_field_y)
+        obs_dict[view_name]["vggt"] = vggt_transformed
 
-            # --- A. VGGT Latent Transformation (Forward Trajectory Field Overwrite) ---
-            # Overwrite velocity vectors for hand patch tokens in VGGT's 224x224 feature matrix
-            vggt_tensor = obs_dict[view_name]["vggt"]  # [1, 224, 224]
-            mask_224_tensor = torch.tensor(
-                combined_mask_224, dtype=torch.float32, device=device
-            )
-            trajectory_field_x = torch.full_like(vggt_tensor, dir_x) * mask_224_tensor
-            trajectory_field_y = torch.full_like(vggt_tensor, dir_y) * mask_224_tensor
-            vggt_transformed = vggt_tensor + 0.5 * (
-                trajectory_field_x + trajectory_field_y
-            )
-            obs_dict[view_name]["vggt"] = vggt_transformed
+        # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
+        dino_subspace = view_features["task_isolated_features"]["dino_subspace"]
+        dino_grid = dino_subspace.view(14, 14).clone()
 
-            # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
-            # Interpolate/blend hand feature tokens into intermediate background patch tokens
-            dino_subspace = view_features["task_isolated_features"]["dino_subspace"]
-            dino_grid = dino_subspace.view(14, 14).clone()
+        num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
+        if num_bridge_steps > 1:
+            r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
+            c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
+            hand_val = dino_grid[min(h_start, 13), min(w_start, 13)].item()
 
-            # Interpolate along line segment from (h_start, w_start) to (h_end, w_end)
-            num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
-            if num_bridge_steps > 1:
-                r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
-                c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
-                hand_val = dino_grid[min(h_start, 13), min(w_start, 13)].item()
+            for step_i in range(num_bridge_steps):
+                r = min(max(r_indices[step_i], 0), 13)
+                c = min(max(c_indices[step_i], 0), 13)
+                alpha = (step_i + 1) / float(num_bridge_steps)
+                dino_grid[r, c] = (1.0 - alpha) * hand_val + alpha * dino_grid[r, c]
 
-                for step_i in range(num_bridge_steps):
-                    r = min(max(r_indices[step_i], 0), 13)
-                    c = min(max(c_indices[step_i], 0), 13)
-                    alpha = (step_i + 1) / float(num_bridge_steps)
-                    dino_grid[r, c] = (1.0 - alpha) * hand_val + alpha * dino_grid[r, c]
-
-            # Re-flatten and save transformed DINO subspace features
-            dino_transformed_subspace = dino_grid.flatten()[:384]
-            dino_transformed_subspace = pad_features(dino_transformed_subspace, 384)
-            view_features["task_isolated_features"][
-                "dino_subspace_transformed"
-            ] = dino_transformed_subspace
-            obs_dict[view_name]["vision"] = dino_transformed_subspace.unsqueeze(0)
+        dino_transformed_subspace = dino_grid.flatten()[:384]
+        dino_transformed_subspace = pad_features(dino_transformed_subspace, 384)
+        view_features["task_isolated_features"][
+            "dino_subspace_transformed"
+        ] = dino_transformed_subspace
+        obs_dict[view_name]["vision"] = dino_transformed_subspace.unsqueeze(0)
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))

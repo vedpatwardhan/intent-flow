@@ -148,226 +148,6 @@ def encode_obs_to_latent(obs_dict, state):
         return out
 
 
-def construct_goal_states(obs_dict, ui_annotations):
-    """
-    Construct goal state representations for each annotated view by rearranging crops/segments according to arrows.
-    Uses OpenCV inpainting to erase the moving patch's original position, and applies a light
-    Gaussian blur to the background. Works with both rectangular crops and circular segment masks.
-    """
-    if not obs_dict or not ui_annotations:
-        return {}
-
-    goal_states_by_view = {}
-    for view_name, view_annos in ui_annotations.items():
-        features = obs_dict[view_name]["features"]
-        pil_frame = features.get("pil_frame")
-        if pil_frame is None:
-            continue
-
-        img_w, img_h = pil_frame.size
-
-        crops = view_annos.get("crops", [])
-        segments = view_annos.get("segments", [])
-        vectors = view_annos.get("vectors", [])
-
-        active_annos = crops + segments
-        if len(active_annos) >= 2:
-            p0_anno, p1_anno = active_annos[0], active_annos[1]
-        else:
-            # Default mock patches (crops fallback)
-            p0_anno = {
-                "x": int(224 * 0.3),
-                "y": int(224 * 0.4),
-                "width": int(224 * 0.15),
-                "height": int(224 * 0.15),
-            }
-            p1_anno = {
-                "x": int(224 * 0.55),
-                "y": int(224 * 0.4),
-                "width": int(224 * 0.15),
-                "height": int(224 * 0.15),
-            }
-
-        task_isolated = features.get("task_isolated_features", {})
-        sam_mask_224 = task_isolated.get("sam_mask_224", None)
-
-        # Helper to extract patch and its binary alpha mask
-        def extract_info(anno):
-            scale_x = img_w / 224.0
-            scale_y = img_h / 224.0
-            is_crop_type = "width" in anno
-            if is_crop_type:
-                x = int(anno["x"] * scale_x)
-                y = int(anno["y"] * scale_y)
-                w = int(anno["width"] * scale_x)
-                h = int(anno["height"] * scale_y)
-                patch = pil_frame.crop((x, y, x + w, y + h))
-                mask = Image.new("L", patch.size, 255)
-            else:
-                # Try to query the high-quality SAM segment mask
-                if sam_mask_224 is not None and np.sum(sam_mask_224) > 0:
-                    try:
-                        mask_np_224 = (
-                            np.array(sam_mask_224)
-                            if isinstance(sam_mask_224, torch.Tensor)
-                            else sam_mask_224
-                        )
-                        mask_uint8 = (mask_np_224 > 0).astype(np.uint8) * 255
-                        num_labels, labels = cv2.connectedComponents(mask_uint8)
-
-                        cx_scaled = min(223, max(0, int(anno["x"])))
-                        cy_scaled = min(223, max(0, int(anno["y"])))
-                        lbl = labels[cy_scaled, cx_scaled]
-
-                        if lbl == 0:
-                            # Scan a small local window if exact click landed on a zero edge
-                            window = labels[
-                                max(0, cy_scaled - 5) : min(224, cy_scaled + 6),
-                                max(0, cx_scaled - 5) : min(224, cx_scaled + 6),
-                            ]
-                            non_zero = window[window > 0]
-                            if len(non_zero) > 0:
-                                lbl = non_zero[0]
-
-                        if lbl > 0:
-                            segment_mask_224 = (labels == lbl).astype(np.float32)
-                            mask_pil = Image.fromarray(
-                                (segment_mask_224 * 255).astype(np.uint8)
-                            )
-                            mask_resized = mask_pil.resize(
-                                (img_w, img_h), Image.NEAREST
-                            )
-                            mask_np = np.array(mask_resized)
-
-                            indices = np.argwhere(mask_np > 0)
-                            y_min, x_min = indices.min(axis=0)
-                            y_max, x_max = indices.max(axis=0)
-
-                            x = int(x_min)
-                            y = int(y_min)
-                            w = int(x_max - x_min + 1)
-                            h = int(y_max - y_min + 1)
-
-                            patch = pil_frame.crop((x, y, x + w, y + h))
-                            mask = mask_resized.crop((x, y, x + w, y + h))
-                        else:
-                            raise ValueError("No matching component label found")
-                    except Exception as e:
-                        print(f"Fallback to circle due to components error: {e}")
-                        cx = int(anno["x"] * scale_x)
-                        cy = int(anno["y"] * scale_y)
-                        r = int(25 * scale_x)
-                        x = max(0, cx - r)
-                        y = max(0, cy - r)
-                        w = min(img_w - x, 2 * r)
-                        h = min(img_h - y, 2 * r)
-                        patch = pil_frame.crop((x, y, x + w, y + h))
-                        mask = Image.new("L", (w, h), 0)
-                        draw = ImageDraw.Draw(mask)
-                        draw.ellipse(
-                            (cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255
-                        )
-                else:
-                    # Fallback circle around click point
-                    cx = int(anno["x"] * scale_x)
-                    cy = int(anno["y"] * scale_y)
-                    r = int(25 * scale_x)
-                    x = max(0, cx - r)
-                    y = max(0, cy - r)
-                    w = min(img_w - x, 2 * r)
-                    h = min(img_h - y, 2 * r)
-                    patch = pil_frame.crop((x, y, x + w, y + h))
-                    mask = Image.new("L", (w, h), 0)
-                    draw = ImageDraw.Draw(mask)
-                    draw.ellipse(
-                        (cx - r - x, cy - r - y, cx + r - x, cy + r - y), fill=255
-                    )
-            return patch, mask, x, y, w, h
-
-        try:
-            patch1, mask1, x1, y1, w1, h1 = extract_info(p0_anno)
-            patch2, mask2, x2, y2, w2, h2 = extract_info(p1_anno)
-        except Exception as e:
-            print(f"Extraction failed for view {view_name}: {e}")
-            continue
-
-        # Decide direction based on arrow vector
-        scale_x = img_w / 224.0
-        scale_y = img_h / 224.0
-        if vectors and len(vectors) > 0:
-            vec = vectors[0]
-            start_x = vec["start"][0] * scale_x
-            start_y = vec["start"][1] * scale_y
-
-            ctr0_x = x1 + w1 / 2.0
-            ctr0_y = y1 + h1 / 2.0
-            ctr1_x = x2 + w2 / 2.0
-            ctr1_y = y2 + h2 / 2.0
-
-            d0_start = (ctr0_x - start_x) ** 2 + (ctr0_y - start_y) ** 2
-            d1_start = (ctr1_x - start_x) ** 2 + (ctr1_y - start_y) ** 2
-
-            if d1_start < d0_start:
-                patch1, mask1, x1, y1, w1, h1, patch2, mask2, x2, y2, w2, h2 = (
-                    patch2,
-                    mask2,
-                    x2,
-                    y2,
-                    w2,
-                    h2,
-                    patch1,
-                    mask1,
-                    x1,
-                    y1,
-                    w1,
-                    h1,
-                )
-
-        # Inpaint original moving patch location
-        try:
-            cv_img = cv2.cvtColor(np.array(pil_frame), cv2.COLOR_RGB2BGR)
-            inpaint_mask = np.zeros(cv_img.shape[:2], dtype=np.uint8)
-            cv2.rectangle(inpaint_mask, (x1, y1), (x1 + w1, y1 + h1), 255, -1)
-            inpainted_cv = cv2.inpaint(
-                cv_img, inpaint_mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA
-            )
-            inpainted_rgb = cv2.cvtColor(inpainted_cv, cv2.COLOR_BGR2RGB)
-            clean_bg = Image.fromarray(inpainted_rgb)
-        except Exception as e:
-            print(f"Inpainting failed in construct_goal_states: {e}")
-            clean_bg = pil_frame
-
-        blurred_bg = clean_bg.filter(ImageFilter.GaussianBlur(radius=10))
-
-        arrangements = [
-            ("left", x2 - w1, y2 + (h2 - h1) // 2),
-            ("right", x2 + w2, y2 + (h2 - h1) // 2),
-            ("top", x2 + (w2 - w1) // 2, y2 - h1),
-            ("bottom", x2 + (w2 - w1) // 2, y2 + h2),
-        ]
-
-        # Construct the initial frame: both segments at their original positions
-        init_canvas = blurred_bg.copy()
-        init_canvas.paste(patch2, (x2, y2), mask2)
-        init_canvas.paste(patch1, (x1, y1), mask1)
-
-        goal_arrangements = []
-        for name, x1_new, y1_new in arrangements:
-            canvas = blurred_bg.copy()
-            canvas.paste(patch2, (x2, y2), mask2)
-            x1_clip = max(0, min(x1_new, img_w - w1))
-            y1_clip = max(0, min(y1_new, img_h - h1))
-            canvas.paste(patch1, (x1_clip, y1_clip), mask1)
-            goal_arrangements.append(canvas)
-
-        goal_states_by_view[view_name] = {
-            "init_frame": init_canvas,
-            "goal_frames": goal_arrangements,
-        }
-
-    return goal_states_by_view
-
-
 def ensure_stage3_models():
     import colab_server_pkg.models_state as state
 
@@ -589,44 +369,36 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         s_target = s_target.detach()
         embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
 
-        # --- COMBINATORIAL OBSERVATION MINIMAX SEARCH BLOCK ---
-        # 4 distinct image configurations evaluated inside the wrapper
-        N_obs_variants = 4
-
-        # Invoke the attacker pass to construct the entire grid natively
-        with torch.no_grad():
-            with torch.amp.autocast("cuda"):
-                perturbed_payloads, s_t_ensemble, a_candidates = state.stage3_models[
-                    "attacker"
-                ].generate_stochastic_ensemble_pass(
-                    flow_matcher=state.stage3_models["flow_matcher"],
-                    raw_data=payload,
-                    load_image_fn=decode_base64_image,
-                    extract_obs_features_fn=extract_stage3_obs_features,
-                    encode_obs_fn=encode_obs_to_latent,
-                    state=state,
-                    s_target=s_target,
-                    steering_timelines=steering_timelines,
-                    embodiment_id=embodiment_id,
-                    ensemble_size=N_obs_variants,
-                    horizon=horizon,
-                )
-
-        # Capture the true 16-batch size returned directly out of your attacker pass
-        ensemble_size = a_candidates.shape[0]  # 16
-
-        # Learning rate for action adjustment and timeline rollback scale
-        eta = 0.2
-        timeline_advance_rate = 0.05
-        error_threshold = 0.02
-
-        # Expand target constraints and master timelines to match the full 16 execution slots
+        # --- 16-CANDIDATE STEPNFT STOCHASTIC NOISE GENERATION BLOCK ---
+        # Comment out observation-space visual perturbations (blurring/exposure/noise)
+        # and generate all 16 candidate trajectories directly using StepNFT stochastic noise.
+        ensemble_size = 16
+        s_t_ensemble = s_t.expand(ensemble_size, -1)
         s_target_expanded = s_target.expand(ensemble_size, -1)
+        embodiment_id_expanded = embodiment_id.expand(ensemble_size)
+
         steering_timelines_expanded = (
             steering_timelines.expand(ensemble_size, -1)
             .view(ensemble_size, horizon, joint_dim)
             .clone()
         )
+
+        with torch.no_grad():
+            with torch.amp.autocast("cuda"):
+                a_candidates = state.stage3_models["flow_matcher"].sample_with_steering(
+                    s_t_ensemble,
+                    s_target_expanded,
+                    embodiment_id=embodiment_id_expanded,
+                    horizon=horizon,
+                    num_steps=10,
+                    steering_timelines=steering_timelines_expanded,
+                    step_nft_scale=0.45,
+                )
+
+        # Learning rate for action adjustment and timeline rollback scale
+        eta = 0.2
+        timeline_advance_rate = 0.05
+        error_threshold = 0.02
 
         # Create embodiment-aware action mask (first 32 GR-1 active joints)
         action_mask = torch.zeros(1, 1, joint_dim, device=device)
