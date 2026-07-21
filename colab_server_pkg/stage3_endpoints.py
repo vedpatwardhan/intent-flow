@@ -433,24 +433,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             s_next_pred = state.stage3_models["predictor"](s_t_ensemble, z_action_16)
 
-            # [16, 1, 512]
-            s_next_pred_expanded = s_next_pred.unsqueeze(1)
-            s_next_pred_scaled = s_next_pred_expanded / tau
-
-            # Expand the 4 RAW foveated goal orientations [16, 4, 512]
-            stacked_goals_expanded = stacked_goals.expand(ensemble_size, -1, -1)
-
-            # Query the 4 goal perspectives using the scaled predicted next state vector
-            s_goal_pred_attn, _ = state.stage3_models["goal_attention"](
-                s_next_pred_scaled, stacked_goals_expanded, stacked_goals_expanded
-            )
-            s_goal_pred_attn = s_goal_pred_attn.squeeze(1)  # Shape: [16, 512]
-
-            # Project the foveated pool back into aligned task space [16, 512]
-            s_goal_pred = state.stage3_models["latent_adapter"](s_goal_pred_attn)
-
-            # Compute energy and gradient (distance to goal)
-            energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
+            # Direct energy computation between predicted next state and target goal anchor
+            energy = torch.mean((s_next_pred - s_target_expanded) ** 2)
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
             # Normalize gradients per ensemble instance and mask padding channels
@@ -517,10 +501,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             json.dump(steering_history, f, indent=2)
         print(f"📊 [Telemetry] Saved steering trajectory JSON: {steering_json_path}")
 
-        # Extract only the immediate multi-step prediction slice if needed,
-        # or output the unrolled trajectory block back to your motor script loader!
+        # Compute per-candidate final energy scores directly against target anchor
         with torch.no_grad():
-            final_energies = torch.mean((s_goal_pred - s_target_expanded) ** 2, dim=-1)
+            final_energies = torch.mean((s_next_pred - s_target_expanded) ** 2, dim=-1)
 
         # Log real steering telemetry metrics to Weights & Biases
         if HAS_WANDB:
@@ -562,7 +545,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             "action": final_actions.cpu().numpy().tolist(),
             "energy": final_energies.cpu().numpy().tolist(),
             "s_target": s_target.cpu().numpy().tolist(),
-            "perturbed_payloads": [p.dict() for p in perturbed_payloads],
             "active_node_key": "skill_0",
         }
     except Exception as e:
@@ -826,16 +808,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
-            # 3. Goal Attention Loss
-            tau = 10.0  # Temperature scale to match inference
-            s_next_pred_expanded = s_next_pred.unsqueeze(1)
-            s_next_pred_scaled = s_next_pred_expanded / tau
-            s_target_expanded = s_target_batch.unsqueeze(1)
-            s_goal_pred, _ = state.stage3_models["goal_attention"](
-                s_next_pred_scaled, s_target_expanded, s_target_expanded
-            )
-            s_goal_pred = s_goal_pred.squeeze(1)
-            goal_attention_loss = F.mse_loss(s_goal_pred, s_target_batch)
+            # 3. Direct Goal Target Alignment Loss
+            goal_attention_loss = F.mse_loss(s_next_pred, s_target_batch)
 
             # 4. CASA (Contrastive Action-State Alignment) Loss integration from Stage 2 SFT
             z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
