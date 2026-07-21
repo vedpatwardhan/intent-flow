@@ -196,8 +196,8 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_epochs = 5
-    max_steps = 5
+    num_epochs = 1
+    max_steps = 1
 
     print(
         f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."
@@ -252,6 +252,8 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
+                "episode_idx": ep_idx,
+                "step_idx": env_step,
             }
             print(
                 f"Frame History: {len(frame_history)}, "
@@ -333,12 +335,12 @@ async def run_stage3_training_loop(
                     action_32_clamped = np.clip(action_32, -1.0, 1.0)
 
                     # 1. Map normalized action candidate to target qpos via canonical helper
-                    target_q = eval_sim.process_target_32(action_32_clamped)
+                    eval_sim.process_target_32(action_32_clamped)
 
                     # 2. Dispatch action via canonical simulation method (fast 2-step evaluation)
                     eval_sim.dispatch_action(
                         action_32_norm=action_32_clamped,
-                        target_q=target_q,
+                        target_q=eval_sim.last_target_q,
                         n_steps=2,
                         render_freq=0,
                         reset_start=False,

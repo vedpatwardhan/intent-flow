@@ -659,6 +659,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             .clone()
         )
 
+        # Create embodiment-aware action mask (first 32 GR-1 active joints)
+        action_mask = torch.zeros(1, 1, joint_dim, device=device)
+        action_mask[..., :32] = 1.0
+
+        # Mask initial candidate actions to ensure padding channels start at zero
+        a_candidates = a_candidates * action_mask
+
         steering_history = {
             "episode_idx": payload.episode_idx,
             "step_idx": payload.step_idx,
@@ -705,10 +712,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             energy = torch.mean((s_goal_pred - s_target_expanded) ** 2)
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
-            # Normalize gradients per ensemble instance to stabilize steering step size
+            # Normalize gradients per ensemble instance and mask padding channels
             # [16, 7, 58]
             grad_norm = grad_a.norm(dim=(1, 2), keepdim=True) + 1e-8
-            grad_a_normalized = grad_a / grad_norm
+            grad_a_normalized = (grad_a / grad_norm) * action_mask
 
             # Masked Energy Guidance matching 3D coordinates
             # Dynamically calculate the guidance mask (shape: [4, 7, 58])
@@ -716,8 +723,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Sculpt action parameters along the tracking vector field
             diff = eta * grad_a_normalized * t_j
-            print(f"diff bounds: {diff.min()} {diff.max()}")
-            a_candidates = a_candidates - diff
+            a_candidates = (a_candidates - diff) * action_mask
 
             # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
             # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]

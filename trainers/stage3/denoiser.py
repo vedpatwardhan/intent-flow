@@ -77,8 +77,15 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
     ):
         batch_size = s_t.size(0)
 
-        # [B, H, action_dim]
-        x_t = torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
+        # Create embodiment-aware action mask (first 32 GR-1 active joints)
+        action_mask = torch.zeros(1, 1, self.action_dim, device=s_t.device)
+        action_mask[..., :32] = 1.0
+
+        # [B, H, action_dim] initialized with 0.0s for padding channels
+        x_t = (
+            torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
+            * action_mask
+        )
 
         print(
             f"📊 [ODE Init] x_0 Standard Normal Bounds -> Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
@@ -105,21 +112,21 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             # [B, H, action_dim]
             v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
 
-            # 2. Compute the direct contribution of velocity to the step update
-            v_step = v_t * dt
+            # 2. Compute the direct contribution of velocity to the step update (zero out padding)
+            v_step = (v_t * dt) * action_mask
 
             # 3. Inspect Stochastic Noise Injection
             noise_min, noise_max = 0.0, 0.0
             if step_nft_scale > 0.0 and i < num_steps - 1:
                 raw_noise = torch.randn_like(x_t)
                 steerable_mask = (t_vals < 1.0).float()  # contains 1s if grid is 0s
-                noise_step = raw_noise * step_nft_scale * steerable_mask
+                noise_step = (raw_noise * step_nft_scale * steerable_mask) * action_mask
                 noise_min, noise_max = noise_step.min().item(), noise_step.max().item()
 
-                # Apply updates
-                x_t = x_t + v_step + noise_step
+                # Apply updates and clamp trailing padding channels to zero
+                x_t = (x_t + v_step + noise_step) * action_mask
             else:
-                x_t = x_t + v_step
+                x_t = (x_t + v_step) * action_mask
 
             if i == 0 or (i + 1) % (num_steps // 2) == 0:
                 print(
