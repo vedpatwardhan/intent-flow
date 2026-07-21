@@ -461,10 +461,10 @@ def construct_stage3_latent_goal_features(payload):
 
         # --- C. CLIP Latent Transformation (Segment Transfer) ---
         # Copy Segment 1 (Hand) features to the target position on the 14x14 text feature grid
-        text_feat_grid = torch.tensor(
-            view_features["text_feat"], dtype=torch.float32, device=device
+        clip_sim_grid = torch.tensor(
+            view_features["clip_sim"], dtype=torch.float32, device=device
         ).clone()
-        text_feat_transformed = text_feat_grid.clone()
+        clip_sim_transformed = clip_sim_grid.clone()
 
         # Interpolate hand mask to 14x14 grid size
         p0_mask_14 = (
@@ -487,11 +487,11 @@ def construct_stage3_latent_goal_features(payload):
         for r, c in zip(h_indices, w_indices):
             target_r = min(13, max(0, r + h_offset))
             target_c = min(13, max(0, c + w_offset))
-            text_feat_transformed[target_r, target_c] = text_feat_grid[r, c]
+            clip_sim_transformed[target_r, target_c] = clip_sim_grid[r, c]
 
         view_features["task_isolated_features"][
-            "text_feat_transformed"
-        ] = text_feat_transformed.cpu().numpy()
+            "clip_sim_transformed"
+        ] = clip_sim_transformed.cpu().numpy()
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))

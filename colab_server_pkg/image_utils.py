@@ -400,16 +400,16 @@ def save_stage3_goal_features_plots(
         axes[3].axis("off")
 
         # --- Panel 5: Transformed CLIP (Segment Transfer) ---
-        text_feat = view_features["task_isolated_features"]["text_feat_transformed"]
-        text_feat = np.array(text_feat).reshape(14, 14)
-        text_feat_norm = (text_feat - text_feat.min()) / (
-            text_feat.max() - text_feat.min() + 1e-8
+        clip_sim = view_features["task_isolated_features"]["clip_sim_transformed"]
+        clip_sim = np.array(clip_sim).reshape(14, 14)
+        clip_sim_norm = (clip_sim - clip_sim.min()) / (
+            clip_sim.max() - clip_sim.min() + 1e-8
         )
-        text_feat_norm = 1.0 - text_feat_norm
+        clip_sim_norm = 1.0 - clip_sim_norm
 
         axes[4].imshow(clean_image_pil)
         axes[4].imshow(
-            text_feat_norm,
+            clip_sim_norm,
             cmap="jet",
             alpha=0.45,
             extent=[0, img_w, img_h, 0],
