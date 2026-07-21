@@ -313,8 +313,17 @@ def save_stage3_goal_features_plots(
     4. Transformed VGGT Motion Trajectory Field Overlay (Forward Velocity Vectors)
     """
     try:
-        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
         img_w, img_h = clean_image_pil.size
+        scale_x = img_w / 224.0
+        scale_y = img_h / 224.0
+
+        # Retrieve annotations specifically for this view
+        view_annos = (
+            ui_annotations.get(view_name, {})
+            if isinstance(ui_annotations.get(view_name), dict)
+            else ui_annotations
+        )
 
         # --- Panel 1: Original Clean Base Image ---
         axes[0].imshow(clean_image_pil)
@@ -324,10 +333,8 @@ def save_stage3_goal_features_plots(
         # --- Panel 2: UI Drawing Overlay (Segments & Arrow) ---
         overlay_img = clean_image_pil.copy().convert("RGBA")
         draw = ImageDraw.Draw(overlay_img)
-        scale_x = img_w / 224.0
-        scale_y = img_h / 224.0
 
-        crops = ui_annotations.get("crops", [])
+        crops = view_annos.get("crops", [])
         for crop in crops:
             cx1 = crop["x"] * scale_x
             cy1 = crop["y"] * scale_y
@@ -335,7 +342,15 @@ def save_stage3_goal_features_plots(
             cy2 = (crop["y"] + crop["height"]) * scale_y
             draw.rectangle([cx1, cy1, cx2, cy2], outline="lime", width=3)
 
-        vectors = ui_annotations.get("vectors", [])
+        segments = view_annos.get("segments", [])
+        for seg in segments:
+            sx = seg["x"] * scale_x
+            sy = seg["y"] * scale_y
+            draw.ellipse(
+                [sx - 5, sy - 5, sx + 5, sy + 5], fill="red", outline="white", width=2
+            )
+
+        vectors = view_annos.get("vectors", [])
         for vec in vectors:
             sx = vec["start"][0] * scale_x
             sy = vec["start"][1] * scale_y
@@ -347,19 +362,13 @@ def save_stage3_goal_features_plots(
         axes[1].set_title("2. UI Drawing Overlay (Segments & Arrow)", fontsize=10)
         axes[1].axis("off")
 
-        # --- Panel 3: Transformed DINOv3 Feature Map Overlay ---
-        view_features = obs_dict.get(view_name, {}).get("features", {})
-        dino_subspace = view_features["task_isolated_features"][
-            "dino_subspace_transformed"
-        ][:196]
-
-        if dino_subspace is not None and torch.is_tensor(dino_subspace):
-            dino_map = dino_subspace.detach().cpu().numpy().reshape(14, 14)
-            dino_norm = (dino_map - dino_map.min()) / (
-                dino_map.max() - dino_map.min() + 1e-8
-            )
-        else:
-            dino_norm = np.zeros((14, 14))
+        # --- Panel 3: Transformed DINOv3 Feature Map Overlay (Full attention + Arm Bridge) ---
+        view_features = obs_dict[view_name]["features"]
+        dino_map = view_features["task_isolated_features"]["dino_attn_transformed"]
+        dino_map = np.array(dino_map).reshape(14, 14)
+        dino_norm = (dino_map - dino_map.min()) / (
+            dino_map.max() - dino_map.min() + 1e-8
+        )
 
         axes[2].imshow(clean_image_pil)
         axes[2].imshow(
@@ -372,15 +381,12 @@ def save_stage3_goal_features_plots(
         axes[2].set_title("3. Transformed DINOv3 (Latent Arm Bridge)", fontsize=10)
         axes[2].axis("off")
 
-        # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay ---
-        vggt_tensor = obs_dict.get(view_name, {}).get("vggt", None)
-        if vggt_tensor is not None and torch.is_tensor(vggt_tensor):
-            vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
-            vggt_norm = (vggt_map - vggt_map.min()) / (
-                vggt_map.max() - vggt_map.min() + 1e-8
-            )
-        else:
-            vggt_norm = np.zeros((224, 224))
+        # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay (Full + Quiver Flow) ---
+        vggt_tensor = obs_dict[view_name]["vggt"]
+        vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
+        vggt_norm = (vggt_map - vggt_map.min()) / (
+            vggt_map.max() - vggt_map.min() + 1e-8
+        )
 
         axes[3].imshow(clean_image_pil)
         axes[3].imshow(
@@ -390,8 +396,67 @@ def save_stage3_goal_features_plots(
             extent=[0, img_w, img_h, 0],
             interpolation="bilinear",
         )
+
+        # Plot 2D flow direction quiver arrow over hand center
+        if len(vectors) > 0:
+            vec = vectors[0]
+            dx = vec["end"][0] - vec["start"][0]
+            dy = vec["end"][1] - vec["start"][1]
+            v_len = np.sqrt(dx * dx + dy * dy) + 1e-8
+            dir_x, dir_y = dx / v_len, dy / v_len
+
+            # Retrieve active annotations to find hand center
+            active_annos = crops + segments
+            if len(active_annos) >= 2:
+                p0 = active_annos[0]
+                if "width" in p0 and "height" in p0:
+                    px = p0["x"] + p0["width"] / 2.0
+                    py = p0["y"] + p0["height"] / 2.0
+                else:
+                    px, py = float(p0.get("x", 0)), float(p0.get("y", 0))
+
+                # Overlay vector quiver arrow (Note: Matplotlib Y axis is inverted relative to PIL, so -dir_y)
+                axes[3].quiver(
+                    px * scale_x,
+                    py * scale_y,
+                    dir_x,
+                    -dir_y,
+                    color="cyan",
+                    scale=4,
+                    scale_units="width",
+                    width=0.015,
+                )
+
         axes[3].set_title("4. Transformed VGGT (Trajectory Field)", fontsize=10)
         axes[3].axis("off")
+
+        # --- Panel 5: Transformed CLIP (Segment Transfer) ---
+        clip_map = view_features.get("clip_sim_transformed", None)
+        if clip_map is not None:
+            clip_map = np.array(clip_map).reshape(14, 14)
+            clip_norm = (clip_map - clip_map.min()) / (
+                clip_map.max() - clip_map.min() + 1e-8
+            )
+        else:
+            base_clip = view_features.get("clip_sim", None)
+            if base_clip is not None:
+                clip_map = np.array(base_clip).reshape(14, 14)
+                clip_norm = (clip_map - clip_map.min()) / (
+                    clip_map.max() - clip_map.min() + 1e-8
+                )
+            else:
+                clip_norm = np.zeros((14, 14))
+
+        axes[4].imshow(clean_image_pil)
+        axes[4].imshow(
+            clip_norm,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[4].set_title("5. Transformed CLIP (Segment Transfer)", fontsize=10)
+        axes[4].axis("off")
 
         plt.tight_layout()
         output_path = os.path.join(

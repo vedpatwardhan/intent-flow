@@ -428,8 +428,10 @@ def construct_stage3_latent_goal_features(payload):
         obs_dict[view_name]["vggt"] = vggt_transformed
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
-        dino_subspace = view_features["task_isolated_features"]["dino_subspace"]
-        dino_grid = dino_subspace[:196].view(14, 14).clone()
+        # Interpolate hand features into intermediate background patch tokens on the full unmasked DINO grid
+        dino_grid = torch.tensor(
+            view_features["dino_attn"], dtype=torch.float32, device=device
+        ).clone()
 
         num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
         if num_bridge_steps > 1:
@@ -443,12 +445,45 @@ def construct_stage3_latent_goal_features(payload):
                 alpha = (step_i + 1) / float(num_bridge_steps)
                 dino_grid[r, c] = (1.0 - alpha) * hand_val + alpha * dino_grid[r, c]
 
-        dino_transformed_subspace = dino_grid.flatten()[:384]
-        dino_transformed_subspace = pad_features(dino_transformed_subspace, 384)
+        # Re-flatten and save transformed DINO features
+        dino_transformed = dino_grid.flatten()[:384]
+        dino_transformed = pad_features(dino_transformed, 384)
         view_features["task_isolated_features"][
-            "dino_subspace_transformed"
-        ] = dino_transformed_subspace
-        obs_dict[view_name]["vision"] = dino_transformed_subspace.unsqueeze(0)
+            "dino_attn_transformed"
+        ] = dino_grid.cpu().numpy()
+        obs_dict[view_name]["vision"] = dino_transformed.unsqueeze(0)
+
+        # --- C. CLIP Latent Transformation (Segment Transfer) ---
+        # Copy Segment 1 (Hand) features to the target position on the 14x14 CLIP similarity map
+        clip_grid = torch.tensor(
+            view_features["clip_sim"], dtype=torch.float32, device=device
+        ).clone()
+        clip_transformed = clip_grid.clone()
+
+        # Interpolate hand mask to 14x14 grid size
+        p0_mask_14 = (
+            torch.nn.functional.interpolate(
+                torch.tensor(p0_mask_224, dtype=torch.float32, device=device).view(
+                    1, 1, 224, 224
+                ),
+                size=(14, 14),
+                mode="nearest",
+            )
+            .squeeze()
+            .cpu()
+            .numpy()
+        )
+
+        h_indices, w_indices = np.where(p0_mask_14 > 0)
+        h_offset = h_end - h_start
+        w_offset = w_end - w_start
+
+        for r, c in zip(h_indices, w_indices):
+            target_r = min(13, max(0, r + h_offset))
+            target_c = min(13, max(0, c + w_offset))
+            clip_transformed[target_r, target_c] = clip_grid[r, c]
+
+        view_features["clip_sim_transformed"] = clip_transformed.cpu().numpy()
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))
