@@ -76,6 +76,8 @@ class Stage3StepPayload(BaseModel):
     ui_annotations: dict
     is_easy_task: bool = False
     point_clouds: dict | None = None
+    episode_idx: int = 0
+    step_idx: int = 0
 
 
 class Stage3CalibrateTransition(BaseModel):
@@ -657,23 +659,22 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             .clone()
         )
 
-        def log_action_bounds(a_candidates):
-            with torch.no_grad():
-                raw_min = a_candidates.min().item()
-                raw_max = a_candidates.max().item()
-                raw_mean = a_candidates.mean().item()
-                bound_safe = raw_min < -1.0 or raw_max > 1.0
-                print(
-                    f"🔍 [DIAGNOSTIC] Action Bounds: ",
-                    "SAFE " if bound_safe else "UNSAFE ",
-                    f"| Min: {raw_min:.4f} | Max: {raw_max:.4f} | Mean: {raw_mean:.4f}",
-                )
+        steering_history = {
+            "episode_idx": payload.episode_idx,
+            "step_idx": payload.step_idx,
+            "iterations": [],
+        }
 
         for k in range(5):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
-            # --- DIAGNOSTIC TELEMETRY LOGGING ---
-            log_action_bounds(a_candidates)
+            # Record candidate trajectory state before this iteration update
+            steering_history["iterations"].append(
+                {
+                    "iteration": k,
+                    "a_candidates": a_candidates.detach().cpu().tolist(),
+                }
+            )
 
             # Flatten step layouts to match ActionAdapter's footprint contract
             a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
@@ -742,7 +743,32 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Detach the candidates after the loop
         final_actions = a_candidates.clone().detach()
-        log_action_bounds(final_actions)
+
+        # Record final steered candidate trajectories (iteration 5)
+        steering_history["iterations"].append(
+            {
+                "iteration": 5,
+                "a_candidates": final_actions.cpu().tolist(),
+            }
+        )
+
+        # Save steering trajectory JSON file
+        steering_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "logs",
+            "training",
+            "latent-flow",
+            "steering",
+        )
+        os.makedirs(steering_dir, exist_ok=True)
+        steering_json_path = os.path.join(
+            steering_dir,
+            f"ep_{payload.episode_idx}_step_{payload.step_idx}.json",
+        )
+        with open(steering_json_path, "w") as f:
+            json.dump(steering_history, f, indent=2)
+        print(f"📊 [Telemetry] Saved steering trajectory JSON: {steering_json_path}")
 
         # Extract only the immediate multi-step prediction slice if needed,
         # or output the unrolled trajectory block back to your motor script loader!
