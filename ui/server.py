@@ -116,9 +116,23 @@ class GR1SimulationServer(GR1MuJoCoBase):
             )
 
 
-# Instantiate local server
+import rerun as rr
+
+# Instantiate local server for live UI
 sim = GR1SimulationServer()
 sim.reset_env(lock_posture=True)
+
+# Dedicated evaluation simulator for offline candidate track unrolling
+eval_sim = GR1SimulationServer()
+eval_sim.reset_env(lock_posture=True)
+
+# Initialize Rerun logger for evaluation stream
+rr.init("latent_flow_offline_eval", spawn=False)
+try:
+    rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
+    print("✅ Rerun connected to rerun+http://127.0.0.1:9876/proxy")
+except Exception as e:
+    print(f"⚠️ Rerun connection fallback: {e}")
 
 app = FastAPI()
 
@@ -229,17 +243,10 @@ async def run_stage3_training_loop(
             tactile_grid[0][0] = touch_index
             tactile_grid[1][1] = touch_thumb
 
-            # Scale proprioception to [-1.0, 1.0] using the simulator's built-in unscaler
-            proprio_list = sim.unscaler.scale_state(sim.get_state_32()).tolist()
-            if any(np.isnan(val) for val in proprio_list):
-                print(
-                    f"⚠️ [NaN Warning] MuJoCo joint proprioception contains NaN at step {env_step}! Simulator exploded."
-                )
-
             current_obs = {
                 "frames": frame_all_views,
                 "history_frames": list(frame_history),
-                "proprioception": proprio_list,
+                "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
                 "tactile": tactile_grid,
                 "text_prompt": text_prompt or "grasp cube",
                 "ui_annotations": ui_annotations
@@ -260,8 +267,9 @@ async def run_stage3_training_loop(
                     )
                     if r.status_code == 200:
                         res = r.json()
-                        action_taken_ensemble = res.get("action")
-                        energy_ensemble = res.get("energy")
+                        action_taken_ensemble = res.get("action")  # [16, 7, 58]
+                        energy_ensemble = res.get("energy")  # [16]
+                        # list[dict[str, str]]
                         perturbed_payloads = res.get("perturbed_payloads", [])
             except Exception as e:
                 print(
@@ -285,13 +293,13 @@ async def run_stage3_training_loop(
             transitions = []
             committed_qpos = None
 
-            # Replay all 16 trajectories inside the simulator
+            # Replay all 16 trajectories inside the isolated evaluation simulator
             for track_idx in range(action_np.shape[0]):
-                # Rewind physics cleanly to the starting coordinates of the rollout window
-                sim.data.qpos[:] = initial_qpos
-                sim.data.qvel[:] = initial_qvel
-                sim.data.ctrl[:] = initial_ctrl
-                mujoco.mj_forward(sim.model, sim.data)
+                # Rewind evaluation physics cleanly to the starting coordinates of the rollout window
+                eval_sim.data.qpos[:] = initial_qpos
+                eval_sim.data.qvel[:] = initial_qvel
+                eval_sim.data.ctrl[:] = initial_ctrl
+                mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
                 # Initialize frame recording buffer
                 track_frames = []
@@ -300,9 +308,9 @@ async def run_stage3_training_loop(
                 # Capture starting frame (t=0)
                 start_frames = {}
                 frames_all_views_start = {}
-                for cam_name in sim.cam_names:
-                    sim.renderer.update_scene(sim.data, camera=cam_name)
-                    rgb_cam_start = sim.renderer.render().copy()
+                for cam_name in eval_sim.cam_names:
+                    eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                    rgb_cam_start = eval_sim.renderer.render().copy()
                     start_frames[cam_name] = rgb_cam_start.copy()
                     img_cam_start = Image.fromarray(rgb_cam_start)
                     img_cam_start_224 = img_cam_start.resize((224, 224))
@@ -317,45 +325,41 @@ async def run_stage3_training_loop(
 
                 track_actions_flat = []
 
-                # Execute the full 8-step trajectory sequence open-loop
+                # Execute the full 8-step trajectory sequence open-loop via canonical dispatch_action
                 for h in range(action_np.shape[1]):
                     track_action = action_np[track_idx, h, :]  # Shape: (58,)
                     track_actions_flat.extend(track_action.tolist())
                     action_32 = track_action[:32]
                     action_32_clamped = np.clip(action_32, -1.0, 1.0)
-                    action_rad = sim.unscaler.unscale_action(action_32_clamped)
 
-                    # Execute motor posture loop
-                    for _ in range(2):
-                        for i, j_id in enumerate(sim.protocol_joint_ids):
-                            if j_id != -1:
-                                q_idx = sim.model.jnt_qposadr[j_id]
-                                sim.last_target_q[q_idx] = action_rad[i]
-                                if i in sim.coupling_map:
-                                    for distal_idx in sim.coupling_map[i]:
-                                        sim.last_target_q[distal_idx] = action_rad[i]
-                        sim.sync_ctrl_to_qpos(sim.last_target_q)
-                        sim.data.qpos[sim.root_q_idx : sim.root_q_idx + 3] = [
-                            0.0,
-                            0.0,
-                            0.95,
-                        ]
-                        sim.data.qpos[sim.root_q_idx + 3 : sim.root_q_idx + 7] = [
-                            1.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                        ]
-                        sim.data.qvel[:6] = 0.0
-                        mujoco.mj_step(sim.model, sim.data)
+                    # 1. Map normalized action candidate to target qpos via canonical helper
+                    target_q = eval_sim.process_target_32(action_32_clamped)
 
-                    # Get next observation for this specific candidate step
+                    # 2. Dispatch action via canonical simulation method (fast 2-step evaluation)
+                    eval_sim.dispatch_action(
+                        action_32_norm=action_32_clamped,
+                        target_q=target_q,
+                        n_steps=2,
+                        render_freq=0,
+                        reset_start=False,
+                    )
+
+                    # 3. Get next observation for this specific candidate step and log to Rerun
                     frames_all_views_next = {}
                     step_frames = {}
-                    for cam_name in sim.cam_names:
-                        sim.renderer.update_scene(sim.data, camera=cam_name)
-                        rgb_cam_next = sim.renderer.render()
+                    rr.set_time_sequence("horizon_step", h)
+                    for cam_name in eval_sim.cam_names:
+                        eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                        rgb_cam_next = eval_sim.renderer.render().copy()
                         step_frames[cam_name] = rgb_cam_next.copy()
+
+                        # Structured Rerun path: offline_eval/step_XX/track_XX/{cam_name}
+                        entity_path = f"offline_eval/step_{env_step:02d}/track_{track_idx:02d}/{cam_name}"
+                        try:
+                            rr.log(entity_path, rr.Image(rgb_cam_next))
+                        except Exception:
+                            pass
+
                         img_cam_next = Image.fromarray(rgb_cam_next)
                         img_cam_next_224 = img_cam_next.resize((224, 224))
                         buf_cam_next = io.BytesIO()
@@ -367,9 +371,9 @@ async def run_stage3_training_loop(
                     track_frames.append(step_frames)
                     recording_history_frames.append(frames_all_views_next)
 
-                    index_pos = sim.data.xpos[index_id]
-                    thumb_pos = sim.data.xpos[thumb_id]
-                    cube_pos = sim.data.xpos[cube_id]
+                    index_pos = eval_sim.data.xpos[index_id]
+                    thumb_pos = eval_sim.data.xpos[thumb_id]
+                    cube_pos = eval_sim.data.xpos[cube_id]
                     d_index = float(np.linalg.norm(index_pos - cube_pos))
                     d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
                     touch_index_next = (
@@ -385,8 +389,8 @@ async def run_stage3_training_loop(
                     track_next_obs = {
                         "frames": frames_all_views_next,
                         "history_frames": recording_history_frames,
-                        "proprioception": sim.unscaler.scale_state(
-                            sim.get_state_32()
+                        "proprioception": eval_sim.unscaler.scale_state(
+                            eval_sim.get_state_32()
                         ).tolist(),
                         "tactile": tactile_grid_next,
                         "text_prompt": text_prompt or "grasp cube",
@@ -396,9 +400,9 @@ async def run_stage3_training_loop(
 
                     # Keep track 0's final step outcomes as the committed path for the environment
                     if track_idx == 0 and h == action_np.shape[1] - 1:
-                        committed_qpos = sim.data.qpos.copy()
-                        committed_qvel = sim.data.qvel.copy()
-                        committed_ctrl = sim.data.ctrl.copy()
+                        committed_qpos = eval_sim.data.qpos.copy()
+                        committed_qvel = eval_sim.data.qvel.copy()
+                        committed_ctrl = eval_sim.data.ctrl.copy()
                         committed_next_obs = track_next_obs
                         committed_touch_index_next = touch_index_next
                         committed_touch_thumb_next = touch_thumb_next
