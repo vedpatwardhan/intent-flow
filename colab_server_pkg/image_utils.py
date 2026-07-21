@@ -411,7 +411,7 @@ def save_stage3_goal_features_plots(
         axes[4].set_title("5. Transformed CLIP (Segment Transfer)", fontsize=10)
         axes[4].axis("off")
 
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
         output_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "..",

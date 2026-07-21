@@ -421,7 +421,7 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
         if num_vggt_steps > 1:
             vggt_y_indices = np.linspace(c0_y, c1_y, num_vggt_steps).astype(int)
             vggt_x_indices = np.linspace(c0_x, c1_x, num_vggt_steps).astype(int)
-            vggt_max = max(1.0, vggt_tensor.max().item() * 1.5)
+            vggt_max = max(0.5, vggt_tensor.max().item())
             for step_j in range(num_vggt_steps):
                 cy_pt = vggt_y_indices[step_j]
                 cx_pt = vggt_x_indices[step_j]
@@ -429,7 +429,7 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
                     for dx_offset in range(-3, 4):
                         ry = min(223, max(0, cy_pt + dy_offset))
                         rx = min(223, max(0, cx_pt + dx_offset))
-                        vggt_tensor[0, ry, rx] = vggt_max
+                        vggt_tensor[0, ry, rx] += vggt_max
         obs_dict[view_name]["vggt"] = vggt_tensor
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
@@ -441,7 +441,7 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
         if num_bridge_steps > 1:
             r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
             c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
-            dino_max = max(1.0, dino_grid.max().item() * 1.5)
+            dino_max = dino_grid.max().item()
             for step_i in range(num_bridge_steps):
                 r = min(max(r_indices[step_i], 0), 13)
                 c = min(max(c_indices[step_i], 0), 13)
