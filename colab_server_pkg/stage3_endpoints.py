@@ -325,15 +325,16 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
                 # Construct on-manifold target goal representation via post-extraction feature transformations
+                annotations = payload.ui_annotations
                 goal_obs_dict, goal_encoded_tuple = (
-                    construct_stage3_latent_goal_features(payload)
+                    construct_stage3_latent_goal_features(obs_dict, annotations)
                 )
 
                 # Save 4-panel diagnostic comparison plots (Original, UI Drawing Overlay, Transformed DINO, Transformed VGGT)
                 pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
                 save_stage3_goal_features_plots(
                     pil_frame,
-                    payload.ui_annotations,
+                    annotations,
                     goal_obs_dict,
                     view_name="world_center",
                 )

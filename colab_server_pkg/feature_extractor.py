@@ -305,17 +305,13 @@ def extract_stage3_obs_features(payload):
     }
 
 
-def construct_stage3_latent_goal_features(payload):
+def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
     """
     Constructs on-manifold target goal representation (s_target) by applying post-extraction
     latent feature transformations across DINOv3, CLIP, and VGGT feature maps ONLY for views
     that have active UI annotations (crops and intent vectors).
     """
     # 1. Extract clean base features from unblurred original camera frames
-    obs_dict, _ = extract_stage3_obs_features(payload)
-
-    ui_annotations = getattr(payload, "ui_annotations", {}) or {}
-
     for view_name, view_annos in ui_annotations.items():
         # Retrieve annotations for the view
         crops = view_annos.get("crops", [])

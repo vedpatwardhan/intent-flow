@@ -946,7 +946,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     ws_payload["motion_field"] = cached_motion_field
                     ws_payload["task_isolated_features"] = cached_task_isolated_features
                     cached_data_updated = False
-                    print(np.array(ws_payload["motion_field"]).shape)
 
                 await websocket.send_text(json.dumps(ws_payload))
             step_count += 1

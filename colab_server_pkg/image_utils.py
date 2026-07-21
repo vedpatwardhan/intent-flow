@@ -384,13 +384,10 @@ def save_stage3_goal_features_plots(
         # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay (Full Flow) ---
         vggt_tensor = obs_dict[view_name]["vggt"]
         vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
-        vggt_norm = (vggt_map - vggt_map.min()) / (
-            vggt_map.max() - vggt_map.min() + 1e-8
-        )
 
         axes[3].imshow(clean_image_pil)
         axes[3].imshow(
-            vggt_norm,
+            vggt_map,
             cmap="jet",
             alpha=0.45,
             extent=[0, img_w, img_h, 0],
@@ -402,14 +399,10 @@ def save_stage3_goal_features_plots(
         # --- Panel 5: Transformed CLIP (Segment Transfer) ---
         clip_sim = view_features["task_isolated_features"]["clip_sim_transformed"]
         clip_sim = np.array(clip_sim).reshape(14, 14)
-        clip_sim_norm = (clip_sim - clip_sim.min()) / (
-            clip_sim.max() - clip_sim.min() + 1e-8
-        )
-        clip_sim_norm = 1.0 - clip_sim_norm
 
         axes[4].imshow(clean_image_pil)
         axes[4].imshow(
-            clip_sim_norm,
+            clip_sim,
             cmap="jet",
             alpha=0.45,
             extent=[0, img_w, img_h, 0],
