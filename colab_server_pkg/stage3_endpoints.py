@@ -330,14 +330,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 )
 
                 # Save 4-panel diagnostic comparison plots (Original, UI Drawing Overlay, Transformed DINO, Transformed VGGT)
-                clean_frame_str = (
-                    payload.frames.get("world_center", payload.frame)
-                    if hasattr(payload, "frames")
-                    else payload.frame
-                )
-                clean_image_pil = decode_base64_image(clean_frame_str)
+                pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
                 save_stage3_goal_features_plots(
-                    clean_image_pil,
+                    pil_frame,
                     payload.ui_annotations,
                     goal_obs_dict,
                     view_name="world_center",

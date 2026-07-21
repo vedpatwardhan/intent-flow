@@ -429,7 +429,7 @@ def construct_stage3_latent_goal_features(payload):
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
         dino_subspace = view_features["task_isolated_features"]["dino_subspace"]
-        dino_grid = dino_subspace.view(14, 14).clone()
+        dino_grid = dino_subspace[:196].view(14, 14).clone()
 
         num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
         if num_bridge_steps > 1:

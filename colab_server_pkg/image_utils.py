@@ -349,14 +349,9 @@ def save_stage3_goal_features_plots(
 
         # --- Panel 3: Transformed DINOv3 Feature Map Overlay ---
         view_features = obs_dict.get(view_name, {}).get("features", {})
-        dino_subspace = view_features.get("task_isolated_features", {}).get(
-            "dino_subspace_transformed", None
-        )
-
-        if dino_subspace is None:
-            dino_subspace = view_features.get("task_isolated_features", {}).get(
-                "dino_subspace", None
-            )
+        dino_subspace = view_features["task_isolated_features"][
+            "dino_subspace_transformed"
+        ][:196]
 
         if dino_subspace is not None and torch.is_tensor(dino_subspace):
             dino_map = dino_subspace.detach().cpu().numpy().reshape(14, 14)
