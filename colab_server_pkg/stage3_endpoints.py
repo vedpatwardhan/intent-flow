@@ -605,10 +605,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         total_gen_dim = horizon * joint_dim
 
         # Create a master grid
-        grid = torch.ones(1, horizon, joint_dim, device=device)
-        grid[0, 0:3, :] = 0.0  # immediate steps get the full denoising path
-        grid[0, 3:6, :] = 0.5  # intermediate steps get coarse denoising
-        grid[0, 6:, :] = 0.8  # far steps initialized near convergence
+        # ToDo: temporarily setting it all to 0 for baseline exploration
+        # grid = torch.ones(1, horizon, joint_dim, device=device)
+        # grid[0, 0:3, :] = 0.0  # immediate steps get the full denoising path
+        # grid[0, 3:6, :] = 0.5  # intermediate steps get coarse denoising
+        # grid[0, 6:, :] = 0.8  # far steps initialized near convergence
+        grid = torch.zeros(1, horizon, joint_dim, device=device)
         steering_timelines = grid.view(1, total_gen_dim)  # Shape: [1, Horizon * Joints]
 
         # Detach s_t and s_target to prevent graph leaks and runtime crashes
@@ -644,7 +646,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.2
-        timeline_rollback_rate = 0.05
+        timeline_advance_rate = 0.05
         error_threshold = 0.02
 
         # Expand target constraints and master timelines to match the full 16 execution slots
@@ -703,6 +705,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             grad_a = torch.autograd.grad(energy, a_candidates)[0]
 
             # Normalize gradients per ensemble instance to stabilize steering step size
+            # [16, 7, 58]
             grad_norm = grad_a.norm(dim=(1, 2), keepdim=True) + 1e-8
             grad_a_normalized = grad_a / grad_norm
 
@@ -719,14 +722,20 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
             joint_errors = grad_a_normalized.abs().mean(dim=(0, 1))
 
-            # Identify indices breaching our task accuracy threshold
-            drifting_joints_mask = joint_errors > error_threshold
-
-            # Apply Localized Timeline Rollback to the time maps of drifting dimensions
-            # Decrementing 't' opens up 't_j', granting more gradient flexibility next step
+            # Joints that are stable (error below threshold) advance forward
+            # toward clean actions (1.0)
+            stable_joints_mask = joint_errors <= error_threshold
             steering_timelines_expanded[
-                :, :, drifting_joints_mask
-            ] -= timeline_rollback_rate
+                :, :, stable_joints_mask
+            ] += timeline_advance_rate
+
+            # Joints that are drifting (error above threshold) get pinned or
+            # reset back to 0.0 (noise space)
+            drifting_joints_mask = ~stable_joints_mask
+            steering_timelines_expanded[:, :, drifting_joints_mask] = 0.0
+
+            # Keep boundaries locked within standard flow matching bounds
+            # [0.0, 1.0]
             steering_timelines_expanded = torch.clamp(
                 steering_timelines_expanded, 0.0, 1.0
             )

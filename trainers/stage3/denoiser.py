@@ -67,23 +67,24 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
     @torch.no_grad()
     def sample_with_steering(
         self,
-        s_t,
-        s_target,
-        embodiment_id=None,
+        s_t,  # [B, latent_dim]
+        s_target,  # [B, latent_dim]
+        embodiment_id=None,  # [B]
         horizon=8,
         num_steps=10,
-        steering_timelines=None,
+        steering_timelines=None,  # [B, H * action_dim]
         step_nft_scale=0.0,
     ):
         batch_size = s_t.size(0)
 
-        # [B, H, ActionDim]
+        # [B, H, action_dim]
         x_t = torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
 
         print(
             f"📊 [ODE Init] x_0 Standard Normal Bounds -> Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
         )
 
+        # [B, H, action_dim]
         if steering_timelines is None:
             steering_timelines = torch.zeros(
                 batch_size, horizon, self.action_dim, device=s_t.device
@@ -93,16 +94,16 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
                 batch_size, horizon, self.action_dim
             )
 
-        dt = 1.0 / num_steps
+        dt = 1.0 / num_steps  # 0.1
 
         for i in range(num_steps):
+            # t_vals refers to current time of the values, target time is 1
             t_vals = steering_timelines + (i * dt)
             t_vals = torch.clamp(t_vals, min=0.0, max=1.0)
 
             # 1. Inspect raw velocity field network outputs
+            # [B, H, action_dim]
             v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
-
-            v_min, v_max = v_t.min().item(), v_t.max().item()
 
             # 2. Compute the direct contribution of velocity to the step update
             v_step = v_t * dt
@@ -111,7 +112,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             noise_min, noise_max = 0.0, 0.0
             if step_nft_scale > 0.0 and i < num_steps - 1:
                 raw_noise = torch.randn_like(x_t)
-                steerable_mask = (t_vals < 1.0).float()
+                steerable_mask = (t_vals < 1.0).float()  # contains 1s if grid is 0s
                 noise_step = raw_noise * step_nft_scale * steerable_mask
                 noise_min, noise_max = noise_step.min().item(), noise_step.max().item()
 
@@ -120,10 +121,10 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             else:
                 x_t = x_t + v_step
 
-            if (i + 1) % (num_steps // 2) == 0:
+            if i == 0 or (i + 1) % (num_steps // 2) == 0:
                 print(
                     f"   Step {i:02d} Bounds -> "
-                    f"velocity: [{v_min:.3f}, {v_max:.3f}] | "
+                    f"velocity: [{v_t.min().item():.3f}, {v_t.max().item():.3f}] | "
                     f"noise: [{noise_min:.3f}, {noise_max:.3f}] | "
                     f"x_t: [{x_t.min().item():.3f}, {x_t.max().item():.3f}] | "
                     f"t_vals: [{t_vals.min().item():.3f}, {t_vals.max().item():.3f}] | "

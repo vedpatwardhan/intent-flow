@@ -60,12 +60,13 @@ class SpatialTemporalDiTBlock(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, joint_dim)
 
     def forward(self, x, cond):
-        # x: [B, H, joint_dim], cond: [B, cond_dim]
+        # x: [B, H, action_dim], cond: [B, cond_dim]
         B, H, _ = x.shape
 
         h_x = self.in_proj(x)  # [B, H, hidden_dim]
 
         # Explicit unsqueeze and broadcast across sequence steps without generic dimensions
+        # modulation: [B, H, hidden_dim]
         modulation = self.mod_layer(cond).view(B, 1, -1).expand(-1, H, -1)
 
         h_modulated = self.norm1(h_x + modulation)
@@ -73,7 +74,7 @@ class SpatialTemporalDiTBlock(nn.Module):
 
         h_x = h_x + attn_out
         h_out = self.norm2(h_x + modulation)
-        return x + self.out_proj(h_out)
+        return x + self.out_proj(h_out)  # [B, H, action_dim]
 
 
 class ActionVelocityField(nn.Module):
@@ -114,14 +115,16 @@ class ActionVelocityField(nn.Module):
         # Mean pool temporal coordinates across sequence window to unify conditioning context
         t_flat = t_embed.mean(dim=1).view(B, -1)  # [B, action_dim * time_dim]
 
-        emb_feat = self.embodiment_embedding(embodiment_id)  # [B, 32]
+        emb_feat = self.embodiment_embedding(embodiment_id)  # [B, emb_dim]
+
+        # [B, state_dim + state_dim + action_dim * time_dim + emb_dim]
         cond = torch.cat([s_t, s_target, t_flat, emb_feat], dim=-1)
 
-        macro_anchors = self.block1(x_t, cond)
-        motion_primitives = self.block2(macro_anchors, cond)
-        joint_trajectory = self.block3(motion_primitives, cond)
+        macro_anchors = self.block1(x_t, cond)  # [B, H, action_dim]
+        motion_primitives = self.block2(macro_anchors, cond)  # [B, H, action_dim]
+        joint_trajectory = self.block3(motion_primitives, cond)  # [B, H, action_dim]
 
-        return self.out_net(joint_trajectory)
+        return self.out_net(joint_trajectory)  # [B, H, action_dim]
 
 
 class CLAPFlowMatcher(nn.Module):
