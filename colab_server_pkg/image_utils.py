@@ -381,7 +381,7 @@ def save_stage3_goal_features_plots(
         axes[2].set_title("3. Transformed DINOv3 (Latent Arm Bridge)", fontsize=10)
         axes[2].axis("off")
 
-        # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay (Full + Quiver Flow) ---
+        # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay (Full Flow) ---
         vggt_tensor = obs_dict[view_name]["vggt"]
         vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
         vggt_norm = (vggt_map - vggt_map.min()) / (
@@ -396,60 +396,20 @@ def save_stage3_goal_features_plots(
             extent=[0, img_w, img_h, 0],
             interpolation="bilinear",
         )
-
-        # Plot 2D flow direction quiver arrow over hand center
-        if len(vectors) > 0:
-            vec = vectors[0]
-            dx = vec["end"][0] - vec["start"][0]
-            dy = vec["end"][1] - vec["start"][1]
-            v_len = np.sqrt(dx * dx + dy * dy) + 1e-8
-            dir_x, dir_y = dx / v_len, dy / v_len
-
-            # Retrieve active annotations to find hand center
-            active_annos = crops + segments
-            if len(active_annos) >= 2:
-                p0 = active_annos[0]
-                if "width" in p0 and "height" in p0:
-                    px = p0["x"] + p0["width"] / 2.0
-                    py = p0["y"] + p0["height"] / 2.0
-                else:
-                    px, py = float(p0.get("x", 0)), float(p0.get("y", 0))
-
-                # Overlay vector quiver arrow (Note: Matplotlib Y axis is inverted relative to PIL, so -dir_y)
-                axes[3].quiver(
-                    px * scale_x,
-                    py * scale_y,
-                    dir_x,
-                    -dir_y,
-                    color="cyan",
-                    scale=4,
-                    scale_units="width",
-                    width=0.015,
-                )
-
         axes[3].set_title("4. Transformed VGGT (Trajectory Field)", fontsize=10)
         axes[3].axis("off")
 
         # --- Panel 5: Transformed CLIP (Segment Transfer) ---
-        clip_map = view_features.get("clip_sim_transformed", None)
-        if clip_map is not None:
-            clip_map = np.array(clip_map).reshape(14, 14)
-            clip_norm = (clip_map - clip_map.min()) / (
-                clip_map.max() - clip_map.min() + 1e-8
-            )
-        else:
-            base_clip = view_features.get("clip_sim", None)
-            if base_clip is not None:
-                clip_map = np.array(base_clip).reshape(14, 14)
-                clip_norm = (clip_map - clip_map.min()) / (
-                    clip_map.max() - clip_map.min() + 1e-8
-                )
-            else:
-                clip_norm = np.zeros((14, 14))
+        text_feat = view_features["task_isolated_features"]["text_feat_transformed"]
+        text_feat = np.array(text_feat).reshape(14, 14)
+        text_feat_norm = (text_feat - text_feat.min()) / (
+            text_feat.max() - text_feat.min() + 1e-8
+        )
+        text_feat_norm = 1.0 - text_feat_norm
 
         axes[4].imshow(clean_image_pil)
         axes[4].imshow(
-            clip_norm,
+            text_feat_norm,
             cmap="jet",
             alpha=0.45,
             extent=[0, img_w, img_h, 0],

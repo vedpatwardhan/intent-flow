@@ -418,32 +418,38 @@ def construct_stage3_latent_goal_features(payload):
         h_end = min(13, max(0, int((c1_y / 224.0) * grid_h)))
         w_end = min(13, max(0, int((c1_x / 224.0) * grid_w)))
 
-        # --- A. VGGT Latent Transformation (Forward Trajectory Field Overwrite) ---
-        # Overwrite velocity vectors strictly over p0_mask_224 (moving hand segment)
+        # --- A. VGGT Latent Transformation (Trajectory Flow Heatmap Activation) ---
+        # Activate coordinates along the path from Hand to Cube on the full motion field (no subspace masking)
         vggt_tensor = obs_dict[view_name]["vggt"]  # [1, 224, 224]
-        mask_224_tensor = torch.tensor(p0_mask_224, dtype=torch.float32, device=device)
-        trajectory_field_x = torch.full_like(vggt_tensor, dir_x) * mask_224_tensor
-        trajectory_field_y = torch.full_like(vggt_tensor, dir_y) * mask_224_tensor
-        vggt_transformed = vggt_tensor + 0.5 * (trajectory_field_x + trajectory_field_y)
-        obs_dict[view_name]["vggt"] = vggt_transformed
+        num_vggt_steps = max(abs(int(c1_y - c0_y)), abs(int(c1_x - c0_x))) + 1
+        if num_vggt_steps > 1:
+            vggt_y_indices = np.linspace(c0_y, c1_y, num_vggt_steps).astype(int)
+            vggt_x_indices = np.linspace(c0_x, c1_x, num_vggt_steps).astype(int)
+            vggt_max = max(1.0, vggt_tensor.max().item() * 1.5)
+            for step_j in range(num_vggt_steps):
+                cy_pt = vggt_y_indices[step_j]
+                cx_pt = vggt_x_indices[step_j]
+                for dy_offset in range(-3, 4):
+                    for dx_offset in range(-3, 4):
+                        ry = min(223, max(0, cy_pt + dy_offset))
+                        rx = min(223, max(0, cx_pt + dx_offset))
+                        vggt_tensor[0, ry, rx] = vggt_max
+        obs_dict[view_name]["vggt"] = vggt_tensor
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
         # Interpolate hand features into intermediate background patch tokens on the full unmasked DINO grid
         dino_grid = torch.tensor(
             view_features["dino_attn"], dtype=torch.float32, device=device
         ).clone()
-
         num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
         if num_bridge_steps > 1:
             r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
             c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
-            hand_val = dino_grid[min(h_start, 13), min(w_start, 13)].item()
-
+            dino_max = max(1.0, dino_grid.max().item() * 1.5)
             for step_i in range(num_bridge_steps):
                 r = min(max(r_indices[step_i], 0), 13)
                 c = min(max(c_indices[step_i], 0), 13)
-                alpha = (step_i + 1) / float(num_bridge_steps)
-                dino_grid[r, c] = (1.0 - alpha) * hand_val + alpha * dino_grid[r, c]
+                dino_grid[r, c] = dino_max
 
         # Re-flatten and save transformed DINO features
         dino_transformed = dino_grid.flatten()[:384]
@@ -454,11 +460,11 @@ def construct_stage3_latent_goal_features(payload):
         obs_dict[view_name]["vision"] = dino_transformed.unsqueeze(0)
 
         # --- C. CLIP Latent Transformation (Segment Transfer) ---
-        # Copy Segment 1 (Hand) features to the target position on the 14x14 CLIP similarity map
-        clip_grid = torch.tensor(
-            view_features["clip_sim"], dtype=torch.float32, device=device
+        # Copy Segment 1 (Hand) features to the target position on the 14x14 text feature grid
+        text_feat_grid = torch.tensor(
+            view_features["text_feat"], dtype=torch.float32, device=device
         ).clone()
-        clip_transformed = clip_grid.clone()
+        text_feat_transformed = text_feat_grid.clone()
 
         # Interpolate hand mask to 14x14 grid size
         p0_mask_14 = (
@@ -481,9 +487,11 @@ def construct_stage3_latent_goal_features(payload):
         for r, c in zip(h_indices, w_indices):
             target_r = min(13, max(0, r + h_offset))
             target_c = min(13, max(0, c + w_offset))
-            clip_transformed[target_r, target_c] = clip_grid[r, c]
+            text_feat_transformed[target_r, target_c] = text_feat_grid[r, c]
 
-        view_features["clip_sim_transformed"] = clip_transformed.cpu().numpy()
+        view_features["task_isolated_features"][
+            "text_feat_transformed"
+        ] = text_feat_transformed.cpu().numpy()
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))
