@@ -19,6 +19,23 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 
+try:
+    import wandb
+
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
+
+
+def ensure_wandb_init(project_name="latent-flow-stage3"):
+    if HAS_WANDB and wandb.run is None:
+        try:
+            wandb.init(project=project_name, reinit=False)
+            print(f"✅ Weights & Biases initialized: project='{project_name}'")
+        except Exception as e:
+            print(f"⚠️ W&B initialization warning: {e}")
+
+
 from colab_server_pkg.config import device
 from colab_server_pkg.models_state import (
     stage3_models,
@@ -781,6 +798,32 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         with torch.no_grad():
             final_energies = torch.mean((s_goal_pred - s_target_expanded) ** 2, dim=-1)
 
+        # Log real steering telemetry metrics to Weights & Biases
+        if HAS_WANDB:
+            ensure_wandb_init()
+            if wandb.run is not None:
+                with torch.no_grad():
+                    candidate_var = final_actions.var(dim=0).mean().item()
+                    mean_timeline = steering_timelines_expanded.mean().item()
+                    stable_joints_cnt = stable_joints_mask.sum().item()
+                    drifting_joints_cnt = drifting_joints_mask.sum().item()
+                    mean_energy = final_energies.mean().item()
+                    min_energy = final_energies.min().item()
+
+                try:
+                    wandb.log(
+                        {
+                            "steering/candidate_variance": candidate_var,
+                            "steering/mean_timeline": mean_timeline,
+                            "steering/stable_joints": stable_joints_cnt,
+                            "steering/drifting_joints": drifting_joints_cnt,
+                            "steering/mean_energy": mean_energy,
+                            "steering/min_energy": min_energy,
+                        }
+                    )
+                except Exception:
+                    pass
+
         # Print step trajectories telemetry
         print("--- Stage 3 Step Trajectories ---")
         for i in range(ensemble_size):
@@ -1119,6 +1162,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "loss/cfm_loss": cfm_loss.item(),
                 "loss/casa_loss": casa_loss.item(),
                 "loss/sigreg_loss": sigreg_loss.item(),
+                "loss/predictor_loss": predictor_loss.item(),
+                "loss/goal_attention_loss": goal_attention_loss.item(),
                 "drift/state_magnitude": state_magnitude,
                 "drift/state_variance": state_variance,
                 "policy/action_magnitude": action_magnitude,
@@ -1127,6 +1172,14 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "metrics/action_drift": action_drift,
             }
             print(f"📊 Stage 3 OPSD Diagnostics: {json.dumps(diagnostics, indent=2)}")
+
+            if HAS_WANDB:
+                ensure_wandb_init()
+                if wandb.run is not None:
+                    try:
+                        wandb.log(diagnostics)
+                    except Exception:
+                        pass
 
             loss_opsd.backward()
             state.stage3_optimizer.step()
