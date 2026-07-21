@@ -150,7 +150,7 @@ colab_url = colab_url or os.environ.get("COLAB_URL")
 click_x = None
 click_y = None
 click_type = None
-text_prompt = "red cube"
+text_prompt = "right hand to the red cube"
 text_modifier = None
 frame_history = deque(maxlen=5)
 frame_all_views = {}

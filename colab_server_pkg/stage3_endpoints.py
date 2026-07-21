@@ -45,6 +45,7 @@ from colab_server_pkg.models_state import (
 from colab_server_pkg.feature_extractor import (
     extract_stage3_obs_features,
     extract_single_view_stage3_obs_features,
+    construct_stage3_latent_goal_features,
 )
 from colab_server_pkg.image_utils import (
     decode_base64_image,
@@ -543,80 +544,31 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
-                # Construct goal states from crops/segments/arrows
-                # {view_name: [goal_img1, goal_img2, goal_img3, goal_img4]}
-                goal_images = construct_goal_states(obs_dict, payload.ui_annotations)
+                # Construct on-manifold target goal representation via post-extraction feature transformations
+                goal_obs_dict, goal_encoded_tuple = (
+                    construct_stage3_latent_goal_features(payload)
+                )
 
-                # Save debug visualization plots via dedicated helper function
-                save_stage3_debug_plots(payload, obs_dict, goal_images)
-
-                # Extract encoder representations for goal states
-                goal_latents = []
-                goal_feature_maps = {}  # Store maps for debug plotting
-                for view_name, goal_data in goal_images.items():
-                    init_img = goal_data["init_frame"]
-
-                    # Encode the common initial image once per view
-                    buffered_init = io.BytesIO()
-                    init_img.save(buffered_init, format="JPEG")
-                    init_img_str = base64.b64encode(buffered_init.getvalue()).decode(
-                        "utf-8"
-                    )
-
-                    goal_feature_maps[view_name] = []
-
-                    for goal_img in goal_data["goal_frames"]:
-                        # Encode PIL goal_img to base64 string
-                        buffered_goal = io.BytesIO()
-                        goal_img.save(buffered_goal, format="JPEG")
-                        goal_img_str = base64.b64encode(
-                            buffered_goal.getvalue()
-                        ).decode("utf-8")
-
-                        # We pass [init_img_str, goal_img_str] as the history to VGGT
-                        goal_history = [init_img_str, goal_img_str]
-
-                        goal_obs_dict = extract_single_view_stage3_obs_features(
-                            goal_img_str,
-                            goal_history,
-                            payload.text_prompt,
-                            payload.ui_annotations,
-                            payload.tactile,
-                            payload.proprioception,
-                            view_name=view_name,
-                        )
-
-                        # Capture raw feature maps before adapter projection
-                        goal_feature_maps[view_name].append(
-                            {
-                                "goal_img": goal_img,
-                                "dino": goal_obs_dict["features"]["dino_attn"],
-                                "clip": goal_obs_dict["features"]["clip_sim"],
-                                "motion": goal_obs_dict["features"]["motion_field"],
-                            }
-                        )
-
-                        # Pass features through respective adapters and MSAT
-                        goal_latent = encode_obs_to_latent(goal_obs_dict, state)
-                        goal_latents.append(goal_latent)
-
-                # Save the new 4x3 debug plots showing DINO, CLIP, and VGGT motion fields
-                save_stage3_goal_features_plots(goal_feature_maps)
+                # Save 4-panel diagnostic comparison plots (Original, UI Drawing Overlay, Transformed DINO, Transformed VGGT)
+                clean_frame_str = (
+                    payload.frames.get("world_center", payload.frame)
+                    if hasattr(payload, "frames")
+                    else payload.frame
+                )
+                clean_image_pil = decode_base64_image(clean_frame_str)
+                save_stage3_goal_features_plots(
+                    clean_image_pil,
+                    payload.ui_annotations,
+                    goal_obs_dict,
+                    view_name="world_center",
+                )
 
         with torch.no_grad():
-            # Get state latents [1, latent_dim]
+            # Get clean live state latent [1, latent_dim]
             s_t = encode_obs_to_latent(combined_obs, state)
 
-            # Query the goal latents using the scaled current state s_t via MultiheadAttention
-            # [1, num_goals, latent_dim]
-            stacked_goals = torch.stack(goal_latents, dim=1)
-            tau = 10.0  # Temperature scale to break softmax saturation
-            s_t_scaled = s_t.unsqueeze(0) / tau
-            s_target, _ = state.stage3_models["goal_attention"](
-                s_t_scaled, stacked_goals, stacked_goals
-            )
-            # [1, latent_dim]
-            s_target = state.stage3_models["latent_adapter"](s_target.squeeze(0))
+            # Get clean transformed target goal state latent [1, latent_dim]
+            s_target = encode_obs_to_latent(goal_encoded_tuple, state)
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7

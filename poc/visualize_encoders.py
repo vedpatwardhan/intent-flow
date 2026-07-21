@@ -553,7 +553,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--text-prompt",
         type=str,
-        default="red cube",
+        default="right hand to the red cube",
         help="CLIP semantic text target.",
     )
     args = parser.parse_args()

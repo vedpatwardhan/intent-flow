@@ -46,7 +46,7 @@ class FramePayload(BaseModel):
     click_x: Optional[int] = None
     click_y: Optional[int] = None
     click_type: Optional[str] = None  # "original_click", "track_click", or "goal_click"
-    text_prompt: Optional[str] = "red cube"
+    text_prompt: Optional[str] = "right hand to the red cube"
     text_modifier: Optional[str] = None  # Hierarchical text modifier
     ui_annotations: Optional[dict] = (
         None  # {"crops": [], "vectors": [], "segments": []}

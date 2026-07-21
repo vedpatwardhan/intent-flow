@@ -123,7 +123,7 @@ export default function EncoderDiagnostics({
   trainingProgress,
   trainingStatus
 }) {
-  const [inputText, setInputText] = useState('red cube');
+  const [inputText, setInputText] = useState('right hand to the red cube');
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // Default right_shoulder_pitch
   const [activeSliders, setActiveSliders] = useState([16, 17, 29, 30, 31]);
   const [jointValues, setJointValues] = useState({});

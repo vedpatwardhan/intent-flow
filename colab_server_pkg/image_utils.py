@@ -302,59 +302,101 @@ def save_stage3_debug_plots(payload, obs_dict: dict, goal_images: dict):
         plt.close()
 
 
-def save_stage3_goal_features_plots(goal_feature_maps):
+def save_stage3_goal_features_plots(
+    clean_image_pil, ui_annotations, obs_dict, view_name="world_center"
+):
     """
-    Saves a 4x3 plot for each view containing the DINO, CLIP, and VGGT motion
-    representations overlaid on top of their respective goal images.
+    Saves a 4-panel diagnostic plot comparing:
+    1. Original Clean Base Image (I_0)
+    2. UI Drawing Overlay (Segments + Drawn Intent Arrow)
+    3. Transformed DINOv3 Feature Map Overlay (Latent Arm Bridge)
+    4. Transformed VGGT Motion Trajectory Field Overlay (Forward Velocity Vectors)
     """
-    names = ["Left", "Right", "Top", "Bottom"]
-    for view_name, features_list in goal_feature_maps.items():
-        if len(features_list) < 4:
-            continue
+    try:
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        img_w, img_h = clean_image_pil.size
 
-        fig, axes = plt.subplots(4, 3, figsize=(12, 16))
-        for row_idx, (name, maps) in enumerate(zip(names, features_list)):
-            goal_img = maps["goal_img"]
-            img_w, img_h = goal_img.size
+        # --- Panel 1: Original Clean Base Image ---
+        axes[0].imshow(clean_image_pil)
+        axes[0].set_title(f"1. Original Clean Base Image ({view_name})", fontsize=10)
+        axes[0].axis("off")
 
-            # 1. DINO Attention map
-            ax_dino = axes[row_idx, 0]
-            ax_dino.imshow(goal_img)
-            ax_dino.imshow(
-                maps["dino"],
-                cmap="jet",
-                alpha=0.3,
-                extent=[0, img_w, img_h, 0],
-                interpolation="bilinear",
+        # --- Panel 2: UI Drawing Overlay (Segments & Arrow) ---
+        overlay_img = clean_image_pil.copy().convert("RGBA")
+        draw = ImageDraw.Draw(overlay_img)
+        scale_x = img_w / 224.0
+        scale_y = img_h / 224.0
+
+        crops = ui_annotations.get("crops", [])
+        for crop in crops:
+            cx1 = crop["x"] * scale_x
+            cy1 = crop["y"] * scale_y
+            cx2 = (crop["x"] + crop["width"]) * scale_x
+            cy2 = (crop["y"] + crop["height"]) * scale_y
+            draw.rectangle([cx1, cy1, cx2, cy2], outline="lime", width=3)
+
+        vectors = ui_annotations.get("vectors", [])
+        for vec in vectors:
+            sx = vec["start"][0] * scale_x
+            sy = vec["start"][1] * scale_y
+            ex = vec["end"][0] * scale_x
+            ey = vec["end"][1] * scale_y
+            draw.line([(sx, sy), (ex, ey)], fill="cyan", width=4)
+
+        axes[1].imshow(overlay_img)
+        axes[1].set_title("2. UI Drawing Overlay (Segments & Arrow)", fontsize=10)
+        axes[1].axis("off")
+
+        # --- Panel 3: Transformed DINOv3 Feature Map Overlay ---
+        view_features = obs_dict.get(view_name, {}).get("features", {})
+        dino_subspace = view_features.get("task_isolated_features", {}).get(
+            "dino_subspace_transformed", None
+        )
+
+        if dino_subspace is None:
+            dino_subspace = view_features.get("task_isolated_features", {}).get(
+                "dino_subspace", None
             )
-            ax_dino.set_title(f"{name} Goal - DINO Attn")
-            ax_dino.axis("off")
 
-            # 2. CLIP Similarity map
-            ax_clip = axes[row_idx, 1]
-            ax_clip.imshow(goal_img)
-            ax_clip.imshow(
-                maps["clip"],
-                cmap="jet",
-                alpha=0.3,
-                extent=[0, img_w, img_h, 0],
-                interpolation="bilinear",
+        if dino_subspace is not None and torch.is_tensor(dino_subspace):
+            dino_map = dino_subspace.detach().cpu().numpy().reshape(14, 14)
+            dino_norm = (dino_map - dino_map.min()) / (
+                dino_map.max() - dino_map.min() + 1e-8
             )
-            ax_clip.set_title(f"{name} Goal - CLIP Sim")
-            ax_clip.axis("off")
+        else:
+            dino_norm = np.zeros((14, 14))
 
-            # 3. VGGT Motion Field map
-            ax_motion = axes[row_idx, 2]
-            ax_motion.imshow(goal_img)
-            ax_motion.imshow(
-                maps["motion"],
-                cmap="jet",
-                alpha=0.3,
-                extent=[0, img_w, img_h, 0],
-                interpolation="bilinear",
+        axes[2].imshow(clean_image_pil)
+        axes[2].imshow(
+            dino_norm,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[2].set_title("3. Transformed DINOv3 (Latent Arm Bridge)", fontsize=10)
+        axes[2].axis("off")
+
+        # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay ---
+        vggt_tensor = obs_dict.get(view_name, {}).get("vggt", None)
+        if vggt_tensor is not None and torch.is_tensor(vggt_tensor):
+            vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
+            vggt_norm = (vggt_map - vggt_map.min()) / (
+                vggt_map.max() - vggt_map.min() + 1e-8
             )
-            ax_motion.set_title(f"{name} Goal - VGGT Motion")
-            ax_motion.axis("off")
+        else:
+            vggt_norm = np.zeros((224, 224))
+
+        axes[3].imshow(clean_image_pil)
+        axes[3].imshow(
+            vggt_norm,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[3].set_title("4. Transformed VGGT (Trajectory Field)", fontsize=10)
+        axes[3].axis("off")
 
         plt.tight_layout()
         output_path = os.path.join(
@@ -362,5 +404,7 @@ def save_stage3_goal_features_plots(goal_feature_maps):
             "..",
             f"debug_goal_features_{view_name}.png",
         )
-        plt.savefig(output_path)
+        plt.savefig(output_path, dpi=150)
         plt.close()
+    except Exception as e:
+        print(f"Error saving stage3 goal feature comparison plot: {e}")

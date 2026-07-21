@@ -304,3 +304,99 @@ def extract_stage3_obs_features(payload):
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],
     }
+
+
+def construct_stage3_latent_goal_features(payload):
+    """
+    Constructs on-manifold target goal representation (s_target) by applying post-extraction
+    latent feature transformations across DINOv3, CLIP, and VGGT feature maps.
+    All input camera frames remain 100% clean, unblurred, and uncorrupted.
+    """
+    # 1. Extract clean base features from unblurred original camera frames
+    obs_dict, encoded_tuple = extract_stage3_obs_features(payload)
+
+    ui_annotations = getattr(payload, "ui_annotations", {}) or {}
+    crops = ui_annotations.get("crops", [])
+    vectors = ui_annotations.get("vectors", [])
+
+    # If annotations are available, apply post-extraction feature transformations
+    if len(crops) >= 2 and len(vectors) >= 1:
+        vec = vectors[0]
+        start_x, start_y = vec["start"][0], vec["start"][1]
+        end_x, end_y = vec["end"][0], vec["end"][1]
+
+        # Normalized movement vector
+        dx = end_x - start_x
+        dy = end_y - start_y
+        dist = np.sqrt(dx * dx + dy * dy) + 1e-8
+        dir_x, dir_y = dx / dist, dy / dist
+
+        # Extract 14x14 patch coordinates for Hand (Segment 0) and Target (Segment 1)
+        grid_h, grid_w = 14, 14
+        h_start, h_end = int(start_y * grid_h), int(end_y * grid_h)
+        w_start, w_end = int(start_x * grid_w), int(end_x * grid_w)
+
+        for view_name in obs_dict:
+            view_features = obs_dict[view_name]["features"]
+            sam_mask_14 = view_features["task_isolated_features"]["sam_mask"]
+            combined_mask_224 = view_features["task_isolated_features"][
+                "combined_mask_224"
+            ]
+
+            # --- A. VGGT Latent Transformation (Forward Trajectory Field Overwrite) ---
+            # Overwrite velocity vectors for hand patch tokens in VGGT's 224x224 feature matrix
+            vggt_tensor = obs_dict[view_name]["vggt"]  # [1, 224, 224]
+            mask_224_tensor = torch.tensor(
+                combined_mask_224, dtype=torch.float32, device=device
+            )
+            trajectory_field_x = torch.full_like(vggt_tensor, dir_x) * mask_224_tensor
+            trajectory_field_y = torch.full_like(vggt_tensor, dir_y) * mask_224_tensor
+            vggt_transformed = vggt_tensor + 0.5 * (
+                trajectory_field_x + trajectory_field_y
+            )
+            obs_dict[view_name]["vggt"] = vggt_transformed
+
+            # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
+            # Interpolate/blend hand feature tokens into intermediate background patch tokens
+            dino_subspace = view_features["task_isolated_features"]["dino_subspace"]
+            dino_grid = dino_subspace.view(14, 14).clone()
+
+            # Interpolate along line segment from (h_start, w_start) to (h_end, w_end)
+            num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
+            if num_bridge_steps > 1:
+                r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
+                c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
+                hand_val = dino_grid[min(h_start, 13), min(w_start, 13)].item()
+
+                for step_i in range(num_bridge_steps):
+                    r = min(max(r_indices[step_i], 0), 13)
+                    c = min(max(c_indices[step_i], 0), 13)
+                    alpha = (step_i + 1) / float(num_bridge_steps)
+                    dino_grid[r, c] = (1.0 - alpha) * hand_val + alpha * dino_grid[r, c]
+
+            # Re-flatten and save transformed DINO subspace features
+            dino_transformed_subspace = dino_grid.flatten()[:384]
+            dino_transformed_subspace = pad_features(dino_transformed_subspace, 384)
+            view_features["task_isolated_features"][
+                "dino_subspace_transformed"
+            ] = dino_transformed_subspace
+            obs_dict[view_name]["vision"] = dino_transformed_subspace.unsqueeze(0)
+
+    # Re-package encoded multi-view tuple
+    any_view = next(iter(obs_dict.values()))
+    encoded_tuple_transformed = {
+        "vision": torch.cat(
+            [obs_dict[view]["vision"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "pointnext": torch.cat(
+            [obs_dict[view]["pointnext"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "vggt": torch.cat(
+            [obs_dict[view]["vggt"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
+        "text": any_view["text"],
+        "tactile": any_view["tactile"],
+        "proprioception": any_view["proprioception"],
+    }
+
+    return obs_dict, encoded_tuple_transformed
