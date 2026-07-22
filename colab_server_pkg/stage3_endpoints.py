@@ -930,52 +930,47 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         avg_loss = total_loss / num_opsd_steps
 
         # Check and run exemplar diagnostic checks if any saved exemplars exist in EXEMPLAR_DIR
-        try:
-            if os.path.exists(EXEMPLAR_DIR):
-                phase_0_frames = None
-                phase_0_fp = os.path.join(EXEMPLAR_DIR, "phase_0.pkl")
-                if os.path.exists(phase_0_fp):
-                    with open(phase_0_fp, "rb") as f:
-                        raw_0 = pickle.load(f)
-                        if isinstance(raw_0, dict):
-                            phase_0_frames = raw_0.get("frames")
-                        else:
-                            phase_0_frames = getattr(raw_0, "frames", None)
+        if os.path.exists(EXEMPLAR_DIR):
+            phase_0_frames = None
+            phase_0_fp = os.path.join(EXEMPLAR_DIR, "phase_0.pkl")
+            if os.path.exists(phase_0_fp):
+                with open(phase_0_fp, "rb") as f:
+                    raw_0 = pickle.load(f)
+                    if isinstance(raw_0, dict):
+                        phase_0_frames = raw_0.get("frames")
+                    else:
+                        phase_0_frames = getattr(raw_0, "frames", None)
 
-                eval_payloads = {}
-                for fn in sorted(os.listdir(EXEMPLAR_DIR)):
-                    if fn.endswith(".pkl") and fn != "phase_0.pkl":
-                        name = fn[:-4]
-                        fp = os.path.join(EXEMPLAR_DIR, fn)
-                        with open(fp, "rb") as f:
-                            raw_payload = pickle.load(f)
-                            if isinstance(raw_payload, dict):
-                                curr_frames = raw_payload.get("frames", {})
-                                base_frames = (
-                                    phase_0_frames
-                                    if phase_0_frames is not None
-                                    else curr_frames
-                                )
-                                raw_payload["history_frames"] = [
-                                    base_frames,
-                                    curr_frames,
-                                ]
-                                raw_payload = Stage3StepPayload(**raw_payload)
-                            else:
-                                curr_frames = getattr(raw_payload, "frames", {})
-                                base_frames = (
-                                    phase_0_frames
-                                    if phase_0_frames is not None
-                                    else curr_frames
-                                )
-                                raw_payload.history_frames = [base_frames, curr_frames]
-                            eval_payloads[name] = raw_payload
-                if eval_payloads:
-                    run_exemplar_diagnostic_check(
-                        s_target_batch[0], state, eval_payloads
-                    )
-        except Exception as e:
-            print(f"⚠️ Could not execute exemplar diagnostic check: {e}")
+            eval_payloads = {}
+            for fn in sorted(os.listdir(EXEMPLAR_DIR)):
+                if fn.endswith(".pkl") and fn != "phase_0.pkl":
+                    name = fn[:-4]
+                    fp = os.path.join(EXEMPLAR_DIR, fn)
+                    with open(fp, "rb") as f:
+                        raw_payload = pickle.load(f)
+                        if isinstance(raw_payload, dict):
+                            curr_frames = raw_payload.get("frames", {})
+                            base_frames = (
+                                phase_0_frames
+                                if phase_0_frames is not None
+                                else curr_frames
+                            )
+                            raw_payload["history_frames"] = [
+                                base_frames,
+                                curr_frames,
+                            ]
+                            raw_payload = Stage3StepPayload(**raw_payload)
+                        else:
+                            curr_frames = getattr(raw_payload, "frames", {})
+                            base_frames = (
+                                phase_0_frames
+                                if phase_0_frames is not None
+                                else curr_frames
+                            )
+                            raw_payload.history_frames = [base_frames, curr_frames]
+                        eval_payloads[name] = raw_payload
+            if eval_payloads:
+                run_exemplar_diagnostic_check(s_target_batch[0], state, eval_payloads)
 
         # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
