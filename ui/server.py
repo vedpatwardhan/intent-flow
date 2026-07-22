@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import os
+import pickle
 import sys
 import traceback
 from collections import deque
@@ -687,23 +688,28 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "record_exemplar":
                     name = payload.get("name", "phase_1")
-                    print(f"📸 Recording Stage 3 Exemplar Snapshot: {name}...")
+                    print(f"📸 Recording Stage 3 Exemplar Snapshot locally: {name}...")
                     try:
+                        exemplar_dir = os.path.abspath(
+                            os.path.join(
+                                os.path.dirname(__file__),
+                                "..",
+                                "checkpoints",
+                                "exemplars",
+                            )
+                        )
+                        os.makedirs(exemplar_dir, exist_ok=True)
+                        target_path = os.path.join(exemplar_dir, f"{name}.pkl")
+
                         obs_payload = build_stage3_obs_payload(
                             sim, text_prompt, ui_annotations, 0, 0
                         )
-                        async with httpx.AsyncClient() as client:
-                            r = await client.post(
-                                f"{colab_url.rstrip('/')}/stage3/record_exemplar?name={name}",
-                                json=obs_payload,
-                                timeout=10.0,
-                            )
-                            if r.status_code == 200:
-                                print(
-                                    f"✅ Exemplar checkpoint '{name}' saved successfully!"
-                                )
-                            else:
-                                print(f"❌ Failed to save exemplar '{name}': {r.text}")
+                        with open(target_path, "wb") as f:
+                            pickle.dump(obs_payload, f)
+
+                        print(
+                            f"💾 [Local Exemplar Factory] Captured and saved state checkpoint: {target_path}"
+                        )
                     except Exception as e:
                         print(f"❌ Error recording exemplar '{name}': {e}")
 

@@ -153,30 +153,6 @@ async def process_frame(payload: FramePayload):
         )
 
 
-@app.post("/stage3/record_exemplar")
-async def record_exemplar(payload: Stage3StepPayload, name: str):
-    """
-    Captures incoming full observation footprints directly from the active live stream
-    and stores them cleanly to disk as a deployment target reference.
-    """
-    try:
-        target_path = os.path.join(EXEMPLAR_DIR, f"{name}.pkl")
-        # Convert Pydantic model state to clean python native dict layout
-        payload_data = payload.model_dump()
-
-        with open(target_path, "wb") as f:
-            pickle.dump(payload_data, f)
-
-        print(
-            f"💾 [Exemplar Factory] Captured and saved state checkpoint: {target_path}"
-        )
-        return {"status": "success", "saved_path": target_path}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to record exemplar: {str(e)}"
-        )
-
-
 @app.post("/stage3/step")
 async def stage3_step(payload: Stage3StepPayload):
     # Called from the server.py on every step of every epoch
