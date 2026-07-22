@@ -290,11 +290,7 @@ def ensure_stage3_models():
                     m_state_dict,
                     strict=(
                         module_name
-                        not in [
-                            "flow_matcher",
-                            "vggt_adapter",
-                            "txt_adapter",
-                        ],
+                        not in ["flow_matcher", "vggt_adapter", "txt_adapter"]
                     ),
                 )
     else:
