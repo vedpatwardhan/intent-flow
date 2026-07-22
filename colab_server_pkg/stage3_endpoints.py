@@ -269,16 +269,16 @@ def ensure_stage3_models():
         print("[Colab] Loading PyTorch Lightning SFT weights layout...")
         for module_name in [
             "vis_adapter",
-            "txt_adapter",
+            # "txt_adapter",
             "pt_adapter",
-            "vggt_adapter",
+            # "vggt_adapter",
             "tactile_adapter",
             "action_adapter",
             "state_adapter",
             "action_down_proj",
             "msat",
             "predictor",
-            "flow_matcher",
+            # "flow_matcher",
         ]:
             m_state_dict = {}
             prefix = f"{module_name}."
@@ -286,14 +286,7 @@ def ensure_stage3_models():
                 if k.startswith(prefix):
                     m_state_dict[k[len(prefix) :]] = v
             if len(m_state_dict) > 0 and module_name in state.stage3_models:
-                state.stage3_models[module_name].load_state_dict(
-                    m_state_dict,
-                    strict=(
-                        module_name != "flow_matcher"
-                        and module_name != "vggt_adapter"
-                        and module_name != "txt_adapter"
-                    ),
-                )
+                state.stage3_models[module_name].load_state_dict(m_state_dict)
     else:
         print(
             "[Colab] WARNING: Neither Stage 3 nor Stage 2 checkpoints were found. Models initialized with default random weights!"
