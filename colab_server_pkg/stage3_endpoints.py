@@ -109,6 +109,7 @@ class Stage3CalibrateTransition(BaseModel):
     next_obs: Stage3StepPayload
     energy: float
     tactile: float
+    s_target_vector: List[List[float]] | None = None
 
 
 class Stage3CalibratePayload(BaseModel):
@@ -623,10 +624,13 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                 f"action bounds: [{action.min().item():.6f}, {action.max().item():.6f}]"
             )
 
+            # Retrieve real target goal anchor vector if present, or fall back to s_t
+            s_target = torch.tensor(trans.s_target, dtype=torch.float32, device=device)
+
             # Track the current state, action block, true next state, energy,
-            # tactile success, and the step target
+            # tactile success, and the target goal anchor
             state.stage3_trajectory_history.append(
-                (s_t, action, s_next, trans.energy, trans.tactile, s_t)
+                (s_t, action, s_next, trans.energy, trans.tactile, s_target)
             )
 
         while len(state.stage3_trajectory_history) > 100:

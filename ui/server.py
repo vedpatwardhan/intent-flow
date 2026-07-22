@@ -307,8 +307,7 @@ async def run_stage3_training_loop(
                         res = r.json()
                         action_taken_ensemble = res.get("action")  # [16, 7, 58]
                         energy_ensemble = res.get("energy")  # [16]
-                        # list[dict[str, str]]
-                        perturbed_payloads = res.get("perturbed_payloads", [])
+                        s_target = res.get("s_target")  # [1, 512]
             except Exception as e:
                 print(
                     f"[Training Error] Episode {ep_idx + 1} Step "
@@ -460,8 +459,8 @@ async def run_stage3_training_loop(
                             touch_index_next > 0.5 and touch_thumb_next > 0.5
                         )
 
-                        # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
-                        visual_variant_idx = track_idx // 4
+                        # # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
+                        # visual_variant_idx = track_idx // 4
 
                         # Using clean observations for training
                         assigned_obs = copy.deepcopy(current_obs)
@@ -472,6 +471,7 @@ async def run_stage3_training_loop(
                                 "next_obs": track_next_obs,
                                 "energy": energy_ensemble[track_idx],
                                 "tactile": float(grasp_success),
+                                "s_target": s_target,
                             }
                         )
 
