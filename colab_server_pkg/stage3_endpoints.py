@@ -148,6 +148,30 @@ def encode_obs_to_latent(obs_dict, state):
         return out
 
 
+def run_exemplar_diagnostic_check(s_target, state, eval_payloads):
+    """
+    Computes direct latent distance from a set of fixed environment states to the current target anchor.
+    eval_payloads: Dict containing your pre-captured Near-Goal, Mid-Phase, and OOD observation structures.
+    """
+    import colab_server_pkg.models_state as model_state
+
+    diagnostic_distances = {}
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            for name, payload in eval_payloads.items():
+                # 1. Extract observation dictionaries natively
+                obs_dict, combined_obs = extract_stage3_obs_features(payload)
+                # 2. Encode to the shared latent state space
+                s_encoded = encode_obs_to_latent(combined_obs, model_state)
+                # 3. Calculate mean squared distance directly to your goal anchor
+                dist = torch.mean((s_encoded - s_target) ** 2).item()
+                diagnostic_distances[f"exemplar_distance/{name}"] = dist
+
+    print(f"📊 Exemplar Goal Distances: {json.dumps(diagnostic_distances, indent=2)}")
+    if HAS_WANDB and wandb.run is not None:
+        wandb.log(diagnostic_distances)
+
+
 def ensure_stage3_models():
     import colab_server_pkg.models_state as state
 
@@ -383,11 +407,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.45,
+                    step_nft_scale=0.2,
                 )
 
         # Learning rate for action adjustment and timeline rollback scale
-        eta = 0.2
+        eta = 0.05
         timeline_advance_rate = 0.05
         error_threshold = 0.02
 
@@ -786,7 +810,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             energy_reward = torch.exp(-batch_energy)
 
             # Combine the bounded objectives: Max value is 1.0 + 2.0 = 3.0
-            combined_rewards = energy_reward + 2.0 * batch_tactile
+            # combined_rewards = energy_reward + 2.0 * batch_tactile
+            # Temporarily disabled tactile rewards to get the energy right
+            combined_rewards = energy_reward
 
             # Apply the reward weight directly to the matching vectors
             cfm_loss = (
@@ -819,13 +845,22 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 mean_proj, torch.zeros_like(mean_proj)
             )
 
+            # Penalty on action magnitude and jerk for overall smoothness
+            reg_action_norm = torch.mean(batch_action**2)
+
+            # Penalty for step-to-step smoothness
+            action_deltas = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
+            loss_smoothness = torch.mean(action_deltas**2)
+
             # Combined total optimization payload
             loss_opsd = (
                 cfm_loss
-                + 0.2 * casa_loss
+                + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
                 + sigreg_loss * 0.01
+                + reg_action_norm * 0.05
+                + loss_smoothness * 0.1
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
@@ -846,6 +881,11 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 s_next_pred_rand = state.stage3_models["predictor"](batch_s_t, z_random)
                 action_drift = F.mse_loss(s_next_pred, s_next_pred_rand).item()
 
+            # Read the cached activation profiles from the MSAT instance layer
+            msat_profile = getattr(
+                state.stage3_models["msat"], "last_modality_profile", {}
+            )
+
             diagnostics = {
                 "epoch_step": opsd_step,
                 "loss/cfm_loss": cfm_loss.item(),
@@ -859,6 +899,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "policy/action_smoothness": action_smoothness,
                 "metrics/noop_loss_ratio": noop_ratio,
                 "metrics/action_drift": action_drift,
+                **msat_profile,
             }
             print(f"📊 Stage 3 OPSD Diagnostics: {json.dumps(diagnostics, indent=2)}")
 

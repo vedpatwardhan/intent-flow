@@ -61,6 +61,21 @@ class MultiStreamActionTransformer(nn.Module):
         # Process through transformer
         transformed = self.transformer(fused_sequence)
 
+        # --- NEW REGISTRATION BLOCK ---
+        with torch.no_grad():
+            profiles = {}
+            current_idx = 0
+            for key, tokens in modality_dict.items():
+                if tokens is None:
+                    continue
+                seq_len = tokens.size(1) if tokens.dim() == 3 else 1
+                segment_states = transformed[:, current_idx : current_idx + seq_len, :]
+                profiles[f"modality_weight/{key}"] = segment_states.abs().mean().item()
+                current_idx += seq_len
+            # Cache directly on the module instance
+            self.last_modality_profile = profiles
+        # ------------------------------
+
         # Pool to construct single state representation (e.g. mean pooling over sequence)
         state_representation = self.ln_out(transformed.mean(dim=1))
 

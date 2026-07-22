@@ -377,6 +377,20 @@ export default function EncoderDiagnostics({
     );
   };
 
+  // Example Front-End Javascript Trigger Hook
+  async function recordRobotExemplar(exemplarName) {
+    // currentLivePayload matches the exact Stage3StepPayload footprint
+    const response = await fetch(`http://localhost:8001/stage3/record_exemplar?name=${exemplarName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(currentLivePayload)
+    });
+    const data = await response.json();
+    console.log(`Checkpoint status: ${data.status}`);
+  }
+
   const activeFrame = frames?.[activeCam] || frame;
 
   return (

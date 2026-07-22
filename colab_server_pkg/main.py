@@ -1,3 +1,5 @@
+import os
+import pickle
 from time import perf_counter
 import torch
 import numpy as np
@@ -39,6 +41,11 @@ except ImportError:
     TIMM_AVAILABLE = False
 
 from vggt.models.vggt import VGGT
+
+EXEMPLAR_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "checkpoints", "exemplars")
+)
+os.makedirs(EXEMPLAR_DIR, exist_ok=True)
 
 
 class FramePayload(BaseModel):
@@ -143,6 +150,30 @@ async def process_frame(payload: FramePayload):
         traceback.print_exc()
         raise HTTPException(
             status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}"
+        )
+
+
+@app.post("/stage3/record_exemplar")
+async def record_exemplar(payload: Stage3StepPayload, name: str):
+    """
+    Captures incoming full observation footprints directly from the active live stream
+    and stores them cleanly to disk as a deployment target reference.
+    """
+    try:
+        target_path = os.path.join(EXEMPLAR_DIR, f"{name}.pkl")
+        # Convert Pydantic model state to clean python native dict layout
+        payload_data = payload.model_dump()
+
+        with open(target_path, "wb") as f:
+            pickle.dump(payload_data, f)
+
+        print(
+            f"💾 [Exemplar Factory] Captured and saved state checkpoint: {target_path}"
+        )
+        return {"status": "success", "saved_path": target_path}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to record exemplar: {str(e)}"
         )
 
 
