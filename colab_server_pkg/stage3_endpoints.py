@@ -1,3 +1,4 @@
+import pickle
 import io
 import base64
 import json
@@ -5,6 +6,10 @@ import os
 import yaml
 import numpy as np
 from pydantic import BaseModel
+
+EXEMPLAR_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "checkpoints", "exemplars")
+)
 from typing import List
 from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFilter
@@ -919,6 +924,24 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         torch.cuda.empty_cache()
 
         avg_loss = total_loss / num_opsd_steps
+
+        # Check and run exemplar diagnostic checks if any saved exemplars exist in EXEMPLAR_DIR
+        try:
+            if os.path.exists(EXEMPLAR_DIR):
+                eval_payloads = {}
+                for fn in sorted(os.listdir(EXEMPLAR_DIR)):
+                    if fn.endswith(".pkl"):
+                        name = fn[:-4]
+                        fp = os.path.join(EXEMPLAR_DIR, fn)
+                        with open(fp, "rb") as f:
+                            raw_payload = pickle.load(f)
+                            if isinstance(raw_payload, dict):
+                                raw_payload = Stage3StepPayload(**raw_payload)
+                            eval_payloads[name] = raw_payload
+                if eval_payloads:
+                    run_exemplar_diagnostic_check(s_target, state, eval_payloads)
+        except Exception as e:
+            print(f"⚠️ Could not execute exemplar diagnostic check: {e}")
 
         # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(

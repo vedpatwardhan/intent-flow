@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Send, Sliders, Play, RotateCcw, HelpCircle } from 'lucide-react';
+import { ShieldAlert, Send, Sliders, Play, RotateCcw, HelpCircle, Camera } from 'lucide-react';
 
 export default function ControlPanel({
   onUserCommand,
@@ -55,6 +55,13 @@ export default function ControlPanel({
   const triggerWildRandomize = () => {
     onUserCommand({
       type: 'wild_randomize'
+    });
+  };
+
+  const triggerRecordExemplar = (name) => {
+    onUserCommand({
+      type: 'record_exemplar',
+      name: name
     });
   };
 
@@ -115,6 +122,30 @@ export default function ControlPanel({
             </button>
             <button onClick={() => triggerIkPhase(3)} className="btn-phase" disabled={isTraining}>
               Phase 3: Lift
+            </button>
+          </div>
+        </div>
+
+        <hr className="separator" />
+
+        {/* Exemplar Recorder (Stage 3 Evaluation) */}
+        <div className="form-group">
+          <label className="form-label form-label-flex">
+            <Camera size={12} className="text-cyan-400" />
+            Exemplar Recorder (Stage 3 Evaluation)
+          </label>
+          <div className="grid-phases">
+            <button onClick={() => triggerRecordExemplar('phase_1')} className="btn-phase bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-1" disabled={isTraining}>
+              📸 Phase 1
+            </button>
+            <button onClick={() => triggerRecordExemplar('phase_2')} className="btn-phase bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-1" disabled={isTraining}>
+              📸 Phase 2
+            </button>
+            <button onClick={() => triggerRecordExemplar('phase_3')} className="btn-phase bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-1" disabled={isTraining}>
+              📸 Phase 3
+            </button>
+            <button onClick={() => triggerRecordExemplar('phase_4')} className="btn-phase bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-1" disabled={isTraining}>
+              📸 Phase 4
             </button>
           </div>
         </div>

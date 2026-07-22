@@ -168,8 +168,43 @@ cached_motion_field = None
 cached_task_isolated_features = None
 
 
+def build_stage3_obs_payload(
+    sim, text_prompt="grasp cube", ui_annotations=None, ep_idx=0, env_step=0
+):
+    frame_all_views = {}
+    frame_history = []
+    for cam_name in sim.cam_names:
+        sim.renderer.update_scene(sim.data, camera=cam_name)
+        rgb = sim.renderer.render().copy()
+        img = Image.fromarray(rgb)
+        img_224 = img.resize((224, 224))
+        buf = io.BytesIO()
+        img_224.save(buf, format="JPEG", quality=75)
+        b64 = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode(
+            "utf-8"
+        )
+        frame_all_views[cam_name] = b64
+        if cam_name == "world_center":
+            frame_history.append(b64)
+            frame_history.append(b64)
+
+    tactile_grid = [[0.0] * 4 for _ in range(4)]
+    return {
+        "frames": frame_all_views,
+        "history_frames": frame_history,
+        "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
+        "tactile": tactile_grid,
+        "text_prompt": text_prompt or "grasp cube",
+        "ui_annotations": ui_annotations
+        or {"crops": [], "vectors": [], "segments": []},
+        "is_easy_task": False,
+        "episode_idx": ep_idx,
+        "step_idx": env_step,
+    }
+
+
 async def run_stage3_training_loop(
-    websocket, sim, colab_url, text_prompt, ui_annotations
+    websocket: WebSocket, sim, colab_url: str, text_prompt: str, ui_annotations: dict
 ):
     # Called from the websocket endpoint
     if not colab_url:
@@ -649,6 +684,28 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
+
+                elif payload.get("type") == "record_exemplar":
+                    name = payload.get("name", "phase_1")
+                    print(f"📸 Recording Stage 3 Exemplar Snapshot: {name}...")
+                    try:
+                        obs_payload = build_stage3_obs_payload(
+                            sim, text_prompt, ui_annotations, 0, 0
+                        )
+                        async with httpx.AsyncClient() as client:
+                            r = await client.post(
+                                f"{colab_url.rstrip('/')}/stage3/record_exemplar?name={name}",
+                                json=obs_payload,
+                                timeout=10.0,
+                            )
+                            if r.status_code == 200:
+                                print(
+                                    f"✅ Exemplar checkpoint '{name}' saved successfully!"
+                                )
+                            else:
+                                print(f"❌ Failed to save exemplar '{name}': {r.text}")
+                    except Exception as e:
+                        print(f"❌ Error recording exemplar '{name}': {e}")
 
                 elif payload.get("type") == "clear_selections":
                     click_x = None
