@@ -321,7 +321,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
                 # Construct on-manifold target goal representation via post-extraction feature transformations
                 annotations = payload.ui_annotations
-                goal_obs_dict, goal_encoded_tuple = (
+                goal_obs_dict, goal_combined_obs = (
                     construct_stage3_latent_goal_features(obs_dict, annotations)
                 )
 
@@ -339,7 +339,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             s_t = encode_obs_to_latent(combined_obs, state)
 
             # Get clean transformed target goal state latent [1, latent_dim]
-            s_target = encode_obs_to_latent(goal_encoded_tuple, state)
+            s_target = encode_obs_to_latent(goal_combined_obs, state)
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7

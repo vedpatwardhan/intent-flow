@@ -501,7 +501,7 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))
-    encoded_tuple_transformed = {
+    combined_obs = {
         "vision": torch.cat(
             [obs_dict[view]["vision"].unsqueeze(0) for view in obs_dict], dim=1
         ),
@@ -518,4 +518,4 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
         "proprioception": any_view["proprioception"],
     }
 
-    return obs_dict, encoded_tuple_transformed
+    return obs_dict, combined_obs
