@@ -109,7 +109,7 @@ class Stage3CalibrateTransition(BaseModel):
     next_obs: Stage3StepPayload
     energy: float
     tactile: float
-    s_target_vector: List[List[float]] | None = None
+    s_target: List[List[float]] | None = None
 
 
 class Stage3CalibratePayload(BaseModel):

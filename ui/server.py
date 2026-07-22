@@ -117,7 +117,7 @@ class GR1SimulationServer(GR1MuJoCoBase):
             )
 
 
-import rerun as rr
+# import rerun as rr
 
 # Instantiate local server for live UI
 sim = GR1SimulationServer()
@@ -128,12 +128,12 @@ eval_sim = GR1SimulationServer()
 eval_sim.reset_env(lock_posture=True)
 
 # Initialize Rerun logger for evaluation stream
-rr.init("latent_flow_offline_eval", spawn=False)
-try:
-    rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
-    print("✅ Rerun connected to rerun+http://127.0.0.1:9876/proxy")
-except Exception as e:
-    print(f"⚠️ Rerun connection fallback: {e}")
+# rr.init("latent_flow_offline_eval", spawn=False)
+# try:
+#     rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
+#     print("✅ Rerun connected to rerun+http://127.0.0.1:9876/proxy")
+# except Exception as e:
+#     print(f"⚠️ Rerun connection fallback: {e}")
 
 app = FastAPI()
 
@@ -332,15 +332,15 @@ async def run_stage3_training_loop(
 
             # Replay all 16 trajectories inside the isolated evaluation simulator
             for track_idx in range(action_np.shape[0]):
-                # Create a separate RecordingStream for this candidate run to show as a separate header/session in Rerun
-                rec = rr.RecordingStream(
-                    application_id=f"epoch_{ep_idx:02d}_eval_step_{env_step:02d}_track_{track_idx:02d}",
-                    recording_id=None,
-                )
-                try:
-                    rec.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
-                except Exception:
-                    pass
+                # # Create a separate RecordingStream for this candidate run to show as a separate header/session in Rerun
+                # rec = rr.RecordingStream(
+                #     application_id=f"epoch_{ep_idx:02d}_eval_step_{env_step:02d}_track_{track_idx:02d}",
+                #     recording_id=None,
+                # )
+                # try:
+                #     rec.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
+                # except Exception:
+                #     pass
 
                 # Rewind evaluation physics cleanly to the starting coordinates of the rollout window
                 eval_sim.data.qpos[:] = initial_qpos
@@ -394,18 +394,16 @@ async def run_stage3_training_loop(
                     # 3. Get next observation for this specific candidate step and log to Rerun
                     frames_all_views_next = {}
                     step_frames = {}
-                    rec.set_time_sequence("horizon_step", h)
+                    # rec.set_time_sequence("horizon_step", h)
                     for cam_name in eval_sim.cam_names:
                         eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
                         rgb_cam_next = eval_sim.renderer.render().copy()
                         step_frames[cam_name] = rgb_cam_next.copy()
-
-                        entity_path = f"world/{cam_name}"
-                        try:
-                            rec.log(entity_path, rr.Image(rgb_cam_next))
-                        except Exception:
-                            pass
-
+                        # entity_path = f"world/{cam_name}"
+                        # try:
+                        #     rec.log(entity_path, rr.Image(rgb_cam_next))
+                        # except Exception:
+                        #     pass
                         img_cam_next = Image.fromarray(rgb_cam_next)
                         img_cam_next_224 = img_cam_next.resize((224, 224))
                         buf_cam_next = io.BytesIO()
