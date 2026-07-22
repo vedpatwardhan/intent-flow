@@ -431,7 +431,9 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
             # Generate line coordinates and safely clamp within spatial bounds
             vggt_y_indices = np.linspace(c0_y, c1_y, num_vggt_steps).astype(int)
             vggt_x_indices = np.linspace(c0_x, c1_x, num_vggt_steps).astype(int)
-            vggt_max = max(0.5, vggt_tensor.max().item())
+
+            # Use the actual peak magnitude of the baseline motion field so normalization keeps both visible
+            vggt_max = vggt_tensor.max().item()
 
             # Build a single-channel path anchor mask directly on your device
             path_mask = torch.zeros_like(vggt_tensor)
