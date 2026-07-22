@@ -936,6 +936,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 for fn in sorted(os.listdir(EXEMPLAR_DIR)):
                     if fn.endswith(".pkl"):
                         name = fn[:-4]
+                        if name == "phase_0":
+                            continue  # Phase 0 is the baseline reference frame
                         fp = os.path.join(EXEMPLAR_DIR, fn)
                         with open(fp, "rb") as f:
                             raw_payload = pickle.load(f)

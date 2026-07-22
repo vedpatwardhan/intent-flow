@@ -169,11 +169,11 @@ cached_motion_field = None
 cached_task_isolated_features = None
 
 
-def build_stage3_obs_payload(
-    sim, text_prompt="grasp cube", ui_annotations=None, ep_idx=0, env_step=0
-):
+baseline_exemplar_frames = None
+
+
+def capture_sim_frames(sim):
     frame_all_views = {}
-    frame_history = []
     for cam_name in sim.cam_names:
         sim.renderer.update_scene(sim.data, camera=cam_name)
         rgb = sim.renderer.render().copy()
@@ -185,13 +185,26 @@ def build_stage3_obs_payload(
             "utf-8"
         )
         frame_all_views[cam_name] = b64
-        if cam_name == "world_center":
-            frame_history.append(b64)
-            frame_history.append(b64)
+    return frame_all_views
+
+
+def build_stage3_obs_payload(
+    sim, text_prompt="grasp cube", ui_annotations=None, ep_idx=0, env_step=0
+):
+    global baseline_exemplar_frames
+    current_frames = capture_sim_frames(sim)
+
+    # Use explicitly set baseline_exemplar_frames (Phase 0) or fall back to current_frames
+    prev_frames = (
+        baseline_exemplar_frames
+        if baseline_exemplar_frames is not None
+        else current_frames
+    )
+    frame_history = [prev_frames, current_frames]
 
     tactile_grid = [[0.0] * 4 for _ in range(4)]
     return {
-        "frames": frame_all_views,
+        "frames": current_frames,
         "history_frames": frame_history,
         "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
         "tactile": tactile_grid,
@@ -624,8 +637,7 @@ async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
     global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
-    global ui_annotations
-    global is_training_active
+    global ui_annotations, is_training_active, last_exemplar_frames_cache
     await websocket.accept()
     print("UI Connected via WebSocket")
 
@@ -662,11 +674,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "reset":
                     sim.reset_env(lock_posture=True)
+                    baseline_exemplar_frames = None
                     needs_colab_processing = True
                     is_moving = False
 
                 elif payload.get("type") == "wild_randomize":
                     sim.wild_reset()
+                    baseline_exemplar_frames = None
                     needs_colab_processing = True
                     is_moving = False
 
@@ -698,6 +712,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         )
                         os.makedirs(exemplar_dir, exist_ok=True)
                         target_path = os.path.join(exemplar_dir, f"{name}.pkl")
+
+                        if name == "phase_0":
+                            baseline_exemplar_frames = capture_sim_frames(sim)
+                            print(
+                                "📸 Baseline Anchor Snapshot (Phase 0) set successfully!"
+                            )
 
                         obs_payload = build_stage3_obs_payload(
                             sim, text_prompt, ui_annotations, 0, 0

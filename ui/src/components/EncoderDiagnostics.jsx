@@ -657,6 +657,30 @@ export default function EncoderDiagnostics({
             <p style={{ fontSize: '9px', color: '#64748b', margin: '0 0 8px 0' }}>
               Record observation footprints (images, proprioception, tactile) for Stage 3 latent distance auditing across 4 operational phases.
             </p>
+            <button
+              onClick={() => triggerRecordExemplar('phase_0')}
+              disabled={isTraining}
+              style={{
+                background: '#09090d',
+                border: '1px solid rgba(34, 197, 94, 0.4)',
+                color: '#4ade80',
+                padding: '6px 10px',
+                borderRadius: '4px',
+                fontSize: '10px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                marginBottom: '8px',
+                width: '100%',
+                transition: 'all 0.2s'
+              }}
+            >
+              <Camera size={12} />
+              Set Baseline Anchor (Phase 0)
+            </button>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
               {['phase_1', 'phase_2', 'phase_3', 'phase_4'].map((phaseName, idx) => (
                 <button
