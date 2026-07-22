@@ -169,9 +169,6 @@ cached_motion_field = None
 cached_task_isolated_features = None
 
 
-baseline_exemplar_frames = None
-
-
 def capture_sim_frames(sim):
     frame_all_views = {}
     for cam_name in sim.cam_names:
@@ -191,17 +188,9 @@ def capture_sim_frames(sim):
 def build_stage3_obs_payload(
     sim, text_prompt="grasp cube", ui_annotations=None, ep_idx=0, env_step=0
 ):
-    global baseline_exemplar_frames
-    current_frames = capture_sim_frames(sim)
-
     # Use explicitly set baseline_exemplar_frames (Phase 0) or fall back to current_frames
-    prev_frames = (
-        baseline_exemplar_frames
-        if baseline_exemplar_frames is not None
-        else current_frames
-    )
-    frame_history = [prev_frames, current_frames]
-
+    current_frames = capture_sim_frames(sim)
+    frame_history = [current_frames, current_frames]
     tactile_grid = [[0.0] * 4 for _ in range(4)]
     return {
         "frames": current_frames,
