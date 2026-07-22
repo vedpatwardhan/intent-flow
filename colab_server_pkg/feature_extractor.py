@@ -442,7 +442,9 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
                 path_mask.unsqueeze(0).unsqueeze(0), kernel_size=7, stride=1, padding=3
             ).squeeze()
 
-            vggt_tensor = torch.where(dilated_mask, vggt_max, vggt_tensor)
+            # Apply elementwise maximum to preserve bound scale without inflating baseline motion
+            vggt_tensor = torch.maximum(vggt_tensor, dilated_mask * vggt_max)
+
         obs_dict[view_name]["vggt"] = vggt_tensor.unsqueeze(0)
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
