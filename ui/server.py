@@ -196,8 +196,8 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_epochs = 1
-    max_steps = 1
+    num_epochs = 5
+    max_steps = 5
 
     print(
         f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."
@@ -299,7 +299,7 @@ async def run_stage3_training_loop(
             for track_idx in range(action_np.shape[0]):
                 # Create a separate RecordingStream for this candidate run to show as a separate header/session in Rerun
                 rec = rr.RecordingStream(
-                    application_id=f"eval_step_{env_step:02d}_track_{track_idx:02d}",
+                    application_id=f"epoch_{ep_idx:02d}_eval_step_{env_step:02d}_track_{track_idx:02d}",
                     recording_id=None,
                 )
                 try:
