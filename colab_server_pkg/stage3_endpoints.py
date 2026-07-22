@@ -289,8 +289,9 @@ def ensure_stage3_models():
                 state.stage3_models[module_name].load_state_dict(
                     m_state_dict,
                     strict=(
-                        module_name
-                        not in ["flow_matcher", "vggt_adapter", "txt_adapter"]
+                        module_name != "flow_matcher"
+                        and module_name != "vggt_adapter"
+                        and module_name != "txt_adapter"
                     ),
                 )
     else:
