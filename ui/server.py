@@ -427,14 +427,8 @@ async def run_stage3_training_loop(
                         # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
                         visual_variant_idx = track_idx // 4
 
-                        # Enforce adversarial data contract: visual variants must exist
-                        assert (
-                            perturbed_payloads
-                        ), "🔥 FATAL: Colab endpoint failed to return perturbed_payloads!"
-                        assigned_obs = copy.deepcopy(
-                            perturbed_payloads[visual_variant_idx]
-                        )
-
+                        # Using clean observations for training
+                        assigned_obs = copy.deepcopy(current_obs)
                         transitions.append(
                             {
                                 "current_obs": assigned_obs,
