@@ -943,7 +943,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                                 raw_payload = Stage3StepPayload(**raw_payload)
                             eval_payloads[name] = raw_payload
                 if eval_payloads:
-                    run_exemplar_diagnostic_check(s_target, state, eval_payloads)
+                    run_exemplar_diagnostic_check(
+                        s_target_batch[0], state, eval_payloads
+                    )
         except Exception as e:
             print(f"⚠️ Could not execute exemplar diagnostic check: {e}")
 
