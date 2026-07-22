@@ -165,7 +165,7 @@ def ensure_stage3_models():
     latent_dim = config["model"]["latent_dim"]
 
     state.stage3_models["vis_adapter"] = VisualAdapter(d_in=384).to(device)
-    state.stage3_models["txt_adapter"] = TextAdapter(d_in=512).to(device)
+    state.stage3_models["txt_adapter"] = TextAdapter(d_in=384).to(device)
     state.stage3_models["pt_adapter"] = PointNeXtAdapter(d_in=384).to(device)
     state.stage3_models["vggt_adapter"] = VGGTAdapter(
         d_in=config["model"]["vggt_dim"]
@@ -289,7 +289,12 @@ def ensure_stage3_models():
                 state.stage3_models[module_name].load_state_dict(
                     m_state_dict,
                     strict=(
-                        module_name != "flow_matcher" and module_name != "vggt_adapter"
+                        module_name
+                        not in [
+                            "flow_matcher",
+                            "vggt_adapter",
+                            "txt_adapter",
+                        ],
                     ),
                 )
     else:

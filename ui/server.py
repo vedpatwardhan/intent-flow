@@ -297,6 +297,16 @@ async def run_stage3_training_loop(
 
             # Replay all 16 trajectories inside the isolated evaluation simulator
             for track_idx in range(action_np.shape[0]):
+                # Create a separate RecordingStream for this candidate run to show as a separate header/session in Rerun
+                rec = rr.RecordingStream(
+                    application_id=f"eval_step_{env_step:02d}_track_{track_idx:02d}",
+                    recording_id=None,
+                )
+                try:
+                    rec.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
+                except Exception:
+                    pass
+
                 # Rewind evaluation physics cleanly to the starting coordinates of the rollout window
                 eval_sim.data.qpos[:] = initial_qpos
                 eval_sim.data.qvel[:] = initial_qvel
@@ -349,16 +359,15 @@ async def run_stage3_training_loop(
                     # 3. Get next observation for this specific candidate step and log to Rerun
                     frames_all_views_next = {}
                     step_frames = {}
-                    rr.set_time_sequence("horizon_step", h)
+                    rec.set_time_sequence("horizon_step", h)
                     for cam_name in eval_sim.cam_names:
                         eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
                         rgb_cam_next = eval_sim.renderer.render().copy()
                         step_frames[cam_name] = rgb_cam_next.copy()
 
-                        # Structured Rerun path: offline_eval/step_XX/track_XX/{cam_name}
-                        entity_path = f"offline_eval/step_{env_step:02d}/track_{track_idx:02d}/{cam_name}"
+                        entity_path = f"world/{cam_name}"
                         try:
-                            rr.log(entity_path, rr.Image(rgb_cam_next))
+                            rec.log(entity_path, rr.Image(rgb_cam_next))
                         except Exception:
                             pass
 

@@ -363,16 +363,12 @@ def save_stage3_goal_features_plots(
         axes[1].axis("off")
 
         # --- Panel 3: Transformed DINOv3 Feature Map Overlay (Full attention + Arm Bridge) ---
-        view_features = obs_dict[view_name]["features"]
-        dino_map = view_features["task_isolated_features"]["dino_attn_transformed"]
-        dino_map = np.array(dino_map).reshape(14, 14)
-        dino_norm = (dino_map - dino_map.min()) / (
-            dino_map.max() - dino_map.min() + 1e-8
-        )
+        dino_map = obs_dict[view_name]["vision"].squeeze(0)[:196].view(14, 14)
+        dino_map = dino_map.detach().cpu().numpy()
 
         axes[2].imshow(clean_image_pil)
         axes[2].imshow(
-            dino_norm,
+            dino_map,
             cmap="jet",
             alpha=0.45,
             extent=[0, img_w, img_h, 0],
@@ -382,8 +378,8 @@ def save_stage3_goal_features_plots(
         axes[2].axis("off")
 
         # --- Panel 4: Transformed VGGT Motion Trajectory Field Overlay (Full Flow) ---
-        vggt_tensor = obs_dict[view_name]["vggt"]
-        vggt_map = vggt_tensor.detach().cpu().numpy().squeeze()
+        vggt_tensor = obs_dict[view_name]["vggt"].squeeze(0)
+        vggt_map = vggt_tensor.detach().cpu().numpy()
 
         axes[3].imshow(clean_image_pil)
         axes[3].imshow(
@@ -397,8 +393,8 @@ def save_stage3_goal_features_plots(
         axes[3].axis("off")
 
         # --- Panel 5: Transformed CLIP (Segment Transfer) ---
-        clip_sim = view_features["task_isolated_features"]["clip_sim_transformed"]
-        clip_sim = np.array(clip_sim).reshape(14, 14)
+        clip_sim = obs_dict[view_name]["text"].squeeze(0)[:196].view(14, 14)
+        clip_sim = clip_sim.detach().cpu().numpy()
 
         axes[4].imshow(clean_image_pil)
         axes[4].imshow(

@@ -248,6 +248,12 @@ def extract_single_view_stage3_obs_features(
     ).to(device)
     features["task_isolated_features"]["vggt_subspace"] = vggt_subspace
 
+    # CLIP --> 384
+    clip_feat = torch.tensor(
+        features["clip_sim"].flatten()[:384], dtype=torch.float32
+    ).to(device)
+    clip_feat = pad_features(clip_feat, 384)
+
     # LEGACY: PointNeXt representation with zeros
     pt_feat = torch.zeros(384, device=device)
 
@@ -261,7 +267,8 @@ def extract_single_view_stage3_obs_features(
         "vggt": vggt_feat.unsqueeze(0),  # [1, 224, 224]
         "tactile": torch.tensor(tactile).to(device).flatten().unsqueeze(0),  # [1, 16]
         "proprioception": proprioception.unsqueeze(0),  # [1, 58]
-        "text": features["text_feat"].unsqueeze(0),  # [1, 512]
+        # "text": features["text_feat"].unsqueeze(0),  # [1, 512]
+        "text": clip_feat.unsqueeze(0),  # [1, 384]
     }
     return obs_dict
 
@@ -299,7 +306,9 @@ def extract_stage3_obs_features(payload):
         "vggt": torch.cat(
             [obs_dict[view]["vggt"].unsqueeze(0) for view in obs_dict], dim=1
         ),
-        "text": any_view["text"],
+        "text": torch.cat(
+            [obs_dict[view]["text"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],
     }
@@ -416,27 +425,29 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
 
         # --- A. VGGT Latent Transformation (Trajectory Flow Heatmap Activation) ---
         # Activate coordinates along the path from Hand to Cube on the full motion field (no subspace masking)
-        vggt_tensor = obs_dict[view_name]["vggt"]  # [1, 224, 224]
+        vggt_tensor = obs_dict[view_name]["vggt"].squeeze(0)  # [224, 224]
         num_vggt_steps = max(abs(int(c1_y - c0_y)), abs(int(c1_x - c0_x))) + 1
         if num_vggt_steps > 1:
+            # Generate line coordinates and safely clamp within spatial bounds
             vggt_y_indices = np.linspace(c0_y, c1_y, num_vggt_steps).astype(int)
             vggt_x_indices = np.linspace(c0_x, c1_x, num_vggt_steps).astype(int)
             vggt_max = max(0.5, vggt_tensor.max().item())
-            for step_j in range(num_vggt_steps):
-                cy_pt = vggt_y_indices[step_j]
-                cx_pt = vggt_x_indices[step_j]
-                for dy_offset in range(-3, 4):
-                    for dx_offset in range(-3, 4):
-                        ry = min(223, max(0, cy_pt + dy_offset))
-                        rx = min(223, max(0, cx_pt + dx_offset))
-                        vggt_tensor[0, ry, rx] += vggt_max
-        obs_dict[view_name]["vggt"] = vggt_tensor
+
+            # Build a single-channel path anchor mask directly on your device
+            path_mask = torch.zeros_like(vggt_tensor)
+            path_mask[vggt_y_indices, vggt_x_indices] = 1.0
+
+            # Dilate the line by 3 pixels in all directions using max_pool2d (7x7 window)
+            dilated_mask = torch.nn.functional.max_pool2d(
+                path_mask.unsqueeze(0).unsqueeze(0), kernel_size=7, stride=1, padding=3
+            ).squeeze()
+
+            vggt_tensor = torch.where(dilated_mask, vggt_max, vggt_tensor)
+        obs_dict[view_name]["vggt"] = vggt_tensor.unsqueeze(0)
 
         # --- B. DINOv3 Latent Transformation (Linear Latent Arm Bridges) ---
         # Interpolate hand features into intermediate background patch tokens on the full unmasked DINO grid
-        dino_grid = torch.tensor(
-            view_features["dino_attn"], dtype=torch.float32, device=device
-        ).clone()
+        dino_grid = obs_dict[view_name]["vision"].squeeze(0)[:196].view(14, 14)
         num_bridge_steps = max(abs(h_end - h_start), abs(w_end - w_start)) + 1
         if num_bridge_steps > 1:
             r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
@@ -450,16 +461,11 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
         # Re-flatten and save transformed DINO features
         dino_transformed = dino_grid.flatten()[:384]
         dino_transformed = pad_features(dino_transformed, 384)
-        view_features["task_isolated_features"][
-            "dino_attn_transformed"
-        ] = dino_grid.cpu().numpy()
         obs_dict[view_name]["vision"] = dino_transformed.unsqueeze(0)
 
         # --- C. CLIP Latent Transformation (Segment Transfer) ---
         # Copy Segment 1 (Hand) features to the target position on the 14x14 text feature grid
-        clip_sim_grid = torch.tensor(
-            view_features["clip_sim"], dtype=torch.float32, device=device
-        ).clone()
+        clip_sim_grid = obs_dict[view_name]["text"].squeeze(0)[:196].view(14, 14)
         clip_sim_transformed = clip_sim_grid.clone()
 
         # Interpolate hand mask to 14x14 grid size
@@ -484,10 +490,10 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
             target_r = min(13, max(0, r + h_offset))
             target_c = min(13, max(0, c + w_offset))
             clip_sim_transformed[target_r, target_c] = clip_sim_grid[r, c]
+            clip_sim_grid[r, c] = 0
 
-        view_features["task_isolated_features"][
-            "clip_sim_transformed"
-        ] = clip_sim_transformed.cpu().numpy()
+        clip_sim_transformed = pad_features(clip_sim_transformed.flatten()[:384], 384)
+        obs_dict[view_name]["text"] = clip_sim_transformed.unsqueeze(0)
 
     # Re-package encoded multi-view tuple
     any_view = next(iter(obs_dict.values()))
@@ -501,7 +507,9 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
         "vggt": torch.cat(
             [obs_dict[view]["vggt"].unsqueeze(0) for view in obs_dict], dim=1
         ),
-        "text": any_view["text"],
+        "text": torch.cat(
+            [obs_dict[view]["text"].unsqueeze(0) for view in obs_dict], dim=1
+        ),
         "tactile": any_view["tactile"],
         "proprioception": any_view["proprioception"],
     }
