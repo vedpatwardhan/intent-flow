@@ -626,7 +626,7 @@ async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
     global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
-    global ui_annotations, is_training_active, last_exemplar_frames_cache
+    global ui_annotations, is_training_active
     await websocket.accept()
     print("UI Connected via WebSocket")
 

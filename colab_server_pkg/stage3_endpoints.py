@@ -417,7 +417,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 )
 
         # Learning rate for action adjustment and timeline rollback scale
-        eta = 0.05
+        eta = 0.12
         timeline_advance_rate = 0.05
         error_threshold = 0.02
 
@@ -434,7 +434,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             "iterations": [],
         }
 
-        for k in range(5):
+        for k in range(8):
             a_candidates = a_candidates.clone().detach().requires_grad_(True)
 
             # Record candidate trajectory state before this iteration update
@@ -471,13 +471,15 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             diff = eta * grad_a_normalized * t_j
             a_candidates = (a_candidates - diff) * action_mask
 
-            # COMBOSTOC LOCAL REPAIR: Evaluate absolute error profile per joint channel
+            # Switch the stability check to RAW gradient forces
             # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
-            joint_errors = grad_a_normalized.abs().mean(dim=(0, 1))
+            raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
+
+            # Use an unnormalized threshold scale since raw MSE gradients are naturally smaller
+            stable_joints_mask = raw_joint_errors <= 0.005
 
             # Joints that are stable (error below threshold) advance forward
             # toward clean actions (1.0)
-            stable_joints_mask = joint_errors <= error_threshold
             steering_timelines_expanded[
                 :, :, stable_joints_mask
             ] += timeline_advance_rate
@@ -868,7 +870,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
                 + sigreg_loss * 0.01
-                + reg_action_norm * 0.05
+                + reg_action_norm * 0.01
                 + loss_smoothness * 0.1
             )
 
