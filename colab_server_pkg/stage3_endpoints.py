@@ -126,13 +126,6 @@ def encode_obs_to_latent(obs_dict, state):
     Multi-Stream Action Transformer (MSAT) to yield the multi-modal latent state.
     """
     with torch.amp.autocast("cuda"):
-        # Print input bounds for debugging NaNs
-        print("   [Input Debug] bounds", end=" | ")
-        for k, v in obs_dict.items():
-            if torch.is_tensor(v):
-                print(f"{k}: [{v.min().item():.3f}, {v.max().item():.3f}]", end=" | ")
-        print()
-
         # Adapters
         vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
         txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
@@ -593,11 +586,11 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
 
         s_t_first = None
         num_transitions = len(payload.transitions)
-        print(f"\n[Calibrate] Starting calibration on {num_transitions} transitions...")
+        print(f"\n[CALIBRATE] Starting calibration on {num_transitions} transitions...")
 
         for i, trans in enumerate(payload.transitions):
             print(
-                f"[Calibrate] Processing transition {i + 1}/{num_transitions} ({(i + 1) / num_transitions * 100:.1f}%)..."
+                f"[CALIBRATE] Processing transition {i + 1}/{num_transitions} ({(i + 1) / num_transitions * 100:.1f}%)..."
             )
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
@@ -621,12 +614,6 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                     # s_t, s_next: Shape [1, 512] (shared state latent dimension)
                     s_t = encode_obs_to_latent(combined_obs_t, state).detach()
                     s_next = encode_obs_to_latent(combined_obs_next, state).detach()
-                    print(
-                        f"[CALIBRATE] s_t bounds: [{s_t.min().item():.6f}, "
-                        f"{s_t.max().item():.6f}] "
-                        f"s_next bounds: [{s_next.min().item():.6f}, "
-                        f"{s_next.max().item():.6f}]"
-                    )
 
             if s_t_first is None:
                 s_t_first = s_t
@@ -634,6 +621,10 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
             print(
+                f"[CALIBRATE] s_t bounds: [{s_t.min().item():.6f}, "
+                f"{s_t.max().item():.6f}] "
+                f"s_next bounds: [{s_next.min().item():.6f}, "
+                f"{s_next.max().item():.6f}] "
                 f"action bounds: [{action.min().item():.6f}, {action.max().item():.6f}]"
             )
 
@@ -804,13 +795,13 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             batch_action_3d = batch_action.view(B_size, 7, 58)
 
             print(
-                "Shapes: \n"
-                f"\tbatch_s_t: {batch_s_t.shape}\n"
-                f"\tbatch_action: {batch_action.shape}\n"
-                f"\tbatch_s_next: {batch_s_next.shape}\n"
-                f"\tbatch_energy: {batch_energy.shape}\n"
-                f"\tbatch_tactile: {batch_tactile.shape}\n"
-                f"\ts_target_batch: {s_target_batch.shape}\n"
+                "Shapes: "
+                f"batch_s_t: {batch_s_t.shape}"
+                f"\tbatch_action: {batch_action.shape}"
+                f"\tbatch_s_next: {batch_s_next.shape}"
+                f"\tbatch_energy: {batch_energy.shape}"
+                f"\tbatch_tactile: {batch_tactile.shape}"
+                f"\ts_target_batch: {s_target_batch.shape}"
                 f"\tbatch_action_3d: {batch_action_3d.shape}"
             )
 

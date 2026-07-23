@@ -234,7 +234,7 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_epochs = 5
+    num_epochs = 15
     max_steps = 5
 
     print(
@@ -261,7 +261,16 @@ async def run_stage3_training_loop(
         episode_reward = 0.0
 
         for env_step in range(max_steps):
-            # Capture observation
+            # 1. Randomize both robot posture and cube position at the start of EVERY step
+            sim.reset_env(lock_posture=True, randomize_cube=True)
+
+            # 2. Seed a fresh, clean zero-velocity frame history for this step
+            # Prevents VGGT motion extractor from comparing across teleported worlds
+            step_init_frames = capture_sim_frames(sim)
+            frame_history = [step_init_frames, step_init_frames]
+            frame_all_views = step_init_frames.copy()
+
+            # 3. Capture observation natively
             sim.renderer.update_scene(sim.data, camera="world_center")
 
             # Computes distance between fingers and cube
@@ -570,11 +579,7 @@ async def run_stage3_training_loop(
                     f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                 )
 
-            # Reset physics back to the pre-training layout for the next step start
-            sim.data.qpos[:] = initial_state["qpos"]
-            sim.data.qvel[:] = initial_state["qvel"]
-            sim.data.ctrl[:] = initial_state["ctrl"]
-            mujoco.mj_forward(sim.model, sim.data)
+            # Step loop ends cleanly; next step starts with sim.reset_env(lock_posture=True, randomize_cube=True)
 
         # Distillation
         touch_count = 0
