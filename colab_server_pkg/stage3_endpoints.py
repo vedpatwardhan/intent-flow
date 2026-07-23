@@ -419,7 +419,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.12
         timeline_advance_rate = 0.05
-        error_threshold = 0.005
+        error_threshold = 0.0008
 
         # Create embodiment-aware action mask (first 32 GR-1 active joints)
         action_mask = torch.zeros(1, 1, joint_dim, device=device)
