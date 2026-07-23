@@ -471,15 +471,24 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             diff = eta * grad_a_normalized * t_j
             a_candidates = (a_candidates - diff) * action_mask
 
-            # Switch the stability check to RAW gradient forces
-            # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
+            # Raw gradient forces per joint: Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
             raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
 
-            # Isolate the first 32 active structural dimensions
+            # Store initial unsteered raw gradient forces at iteration k == 0
+            if k == 0:
+                g_0_joint_errors = raw_joint_errors.clone().detach()
+
+            # Isolate active structural dimensions (first 32 joints)
             active_selector = action_mask.squeeze(0).squeeze(0) > 0
 
+            # Relative Force Convergence Ratio:
+            # Joint j is STABLE if its current gradient force has dropped to <= 40% of its initial force at iteration 0
+            # (i.e. >= 60% force reduction / convergence across lookahead steering)
+            alpha = 0.40
+            relative_ratio = raw_joint_errors / (g_0_joint_errors + 1e-8)
+
             # Stable and drifting masks scoped strictly to active joints
-            stable_joints_mask = (raw_joint_errors <= error_threshold) & active_selector
+            stable_joints_mask = (relative_ratio <= alpha) & active_selector
             drifting_joints_mask = (~stable_joints_mask) & active_selector
 
             # Force padding channels to zero out entirely in the timeline grid
@@ -492,8 +501,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             ] += timeline_advance_rate
             steering_timelines_expanded[:, :, drifting_joints_mask] = 0.0
 
-            # Keep boundaries locked within standard flow matching bounds
-            # [0.0, 1.0]
+            # Keep boundaries locked within standard flow matching bounds [0.0, 1.0]
             steering_timelines_expanded = torch.clamp(
                 steering_timelines_expanded, 0.0, 1.0
             )
