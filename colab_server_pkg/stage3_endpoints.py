@@ -419,7 +419,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.12
         timeline_advance_rate = 0.05
-        error_threshold = 0.02
+        error_threshold = 0.005
 
         # Create embodiment-aware action mask (first 32 GR-1 active joints)
         action_mask = torch.zeros(1, 1, joint_dim, device=device)
@@ -476,7 +476,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
 
             # Use an unnormalized threshold scale since raw MSE gradients are naturally smaller
-            stable_joints_mask = raw_joint_errors <= 0.005
+            stable_joints_mask = raw_joint_errors <= error_threshold
 
             # Joints that are stable (error below threshold) advance forward
             # toward clean actions (1.0)
