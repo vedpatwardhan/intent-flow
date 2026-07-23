@@ -475,18 +475,21 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
             raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
 
-            # Use an unnormalized threshold scale since raw MSE gradients are naturally smaller
-            stable_joints_mask = raw_joint_errors <= error_threshold
+            # Isolate the first 32 active structural dimensions
+            active_selector = action_mask.squeeze(0).squeeze(0) > 0
 
-            # Joints that are stable (error below threshold) advance forward
-            # toward clean actions (1.0)
+            # Stable and drifting masks scoped strictly to active joints
+            stable_joints_mask = (raw_joint_errors <= error_threshold) & active_selector
+            drifting_joints_mask = (~stable_joints_mask) & active_selector
+
+            # Force padding channels to zero out entirely in the timeline grid
+            padding_mask = ~active_selector
+            steering_timelines_expanded[:, :, padding_mask] = 0.0
+
+            # Advance timelines for stable active joints, reset drifting ones to noise
             steering_timelines_expanded[
                 :, :, stable_joints_mask
             ] += timeline_advance_rate
-
-            # Joints that are drifting (error above threshold) get pinned or
-            # reset back to 0.0 (noise space)
-            drifting_joints_mask = ~stable_joints_mask
             steering_timelines_expanded[:, :, drifting_joints_mask] = 0.0
 
             # Keep boundaries locked within standard flow matching bounds
@@ -534,7 +537,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             if wandb.run is not None:
                 with torch.no_grad():
                     candidate_var = final_actions.var(dim=0).mean().item()
-                    mean_timeline = steering_timelines_expanded.mean().item()
+                    mean_timeline = steering_timelines_expanded[..., :32].mean().item()
                     stable_joints_cnt = stable_joints_mask.sum().item()
                     drifting_joints_cnt = drifting_joints_mask.sum().item()
                     mean_energy = final_energies.mean().item()
