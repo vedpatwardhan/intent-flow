@@ -794,17 +794,27 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
             batch_action_3d = batch_action.view(B_size, 7, 58)
 
+            # 1. Context-Aware Latent Cross-Attention Goal Adaptation
+            # Query (Q) = live randomized state (batch_s_t)
+            # Key/Value (K,V) = UI goal specification (s_target_batch)
+            query = batch_s_t.unsqueeze(1)
+            key_value = s_target_batch.unsqueeze(1)
+            attn_output, _ = state.stage3_models["goal_attention"](
+                query=query, key=key_value, value=key_value
+            )
+            s_target_adapted = attn_output.squeeze(1)
             print(
-                "Shapes: "
-                f"batch_s_t: {batch_s_t.shape}"
-                f"\tbatch_action: {batch_action.shape}"
-                f"\tbatch_s_next: {batch_s_next.shape}"
-                f"\tbatch_energy: {batch_energy.shape}"
-                f"\tbatch_tactile: {batch_tactile.shape}"
-                f"\ts_target_batch: {s_target_batch.shape}"
-                f"\tbatch_action_3d: {batch_action_3d.shape}"
+                "[DISTILL] Shapes:"
+                f" batch_s_t: {batch_s_t.shape}"
+                f" batch_action: {batch_action.shape}"
+                f" batch_s_next: {batch_s_next.shape}"
+                f" batch_energy: {batch_energy.shape}"
+                f" batch_tactile: {batch_tactile.shape}"
+                f" s_target_batch: {s_target_batch.shape}"
+                f" batch_action_3d: {batch_action_3d.shape}"
             )
 
+            # 2. CFM Flow Matching conditioned on context-aware adapted goal representation
             # Request unreduced batch loss elements using our new flag
             batch_size = batch_action_3d.size(0)
             embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
@@ -813,7 +823,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
                 x_1=batch_action_3d,  # [ensemble_size, horizon, action_dim]
                 s_t=batch_s_t,  # [ensemble_size, latent_dim]
-                s_target=s_target_batch,  # [ensemble_size, latent_dim]
+                s_target=s_target_adapted,  # [ensemble_size, latent_dim]
                 embodiment_id=embodiment_id,
                 reduction="none",
             )
@@ -832,23 +842,24 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 cfm_loss_elementwise * combined_rewards.unsqueeze(-1).unsqueeze(-1)
             ).mean()
 
-            # 2. Predictor Loss (JEPA dynamics)
+            # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
             s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
-            # 3. Direct Goal Target Alignment Loss
-            goal_attention_loss = F.mse_loss(s_next_pred, s_target_batch)
+            # 4. Direct Goal Target Alignment & Domain Cross-Attention Losses
+            goal_attention_loss = F.mse_loss(s_next_pred, s_target_adapted)
+            attn_alignment_loss = F.mse_loss(s_target_adapted, s_target_batch)
 
-            # 4. CASA (Contrastive Action-State Alignment) Loss integration from Stage 2 SFT
+            # 5. CASA (Contrastive Action-State Alignment) loss
             z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
             z_a = z_action / (z_action.norm(dim=-1, keepdim=True) + 1e-8)
             sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
-            # 5. Anti-collapse regularization (SIGReg)
+            # 6. Anti-collapse regularization (SIGReg)
             random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
             projected = torch.matmul(s_next_pred, random_dirs)
@@ -871,6 +882,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
+                + attn_alignment_loss * 0.25
                 + sigreg_loss * 0.01
                 + reg_action_norm * 0.01
                 + loss_smoothness * 0.1
@@ -906,6 +918,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "loss/sigreg_loss": sigreg_loss.item(),
                 "loss/predictor_loss": predictor_loss.item(),
                 "loss/goal_attention_loss": goal_attention_loss.item(),
+                "loss/attn_alignment_loss": attn_alignment_loss.item(),
                 "drift/state_magnitude": state_magnitude,
                 "drift/state_variance": state_variance,
                 "policy/action_magnitude": action_magnitude,
