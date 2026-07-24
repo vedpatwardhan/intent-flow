@@ -234,7 +234,7 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_epochs = 15
+    num_epochs = 20
     max_steps = 5
 
     print(
