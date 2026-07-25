@@ -467,9 +467,12 @@ async def run_stage3_training_loop(
                         grasp_success = (
                             touch_index_next > 0.5 and touch_thumb_next > 0.5
                         )
-
-                        # # Track 0-3 belong to payload 0 (clean), 4-7 to payload 1 (blur), etc.
-                        # visual_variant_idx = track_idx // 4
+                        # Physical distance from effector center point to cube
+                        hand_center = (index_pos + thumb_pos) / 2.0
+                        phys_dist = float(np.linalg.norm(hand_center - cube_pos))
+                        if not hasattr(sim, "_step_physical_distances"):
+                            sim._step_physical_distances = []
+                        sim._step_physical_distances.append(phys_dist)
 
                         # Using clean observations for training
                         assigned_obs = copy.deepcopy(current_obs)
@@ -548,6 +551,33 @@ async def run_stage3_training_loop(
 
                 video_writer.release()
                 print(f"[Video Utility] Saved rollout video: {video_path}")
+
+            # Compute correlation between latent energies and physical distances
+            if (
+                hasattr(sim, "_step_physical_distances")
+                and len(sim._step_physical_distances) > 0
+            ):
+                phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
+                energies_np = np.array(energy_ensemble, dtype=np.float32)
+                mean_phys_dist = float(np.mean(phys_dists_np))
+                corr_mat = np.corrcoef(phys_dists_np, energies_np)
+                energy_dist_corr = (
+                    float(corr_mat[0, 1]) if not np.isnan(corr_mat[0, 1]) else 0.0
+                )
+                print(
+                    f"📈 [Telemetry Summary] Step {env_step} -> Avg Physical Effector-Cube Dist: {mean_phys_dist:.4f}m | Energy-Distance Correlation: {energy_dist_corr:.4f}"
+                )
+                if HAS_WANDB and wandb.run is not None:
+                    try:
+                        wandb.log(
+                            {
+                                "eval/mean_physical_distance": mean_phys_dist,
+                                "eval/energy_distance_correlation": energy_dist_corr,
+                            }
+                        )
+                    except Exception:
+                        pass
+                sim._step_physical_distances = []
 
             # Rewind physics back to the committed path's final outcome to capture its state
             sim.data.qpos[:] = committed_qpos

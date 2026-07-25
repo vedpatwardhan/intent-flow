@@ -544,6 +544,31 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     mean_energy = final_energies.mean().item()
                     min_energy = final_energies.min().item()
 
+                    # --- DINO Spatial Distribution Diagnostics ---
+                    dino_entropy = 0.0
+                    dino_par = 0.0
+                    if (
+                        isinstance(obs_dict, dict)
+                        and "world_center" in obs_dict
+                        and isinstance(obs_dict["world_center"], dict)
+                        and "features" in obs_dict["world_center"]
+                        and isinstance(obs_dict["world_center"]["features"], dict)
+                        and "dino_attn" in obs_dict["world_center"]["features"]
+                    ):
+                        raw_dino_attn = np.array(
+                            obs_dict["world_center"]["features"]["dino_attn"],
+                            dtype=np.float32,
+                        )
+                        dino_prob = raw_dino_attn.flatten() / (
+                            np.sum(raw_dino_attn) + 1e-8
+                        )
+                        dino_entropy = float(
+                            -np.sum(dino_prob * np.log(dino_prob + 1e-8))
+                        )
+                        dino_max = float(np.max(raw_dino_attn))
+                        dino_mean = float(np.mean(raw_dino_attn))
+                        dino_par = float(dino_max / (dino_mean + 1e-8))
+
                 try:
                     wandb.log(
                         {
@@ -553,6 +578,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                             "steering/drifting_joints": drifting_joints_cnt,
                             "steering/mean_energy": mean_energy,
                             "steering/min_energy": min_energy,
+                            "dino_diagnostics/spatial_entropy": dino_entropy,
+                            "dino_diagnostics/peak_to_average_ratio": dino_par,
                         }
                     )
                 except Exception:
@@ -752,7 +779,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        num_opsd_steps = 5
+        num_opsd_steps = 45
         batch_size = min(len(state.stage3_trajectory_history), 16)
         total_loss = 0.0
 
@@ -794,25 +821,16 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
             batch_action_3d = batch_action.view(B_size, 7, 58)
 
-            # 1. Context-Aware Latent Cross-Attention Goal Adaptation
-            # Query (Q) = live randomized state (batch_s_t)
+            # 1. Temperature-Scaled Context-Aware Latent Cross-Attention Goal Adaptation (tau = 0.50)
+            # Query (Q) = live randomized state scaled by tau (batch_s_t / 0.50)
             # Key/Value (K,V) = UI goal specification (s_target_batch)
-            query = batch_s_t.unsqueeze(1)
+            tau = 0.50
+            query = (batch_s_t / tau).unsqueeze(1)
             key_value = s_target_batch.unsqueeze(1)
             attn_output, _ = state.stage3_models["goal_attention"](
                 query=query, key=key_value, value=key_value
             )
             s_target_adapted = attn_output.squeeze(1)
-            print(
-                "[DISTILL] Shapes:"
-                f" batch_s_t: {batch_s_t.shape}"
-                f" batch_action: {batch_action.shape}"
-                f" batch_s_next: {batch_s_next.shape}"
-                f" batch_energy: {batch_energy.shape}"
-                f" batch_tactile: {batch_tactile.shape}"
-                f" s_target_batch: {s_target_batch.shape}"
-                f" batch_action_3d: {batch_action_3d.shape}"
-            )
 
             # 2. CFM Flow Matching conditioned on context-aware adapted goal representation
             # Request unreduced batch loss elements using our new flag
@@ -859,7 +877,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
-            # 6. Anti-collapse regularization (SIGReg)
+            # 6. Anti-collapse regularization (SIGReg) with Step Decay Schedule
             random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
             projected = torch.matmul(s_next_pred, random_dirs)
@@ -869,6 +887,13 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 mean_proj, torch.zeros_like(mean_proj)
             )
 
+            # Persistent Global SIGReg Decay (smooth decay across global run steps, no epoch resets)
+            if not hasattr(state, "global_distill_step_count"):
+                state.global_distill_step_count = 0
+            state.global_distill_step_count += 1
+
+            beta_sig = max(0.001, 0.01 * (0.995**state.global_distill_step_count))
+
             # Penalty on action magnitude and jerk for overall smoothness
             reg_action_norm = torch.mean(batch_action**2)
 
@@ -876,15 +901,15 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             action_deltas = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
             loss_smoothness = torch.mean(action_deltas**2)
 
-            # Combined total optimization payload
+            # Combined total optimization payload for Run 94
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
                 + attn_alignment_loss * 0.25
-                + sigreg_loss * 0.01
-                + reg_action_norm * 0.01
+                + sigreg_loss * beta_sig
+                + reg_action_norm * 0.0025
                 + loss_smoothness * 0.1
             )
 

@@ -46,6 +46,12 @@ class MultiStreamActionTransformer(nn.Module):
             if tokens.dim() == 2:
                 tokens = tokens.unsqueeze(1)
 
+            # Anchor proprioception token scale to >= 0.65 floor to prevent joint state blinding
+            if key == "proprioception":
+                p_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8
+                scale_floor = torch.clamp(0.65 / p_norm, min=1.0)
+                tokens = tokens * scale_floor
+
             # Add modality specific indicator bias
             mod_indicator = self.modality_embeddings[key].expand(
                 batch_size, tokens.size(1), -1
