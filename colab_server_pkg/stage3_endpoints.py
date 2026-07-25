@@ -114,8 +114,8 @@ class Stage3CalibrateTransition(BaseModel):
 
 class Stage3CalibratePayload(BaseModel):
     transitions: List[Stage3CalibrateTransition]
-    eval_mean_physical_distance: Optional[float] = None
-    eval_energy_distance_correlation: Optional[float] = None
+    eval_mean_physical_distance: float | None = None
+    eval_energy_distance_correlation: float | None = None
 
 
 class Stage3DistillPayload(BaseModel):
