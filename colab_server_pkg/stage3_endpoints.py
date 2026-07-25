@@ -114,6 +114,8 @@ class Stage3CalibrateTransition(BaseModel):
 
 class Stage3CalibratePayload(BaseModel):
     transitions: List[Stage3CalibrateTransition]
+    eval_mean_physical_distance: Optional[float] = None
+    eval_energy_distance_correlation: Optional[float] = None
 
 
 class Stage3DistillPayload(BaseModel):
@@ -754,6 +756,21 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
             print(
                 f"            SIGReg loss: {loss_sigreg.item():.6f} | Total loss: {loss_total.item():.6f}\n"
             )
+
+        # Log evaluation telemetry passed from simulation step payload
+        if HAS_WANDB and payload.eval_mean_physical_distance is not None:
+            ensure_wandb_init()
+            if wandb.run is not None:
+                try:
+                    wandb.log(
+                        {
+                            "eval/mean_physical_distance": payload.eval_mean_physical_distance,
+                            "eval/energy_distance_correlation": payload.eval_energy_distance_correlation
+                            or 0.0,
+                        }
+                    )
+                except Exception:
+                    pass
 
         return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
     except Exception as e:
