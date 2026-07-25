@@ -799,6 +799,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         num_opsd_steps = 45
         batch_size = min(len(state.stage3_trajectory_history), 16)
         total_loss = 0.0
+        accumulated_diagnostics = []
 
         for opsd_step in range(num_opsd_steps):
             state.stage3_optimizer.zero_grad()
@@ -969,7 +970,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "metrics/action_drift": action_drift,
                 **msat_profile,
             }
-            print(f"📊 Stage 3 OPSD Diagnostics: {json.dumps(diagnostics, indent=2)}")
+            accumulated_diagnostics.append(diagnostics)
 
             if HAS_WANDB:
                 ensure_wandb_init()
@@ -987,6 +988,27 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         torch.cuda.empty_cache()
 
         avg_loss = total_loss / num_opsd_steps
+
+        # Compute and print mean diagnostics across all completed distillation steps
+        mean_diagnostics = {}
+        if accumulated_diagnostics:
+            for k in accumulated_diagnostics[0].keys():
+                if k == "epoch_step":
+                    continue
+                vals = [
+                    d[k]
+                    for d in accumulated_diagnostics
+                    if k in d and isinstance(d[k], (int, float))
+                ]
+                if vals:
+                    mean_diagnostics[k] = float(np.mean(vals))
+
+        print(
+            f"📊 [DISTILL SUMMARY] Completed {num_opsd_steps} steps | Mean Distill Loss: {avg_loss:.6f}"
+        )
+        print(
+            f"📊 Mean OPSD Diagnostics Summary:\n{json.dumps(mean_diagnostics, indent=2)}"
+        )
 
         # Check and run exemplar diagnostic checks if any saved exemplars exist in EXEMPLAR_DIR
         if os.path.exists(EXEMPLAR_DIR):
