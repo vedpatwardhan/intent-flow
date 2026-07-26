@@ -220,6 +220,14 @@ def ensure_stage3_models():
     state.stage3_models["flow_matcher"] = ComboStocFlowMatcher(
         action_dim=action_dim, config=config
     ).to(device)
+    if "flow_matcher_ref" not in state.stage3_models:
+        state.stage3_models["flow_matcher_ref"] = ComboStocFlowMatcher(
+            action_dim=action_dim, config=config
+        ).to(device)
+        state.stage3_models["flow_matcher_ref"].load_state_dict(
+            state.stage3_models["flow_matcher"].state_dict()
+        )
+        state.stage3_models["flow_matcher_ref"].eval()
 
     state.stage3_models["gnn_library"] = GNNSkillLibrary(
         state.stage3_models["flow_matcher"], state_dim=latent_dim
@@ -872,28 +880,54 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
                 batch_size
             )
-            cfm_loss_elementwise = state.stage3_models["flow_matcher"].get_cfm_loss(
-                x_1=batch_action_3d,  # [ensemble_size, horizon, action_dim]
-                s_t=batch_s_t,  # [ensemble_size, latent_dim]
-                s_target=s_target_adapted,  # [ensemble_size, latent_dim]
-                embodiment_id=embodiment_id,
-                reduction="none",
+
+            # Sample unsynced independent timelines [B, H, action_dim]
+            t_unsync = torch.rand(batch_size, 7, 58, device=device)
+
+            # Sample synced uniform timeline [B, H, action_dim]
+            t_sync = torch.rand(batch_size, 7, 1, device=device).expand(-1, -1, 58)
+
+            # Blend them using the ComboStoc scheme
+            progress = torch.rand(batch_size, 1, 1, device=device)
+            t_sample = t_sync * (1.0 - progress) + t_unsync * progress
+
+            # Get current trainable policy output
+            v_theta = state.stage3_models["flow_matcher"].velocity_field(
+                batch_action_3d, t_sample, batch_s_t, s_target_adapted, embodiment_id
             )
-            cfm_loss_elementwise = cfm_loss_elementwise.mean(dim=[1, 2])
 
-            # Split sampled batch into Positive D+ (lower 50% energy) vs Negative D- (upper 50% energy)
-            median_energy = torch.median(batch_energy)
-            pos_mask = batch_energy <= median_energy
-            neg_mask = ~pos_mask
+            # Get frozen reference policy output
+            with torch.no_grad():
+                v_old = state.stage3_models["flow_matcher_ref"].velocity_field(
+                    batch_action_3d,
+                    t_sample,
+                    batch_s_t,
+                    s_target_adapted,
+                    embodiment_id,
+                )
 
-            pos_indices = torch.where(pos_mask)[0]
-            neg_indices = torch.where(neg_mask)[0]
+            # Compute the velocity drift delta (Δv)
+            delta_v = v_theta - v_old
 
-            loss_pos = cfm_loss_elementwise[pos_indices].mean()
-            loss_neg = cfm_loss_elementwise[neg_indices].mean()
+            # Clip Δv to max_drift magnitude
+            max_drift = 1.0
+            delta_v_norm = delta_v.norm(dim=(1, 2), keepdim=True) + 1e-8
+            delta_v_clipped = delta_v * torch.clamp(max_drift / delta_v_norm, max=1.0)
 
-            # \pi-StepNFT Logistic Preference Ranking Contract
-            cfm_loss = -F.logsigmoid(loss_neg - loss_pos)
+            # Construct true StepNFT positive and negative velocity perturbations
+            beta = 0.1
+            v_pos = v_old + beta * delta_v_clipped
+            v_neg = v_old - beta * delta_v_clipped
+
+            # Evaluate CFM reconstruction losses against the steered target
+            target_velocity = batch_action_3d - torch.randn_like(batch_action_3d)
+            loss_pos = torch.mean((v_pos - target_velocity) ** 2, dim=(1, 2))
+            loss_neg = torch.mean((v_neg - target_velocity) ** 2, dim=(1, 2))
+
+            # Apply DPO softplus preference optimization weighted by predictor energy
+            energy_reward = torch.exp(-batch_energy)
+            delta_loss = loss_pos - loss_neg
+            cfm_loss = torch.mean(F.softplus(delta_loss) * energy_reward)
 
             # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
@@ -906,11 +940,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             attn_alignment_loss = F.mse_loss(s_target_adapted, s_target_batch)
 
             # 5. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
-            z_s_pos = batch_s_t[pos_indices]
-            z_s_pos = z_s_pos / (z_s_pos.norm(dim=-1, keepdim=True) + 1e-8)
-            z_a_pos = z_action[pos_indices]
-            z_a_pos = z_a_pos / (z_a_pos.norm(dim=-1, keepdim=True) + 1e-8)
-            sim_matrix = torch.matmul(z_s_pos, z_a_pos.T) / 0.07
+            z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
+            z_a = z_action / (z_action.norm(dim=-1, keepdim=True) + 1e-8)
+            sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
@@ -1072,6 +1104,11 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                         eval_payloads[name] = raw_payload
             if eval_payloads:
                 run_exemplar_diagnostic_check(s_target_batch[0], state, eval_payloads)
+
+        # Synchronize frozen reference snapshot model with newly learned weights
+        state.stage3_models["flow_matcher_ref"].load_state_dict(
+            state.stage3_models["flow_matcher"].state_dict()
+        )
 
         # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
