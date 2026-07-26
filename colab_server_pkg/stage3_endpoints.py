@@ -421,8 +421,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     snr_dict = {
                         f"snr_trajectory/step_{idx}": val
                         for idx, val in enumerate(step_snrs)
+                        if val is not None
                     }
-                    wandb.log(snr_dict)
+                    if snr_dict:
+                        wandb.log(snr_dict)
                 except Exception:
                     pass
 

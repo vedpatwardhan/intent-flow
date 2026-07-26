@@ -133,12 +133,11 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             # Compute step-level SNR for remote endpoint telemetry logging
             with torch.no_grad():
                 v_mag = v_step.abs().mean().item()
-                noise_mag = (
-                    noise_step.abs().mean().item()
-                    if (step_nft_scale > 0.0 and i < num_steps - 1)
-                    else 0.0
-                )
-                step_snr = v_mag / (noise_mag + 1e-8)
+                if step_nft_scale > 0.0 and i < num_steps - 1:
+                    noise_mag = noise_step.abs().mean().item()
+                    step_snr = v_mag / (noise_mag + 1e-8)
+                else:
+                    step_snr = None  # Deterministic step (no noise injected)
                 step_snrs.append(step_snr)
 
             if i == 0 or (i + 1) % (num_steps // 2) == 0:
