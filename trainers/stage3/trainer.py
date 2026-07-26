@@ -290,7 +290,7 @@ def train_stage3(config, use_subset=False):
                 )
 
                 # --- 1. POLICY ACTION PROPOSAL (COMBOSTOC) ---
-                pred_action = active_policy.sample_with_steering(
+                pred_action, _ = active_policy.sample_with_steering(
                     s_t, s_target, num_steps=10
                 )
 

@@ -104,6 +104,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
         dt = 1.0 / num_steps  # 0.1
 
+        step_snrs = []
         for i in range(num_steps):
             # t_vals refers to current time of the values, target time is 1
             t_vals = steering_timelines + (i * dt)
@@ -129,6 +130,17 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             else:
                 x_t = (x_t + v_step) * action_mask
 
+            # Compute step-level SNR for remote endpoint telemetry logging
+            with torch.no_grad():
+                v_mag = v_step.abs().mean().item()
+                noise_mag = (
+                    noise_step.abs().mean().item()
+                    if (step_nft_scale > 0.0 and i < num_steps - 1)
+                    else 0.0
+                )
+                step_snr = v_mag / (noise_mag + 1e-8)
+                step_snrs.append(step_snr)
+
             if i == 0 or (i + 1) % (num_steps // 2) == 0:
                 print(
                     f"   Step {i:02d} Bounds -> "
@@ -141,7 +153,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
                     f"{s_target.max().item():.3f}]"
                 )
 
-        return x_t
+        return x_t, step_snrs
 
     @torch.no_grad()
     def sample_reverse(self, x_1, s_t, s_target, num_steps=10):

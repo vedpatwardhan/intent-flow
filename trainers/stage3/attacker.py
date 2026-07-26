@@ -134,7 +134,7 @@ class BadWorldAttacker:
 
         # The flow matcher draws 16 independent root noise seeds x_0 across your 4
         # distinct visual worlds
-        a_candidates = flow_matcher.sample_with_steering(
+        a_candidates, _ = flow_matcher.sample_with_steering(
             s_t_ensemble,
             s_target_expanded,
             embodiment_id=embodiment_id_expanded,

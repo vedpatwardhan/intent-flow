@@ -401,7 +401,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
-                a_candidates = state.stage3_models["flow_matcher"].sample_with_steering(
+                a_candidates, step_snrs = state.stage3_models[
+                    "flow_matcher"
+                ].sample_with_steering(
                     s_t_ensemble,
                     s_target_expanded,
                     embodiment_id=embodiment_id_expanded,
@@ -410,6 +412,19 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     steering_timelines=steering_timelines_expanded,
                     step_nft_scale=0.2,
                 )
+
+        # Log ODE step SNR telemetry to W&B on remote Colab server
+        if HAS_WANDB and step_snrs:
+            ensure_wandb_init()
+            if wandb.run is not None:
+                try:
+                    snr_dict = {
+                        f"snr_trajectory/step_{idx}": val
+                        for idx, val in enumerate(step_snrs)
+                    }
+                    wandb.log(snr_dict)
+                except Exception:
+                    pass
 
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.12
@@ -850,8 +865,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             )
             s_target_adapted = attn_output.squeeze(1)
 
-            # 2. CFM Flow Matching conditioned on context-aware adapted goal representation
-            # Request unreduced batch loss elements using our new flag
+            # 2. CFM Flow Matching with True \pi-StepNFT Contrastive Push-Pull Loss
             batch_size = batch_action_3d.size(0)
             embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
                 batch_size
@@ -863,20 +877,21 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 embodiment_id=embodiment_id,
                 reduction="none",
             )
+            cfm_loss_elementwise = cfm_loss_elementwise.mean(dim=[1, 2])
 
-            # If energy is 0, exp(-0) = 1.0 (Maximum reward)
-            # If energy explodes to infinity, exp(-inf) = 0.0
-            energy_reward = torch.exp(-batch_energy)
+            # Split sampled batch into Positive D+ (lower 50% energy) vs Negative D- (upper 50% energy)
+            median_energy = torch.median(batch_energy)
+            pos_mask = batch_energy <= median_energy
+            neg_mask = ~pos_mask
 
-            # Combine the bounded objectives: Max value is 1.0 + 2.0 = 3.0
-            # combined_rewards = energy_reward + 2.0 * batch_tactile
-            # Temporarily disabled tactile rewards to get the energy right
-            combined_rewards = energy_reward
+            pos_indices = torch.where(pos_mask)[0]
+            neg_indices = torch.where(neg_mask)[0]
 
-            # Apply the reward weight directly to the matching vectors
-            cfm_loss = (
-                cfm_loss_elementwise * combined_rewards.unsqueeze(-1).unsqueeze(-1)
-            ).mean()
+            loss_pos = cfm_loss_elementwise[pos_indices].mean()
+            loss_neg = cfm_loss_elementwise[neg_indices].mean()
+
+            # \pi-StepNFT Logistic Preference Ranking Contract
+            cfm_loss = -F.logsigmoid(loss_neg - loss_pos)
 
             # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
@@ -888,10 +903,12 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             goal_attention_loss = F.mse_loss(s_next_pred, s_target_adapted)
             attn_alignment_loss = F.mse_loss(s_target_adapted, s_target_batch)
 
-            # 5. CASA (Contrastive Action-State Alignment) loss
-            z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
-            z_a = z_action / (z_action.norm(dim=-1, keepdim=True) + 1e-8)
-            sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
+            # 5. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
+            z_s_pos = batch_s_t[pos_indices]
+            z_s_pos = z_s_pos / (z_s_pos.norm(dim=-1, keepdim=True) + 1e-8)
+            z_a_pos = z_action[pos_indices]
+            z_a_pos = z_a_pos / (z_a_pos.norm(dim=-1, keepdim=True) + 1e-8)
+            sim_matrix = torch.matmul(z_s_pos, z_a_pos.T) / 0.07
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
@@ -915,11 +932,12 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # Penalty on action magnitude and jerk for overall smoothness
             reg_action_norm = torch.mean(batch_action**2)
 
-            # Penalty for step-to-step smoothness
-            action_deltas = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
-            loss_smoothness = torch.mean(action_deltas**2)
+            # Multi-scale sliding window jerk regularization (1st and 2nd order deltas over H=7 horizon)
+            deltas_1 = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
+            deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
+            loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 94
+            # Combined total optimization payload for Run 96
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
@@ -1062,29 +1080,41 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         os.makedirs(checkpoint_dir, exist_ok=True)
         final_path = os.path.join(checkpoint_dir, "stage3_rl_final.pt")
 
-        torch.save(
-            {
-                "vis_adapter": state.stage3_models["vis_adapter"].state_dict(),
-                "txt_adapter": state.stage3_models["txt_adapter"].state_dict(),
-                "pt_adapter": state.stage3_models["pt_adapter"].state_dict(),
-                "vggt_adapter": state.stage3_models["vggt_adapter"].state_dict(),
-                "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
-                "msat": state.stage3_models["msat"].state_dict(),
-                "action_adapter": state.stage3_models["action_adapter"].state_dict(),
-                "state_adapter": state.stage3_models["state_adapter"].state_dict(),
-                "action_down_proj": state.stage3_models[
-                    "action_down_proj"
-                ].state_dict(),
-                "predictor": state.stage3_models["predictor"].state_dict(),
-                "goal_attention": state.stage3_models["goal_attention"].state_dict(),
-                "latent_adapter": state.stage3_models["latent_adapter"].state_dict(),
-                "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
-                "gnn_specialists": state.stage3_models[
-                    "gnn_library"
-                ].specialists.state_dict(),
-            },
-            final_path,
-        )
+        checkpoint_payload = {
+            "flow_matcher": state.stage3_models["flow_matcher"].state_dict(),
+            "vis_adapter": state.stage3_models["vis_adapter"].state_dict(),
+            "txt_adapter": state.stage3_models["txt_adapter"].state_dict(),
+            "pt_adapter": state.stage3_models["pt_adapter"].state_dict(),
+            "vggt_adapter": state.stage3_models["vggt_adapter"].state_dict(),
+            "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
+            "msat": state.stage3_models["msat"].state_dict(),
+            "action_adapter": state.stage3_models["action_adapter"].state_dict(),
+            "state_adapter": state.stage3_models["state_adapter"].state_dict(),
+            "action_down_proj": state.stage3_models["action_down_proj"].state_dict(),
+            "predictor": state.stage3_models["predictor"].state_dict(),
+            "goal_attention": state.stage3_models["goal_attention"].state_dict(),
+            "latent_adapter": state.stage3_models["latent_adapter"].state_dict(),
+            "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
+            "gnn_specialists": state.stage3_models[
+                "gnn_library"
+            ].specialists.state_dict(),
+        }
+
+        # 1. Save final rolling checkpoint
+        torch.save(checkpoint_payload, final_path)
+
+        # 2. Multi-Epoch Checkpointing: Save intermediate checkpoint every 2 epochs
+        if not hasattr(state, "epoch_counter"):
+            state.epoch_counter = 0
+        state.epoch_counter += 1
+        if state.epoch_counter % 2 == 0:
+            epoch_ckpt_path = os.path.join(
+                checkpoint_dir, f"stage3_epoch_{state.epoch_counter:02d}.pt"
+            )
+            torch.save(checkpoint_payload, epoch_ckpt_path)
+            print(
+                f"💾 [Checkpoint] Persisted dynamic epoch checkpoint: {epoch_ckpt_path}"
+            )
 
         return {"status": "distilled", "opsd_loss": avg_loss, "checkpoint": final_path}
     except Exception as e:
