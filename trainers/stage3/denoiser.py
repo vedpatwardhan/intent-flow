@@ -64,6 +64,20 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             return loss_elementwise
         return torch.mean(loss_elementwise)
 
+    def evaluate_step_transitions(
+        self, x_t, t_sample, s_t, s_target, embodiment_id=None
+    ):
+        """
+        Evaluates velocity field predictions at intermediate flow timesteps t_sample.
+        """
+        return self.velocity_field(x_t, t_sample, s_t, s_target, embodiment_id)
+
+    def compute_stepwise_denoising_deltas(self, x_t, target_velocity, t_vals, dt):
+        """
+        Calculates forward step projection target matching linear flow ODE step math: x_{t+dt} = x_t + v * dt.
+        """
+        return x_t + target_velocity * dt
+
     @torch.no_grad()
     def sample_with_steering(
         self,

@@ -881,53 +881,83 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 batch_size
             )
 
-            # Sample unsynced independent timelines [B, H, action_dim]
-            t_unsync = torch.rand(batch_size, 7, 58, device=device)
+            num_solver_steps = 10
+            dt = 1.0 / num_solver_steps
+            x_0 = torch.randn_like(batch_action_3d)
+            target_velocity = batch_action_3d - x_0
 
-            # Sample synced uniform timeline [B, H, action_dim]
-            t_sync = torch.rand(batch_size, 7, 1, device=device).expand(-1, -1, 58)
+            all_denoise_step_losses = []
 
-            # Blend them using the ComboStoc scheme
-            progress = torch.rand(batch_size, 1, 1, device=device)
-            t_sample = t_sync * (1.0 - progress) + t_unsync * progress
+            # Explicitly evaluate and supervise across ALL 10 discrete denoising solver timesteps
+            for k in range(num_solver_steps):
+                t_val = k * dt
+                t_sample_k = torch.full_like(
+                    batch_action_3d, fill_value=t_val, device=device
+                )
 
-            # Get current trainable policy output
-            v_theta = state.stage3_models["flow_matcher"].velocity_field(
-                batch_action_3d, t_sample, batch_s_t, s_target_adapted, embodiment_id
-            )
+                # Intermediate noise point x_t and target next solver checkpoint x_next_target at step k
+                x_t_k = t_sample_k * batch_action_3d + (1.0 - t_sample_k) * x_0
+                x_next_target_k = state.stage3_models[
+                    "flow_matcher"
+                ].compute_stepwise_denoising_deltas(
+                    x_t_k, target_velocity, t_sample_k, dt
+                )
 
-            # Get frozen reference policy output
-            with torch.no_grad():
-                v_old = state.stage3_models["flow_matcher_ref"].velocity_field(
+                # Query trainable and reference velocity fields at denoise step k
+                v_theta_k = state.stage3_models[
+                    "flow_matcher"
+                ].evaluate_step_transitions(
                     batch_action_3d,
-                    t_sample,
+                    t_sample_k,
                     batch_s_t,
                     s_target_adapted,
                     embodiment_id,
                 )
+                with torch.no_grad():
+                    v_old_k = state.stage3_models[
+                        "flow_matcher_ref"
+                    ].evaluate_step_transitions(
+                        batch_action_3d,
+                        t_sample_k,
+                        batch_s_t,
+                        s_target_adapted,
+                        embodiment_id,
+                    )
 
-            # Compute the velocity drift delta (Δv)
-            delta_v = v_theta - v_old
+                # Velocity drift delta (Δv) and clipped perturbations at denoise step k
+                delta_v_k = v_theta_k - v_old_k
+                delta_v_norm_k = delta_v_k.norm(dim=(1, 2), keepdim=True) + 1e-8
+                delta_v_clipped_k = delta_v_k * torch.clamp(
+                    1.0 / delta_v_norm_k, max=1.0
+                )
 
-            # Clip Δv to max_drift magnitude
-            max_drift = 1.0
-            delta_v_norm = delta_v.norm(dim=(1, 2), keepdim=True) + 1e-8
-            delta_v_clipped = delta_v * torch.clamp(max_drift / delta_v_norm, max=1.0)
+                beta = 0.1
+                v_pos_k = v_old_k + beta * delta_v_clipped_k
+                v_neg_k = v_old_k - beta * delta_v_clipped_k
 
-            # Construct true StepNFT positive and negative velocity perturbations
-            beta = 0.1
-            v_pos = v_old + beta * delta_v_clipped
-            v_neg = v_old - beta * delta_v_clipped
+                # Step projections at denoise step k
+                x_next_pos_k = x_t_k + v_pos_k * dt
+                x_next_neg_k = x_t_k + v_neg_k * dt
 
-            # Evaluate CFM reconstruction losses against the steered target
-            target_velocity = batch_action_3d - torch.randn_like(batch_action_3d)
-            loss_pos = torch.mean((v_pos - target_velocity) ** 2, dim=(1, 2))
-            loss_neg = torch.mean((v_neg - target_velocity) ** 2, dim=(1, 2))
+                # Step reconstruction errors at denoise step k
+                err_pos_k = torch.mean(
+                    (x_next_target_k - x_next_pos_k) ** 2, dim=(1, 2)
+                )
+                err_neg_k = torch.mean(
+                    (x_next_target_k - x_next_neg_k) ** 2, dim=(1, 2)
+                )
 
-            # Apply DPO softplus preference optimization weighted by predictor energy
+                # Softplus preference penalty at denoise step k
+                dpo_beta = 1.0
+                step_logit_k = (dpo_beta / 2.0) * (err_pos_k - err_neg_k)
+                all_denoise_step_losses.append(F.softplus(step_logit_k))
+
+            # Average softplus preference loss across ALL 10 DENOISING STEPS
+            mean_step_softplus = torch.stack(all_denoise_step_losses, dim=1).mean(dim=1)
+
+            # Scale across batch elements by continuous JEPA Predictor energy reward
             energy_reward = torch.exp(-batch_energy)
-            delta_loss = loss_pos - loss_neg
-            cfm_loss = torch.mean(F.softplus(delta_loss) * energy_reward)
+            cfm_loss = torch.mean(mean_step_softplus * energy_reward)
 
             # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)

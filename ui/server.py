@@ -7,6 +7,7 @@ import pickle
 import sys
 import traceback
 from collections import deque
+import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from PIL import Image
 import numpy as np
@@ -206,6 +207,112 @@ def build_stage3_obs_payload(
     }
 
 
+async def async_track_unroll_worker(
+    eval_sim,
+    initial_qpos,
+    initial_qvel,
+    initial_ctrl,
+    action_np,
+    energy_ensemble,
+    ep_idx,
+    env_step,
+):
+    """
+    Asynchronously handles physics unrolling for background evaluation tracks,
+    generates tiled OpenCV rollouts, and writes telemetry videos to disk
+    without blocking main environment training loop execution.
+    """
+    try:
+        for track_idx in range(1, action_np.shape[0]):
+            eval_sim.data.qpos[:] = initial_qpos
+            eval_sim.data.qvel[:] = initial_qvel if initial_qvel is not None else 0.0
+            eval_sim.data.ctrl[:] = initial_ctrl
+            mujoco.mj_forward(eval_sim.model, eval_sim.data)
+
+            track_frames = []
+            start_frames = {}
+            for cam_name in eval_sim.cam_names:
+                eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                start_frames[cam_name] = eval_sim.renderer.render().copy()
+            track_frames.append(start_frames)
+
+            for h in range(action_np.shape[1]):
+                track_action = action_np[track_idx, h, :]
+                action_32_clamped = np.clip(track_action[:32], -1.0, 1.0)
+
+                eval_sim.process_target_32(action_32_clamped)
+                eval_sim.dispatch_action(
+                    action_32_norm=action_32_clamped,
+                    target_q=eval_sim.last_target_q,
+                    n_steps=2,
+                    render_freq=0,
+                    reset_start=False,
+                )
+
+                step_frames = {}
+                for cam_name in eval_sim.cam_names:
+                    eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                    step_frames[cam_name] = eval_sim.renderer.render().copy()
+                track_frames.append(step_frames)
+
+            video_dir = (
+                f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
+            )
+            os.makedirs(video_dir, exist_ok=True)
+            video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
+
+            fourcc = cv2.VideoWriter_fourcc(*"avc1")
+            video_writer = cv2.VideoWriter(video_path, fourcc, 4.0, (720, 480))
+
+            for frame_idx, frame_dict in enumerate(track_frames):
+                grid = np.zeros((480, 720, 3), dtype=np.uint8)
+                grid[0:240, 0:240] = cv2.resize(frame_dict["world_center"], (240, 240))
+                grid[0:240, 240:480] = cv2.resize(frame_dict["world_top"], (240, 240))
+                grid[0:240, 480:720] = cv2.resize(frame_dict["world_left"], (240, 240))
+                grid[240:480, 0:240] = cv2.resize(frame_dict["world_right"], (240, 240))
+                grid[240:480, 240:480] = cv2.resize(
+                    frame_dict["world_wrist"], (240, 240)
+                )
+
+                energy_val = energy_ensemble[track_idx]
+                cv2.putText(
+                    grid,
+                    f"Track {track_idx:02d}",
+                    (495, 300),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2,
+                )
+                cv2.putText(
+                    grid,
+                    f"Energy: {energy_val:.6f}",
+                    (495, 340),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                )
+                cv2.putText(
+                    grid,
+                    f"Step: {frame_idx}",
+                    (495, 380),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (200, 200, 200),
+                    1,
+                )
+
+                grid_bgr = cv2.cvtColor(grid, cv2.COLOR_RGB2BGR)
+                video_writer.write(grid_bgr)
+
+            video_writer.release()
+    except Exception as background_err:
+        print(
+            f"⚠️ [Background Worker Warning] Telemetry video unroll skipped: {background_err}"
+        )
+
+
 async def run_stage3_training_loop(
     websocket: WebSocket, sim, colab_url: str, text_prompt: str, ui_annotations: dict
 ):
@@ -341,216 +448,129 @@ async def run_stage3_training_loop(
             transitions = []
             committed_qpos = None
 
-            # Replay all 16 trajectories inside the isolated evaluation simulator
-            for track_idx in range(action_np.shape[0]):
-                # # Create a separate RecordingStream for this candidate run to show as a separate header/session in Rerun
-                # rec = rr.RecordingStream(
-                #     application_id=f"epoch_{ep_idx:02d}_eval_step_{env_step:02d}_track_{track_idx:02d}",
-                #     recording_id=None,
-                # )
-                # try:
-                #     rec.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
-                # except Exception:
-                #     pass
+            # 1. PROCESS COMMITTED TRAJECTORY (TRACK 0) IMMEDIATELY
+            eval_sim.data.qpos[:] = initial_qpos
+            eval_sim.data.qvel[:] = initial_qvel
+            eval_sim.data.ctrl[:] = initial_ctrl
+            mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
-                # Rewind evaluation physics cleanly to the starting coordinates of the rollout window
-                eval_sim.data.qpos[:] = initial_qpos
-                eval_sim.data.qvel[:] = initial_qvel
-                eval_sim.data.ctrl[:] = initial_ctrl
-                mujoco.mj_forward(eval_sim.model, eval_sim.data)
+            track_frames_0 = []
+            recording_history_frames_0 = []
 
-                # Initialize frame recording buffer
-                track_frames = []
-                recording_history_frames = []
+            start_frames_0 = {}
+            frames_all_views_start_0 = {}
+            for cam_name in eval_sim.cam_names:
+                eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                rgb_cam_start = eval_sim.renderer.render().copy()
+                start_frames_0[cam_name] = rgb_cam_start.copy()
+                img_cam_start = Image.fromarray(rgb_cam_start)
+                img_cam_start_224 = img_cam_start.resize((224, 224))
+                buf_cam_start = io.BytesIO()
+                img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
+                frames_all_views_start_0[cam_name] = (
+                    "data:image/jpeg;base64,"
+                    + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
+                )
+            track_frames_0.append(start_frames_0)
+            recording_history_frames_0.append(frames_all_views_start_0)
 
-                # Capture starting frame (t=0)
-                start_frames = {}
-                frames_all_views_start = {}
+            track_actions_flat = []
+
+            for h in range(action_np.shape[1]):
+                track_action = action_np[0, h, :]
+                track_actions_flat.extend(track_action.tolist())
+                action_32_clamped = np.clip(track_action[:32], -1.0, 1.0)
+
+                eval_sim.process_target_32(action_32_clamped)
+                eval_sim.dispatch_action(
+                    action_32_norm=action_32_clamped,
+                    target_q=eval_sim.last_target_q,
+                    n_steps=2,
+                    render_freq=0,
+                    reset_start=False,
+                )
+
+                frames_all_views_next = {}
+                step_frames = {}
                 for cam_name in eval_sim.cam_names:
                     eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                    rgb_cam_start = eval_sim.renderer.render().copy()
-                    start_frames[cam_name] = rgb_cam_start.copy()
-                    img_cam_start = Image.fromarray(rgb_cam_start)
-                    img_cam_start_224 = img_cam_start.resize((224, 224))
-                    buf_cam_start = io.BytesIO()
-                    img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
-                    frames_all_views_start[cam_name] = (
+                    rgb_cam_next = eval_sim.renderer.render().copy()
+                    step_frames[cam_name] = rgb_cam_next.copy()
+                    img_cam_next = Image.fromarray(rgb_cam_next)
+                    img_cam_next_224 = img_cam_next.resize((224, 224))
+                    buf_cam_next = io.BytesIO()
+                    img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
+                    frames_all_views_next[cam_name] = (
                         "data:image/jpeg;base64,"
-                        + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
+                        + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
                     )
-                track_frames.append(start_frames)
-                recording_history_frames.append(frames_all_views_start)
+                track_frames_0.append(step_frames)
+                recording_history_frames_0.append(frames_all_views_next)
 
-                track_actions_flat = []
-
-                # Execute the full 8-step trajectory sequence open-loop via canonical dispatch_action
-                for h in range(action_np.shape[1]):
-                    track_action = action_np[track_idx, h, :]  # Shape: (58,)
-                    track_actions_flat.extend(track_action.tolist())
-                    action_32 = track_action[:32]
-                    action_32_clamped = np.clip(action_32, -1.0, 1.0)
-
-                    # 1. Map normalized action candidate to target qpos via canonical helper
-                    eval_sim.process_target_32(action_32_clamped)
-
-                    # 2. Dispatch action via canonical simulation method (fast 2-step evaluation)
-                    eval_sim.dispatch_action(
-                        action_32_norm=action_32_clamped,
-                        target_q=eval_sim.last_target_q,
-                        n_steps=2,
-                        render_freq=0,
-                        reset_start=False,
-                    )
-
-                    # 3. Get next observation for this specific candidate step and log to Rerun
-                    frames_all_views_next = {}
-                    step_frames = {}
-                    # rec.set_time_sequence("horizon_step", h)
-                    for cam_name in eval_sim.cam_names:
-                        eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                        rgb_cam_next = eval_sim.renderer.render().copy()
-                        step_frames[cam_name] = rgb_cam_next.copy()
-                        # entity_path = f"world/{cam_name}"
-                        # try:
-                        #     rec.log(entity_path, rr.Image(rgb_cam_next))
-                        # except Exception:
-                        #     pass
-                        img_cam_next = Image.fromarray(rgb_cam_next)
-                        img_cam_next_224 = img_cam_next.resize((224, 224))
-                        buf_cam_next = io.BytesIO()
-                        img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
-                        frames_all_views_next[cam_name] = (
-                            "data:image/jpeg;base64,"
-                            + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
-                        )
-                    track_frames.append(step_frames)
-                    recording_history_frames.append(frames_all_views_next)
-
-                    index_pos = eval_sim.data.xpos[index_id]
-                    thumb_pos = eval_sim.data.xpos[thumb_id]
-                    cube_pos = eval_sim.data.xpos[cube_id]
-                    d_index = float(np.linalg.norm(index_pos - cube_pos))
-                    d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
-                    touch_index_next = (
-                        max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
-                    )
-                    touch_thumb_next = (
-                        max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
-                    )
-                    tactile_grid_next = [[0.0] * 4 for _ in range(4)]
-                    tactile_grid_next[0][0] = touch_index_next
-                    tactile_grid_next[1][1] = touch_thumb_next
-
-                    track_next_obs = {
-                        "frames": frames_all_views_next,
-                        "history_frames": recording_history_frames,
-                        "proprioception": eval_sim.unscaler.scale_state(
-                            eval_sim.get_state_32()
-                        ).tolist(),
-                        "tactile": tactile_grid_next,
-                        "text_prompt": text_prompt or "grasp cube",
-                        "ui_annotations": {},
-                        "is_easy_task": False,
-                    }
-
-                    # Keep track 0's final step outcomes as the committed path for the environment
-                    if track_idx == 0 and h == action_np.shape[1] - 1:
-                        committed_qpos = eval_sim.data.qpos.copy()
-                        committed_qvel = eval_sim.data.qvel.copy()
-                        committed_ctrl = eval_sim.data.ctrl.copy()
-                        committed_next_obs = track_next_obs
-                        committed_touch_index_next = touch_index_next
-                        committed_touch_thumb_next = touch_thumb_next
-
-                    # Append the full 16-step transition once lookahead completes
-                    if h == action_np.shape[1] - 1:
-                        grasp_success = (
-                            touch_index_next > 0.5 and touch_thumb_next > 0.5
-                        )
-                        # Physical distance from effector center point to cube
-                        hand_center = (index_pos + thumb_pos) / 2.0
-                        phys_dist = float(np.linalg.norm(hand_center - cube_pos))
-                        if not hasattr(sim, "_step_physical_distances"):
-                            sim._step_physical_distances = []
-                        sim._step_physical_distances.append(phys_dist)
-
-                        # Using clean observations for training
-                        assigned_obs = copy.deepcopy(current_obs)
-                        transitions.append(
-                            {
-                                "current_obs": assigned_obs,
-                                "action_taken": track_actions_flat,
-                                "next_obs": track_next_obs,
-                                "energy": energy_ensemble[track_idx],
-                                "tactile": float(grasp_success),
-                                "s_target": s_target,
-                            }
-                        )
-
-                # Save rollout video compilation for this track using cv2
-                video_dir = (
-                    f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
+                index_pos = eval_sim.data.xpos[index_id]
+                thumb_pos = eval_sim.data.xpos[thumb_id]
+                cube_pos = eval_sim.data.xpos[cube_id]
+                d_index = float(np.linalg.norm(index_pos - cube_pos))
+                d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+                touch_index_next = (
+                    max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
                 )
-                os.makedirs(video_dir, exist_ok=True)
-                video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
+                touch_thumb_next = (
+                    max(0.0, 1.0 - (d_thumb / 0.04)) if d_thumb < 0.04 else 0.0
+                )
+                tactile_grid_next = [[0.0] * 4 for _ in range(4)]
+                tactile_grid_next[0][0] = touch_index_next
+                tactile_grid_next[1][1] = touch_thumb_next
 
-                # Setup cv2.VideoWriter: 2x3 grid of 240x240 frames -> 720 width, 480 height
-                fourcc = cv2.VideoWriter_fourcc(*"avc1")
-                video_writer = cv2.VideoWriter(video_path, fourcc, 4.0, (720, 480))
+                track_next_obs = {
+                    "frames": frames_all_views_next,
+                    "history_frames": recording_history_frames_0,
+                    "proprioception": eval_sim.unscaler.scale_state(
+                        eval_sim.get_state_32()
+                    ).tolist(),
+                    "tactile": tactile_grid_next,
+                    "text_prompt": text_prompt or "grasp cube",
+                    "ui_annotations": {},
+                    "is_easy_task": False,
+                }
 
-                for frame_idx, frame_dict in enumerate(track_frames):
-                    grid = np.zeros((480, 720, 3), dtype=np.uint8)
+                if h == action_np.shape[1] - 1:
+                    committed_qpos = eval_sim.data.qpos.copy()
+                    committed_qvel = eval_sim.data.qvel.copy()
+                    committed_ctrl = eval_sim.data.ctrl.copy()
+                    committed_next_obs = track_next_obs
+                    committed_touch_index_next = touch_index_next
+                    committed_touch_thumb_next = touch_thumb_next
 
-                    # Resize views to 240x240
-                    c_center = cv2.resize(frame_dict["world_center"], (240, 240))
-                    c_top = cv2.resize(frame_dict["world_top"], (240, 240))
-                    c_left = cv2.resize(frame_dict["world_left"], (240, 240))
-                    c_right = cv2.resize(frame_dict["world_right"], (240, 240))
-                    c_wrist = cv2.resize(frame_dict["world_wrist"], (240, 240))
+                    grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
+                    hand_center = (index_pos + thumb_pos) / 2.0
+                    phys_dist = float(np.linalg.norm(hand_center - cube_pos))
 
-                    # Tile grid: center, top, left in row 1; right, wrist in row 2
-                    grid[0:240, 0:240] = c_center
-                    grid[0:240, 240:480] = c_top
-                    grid[0:240, 480:720] = c_left
-                    grid[240:480, 0:240] = c_right
-                    grid[240:480, 240:480] = c_wrist
-
-                    # Draw text in the remaining black telemetry quadrant (bottom right)
-                    energy_val = energy_ensemble[track_idx]
-                    cv2.putText(
-                        grid,
-                        f"Track {track_idx:02d}",
-                        (495, 300),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (255, 255, 255),
-                        2,
-                    )
-                    cv2.putText(
-                        grid,
-                        f"Energy: {energy_val:.6f}",
-                        (495, 340),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 255, 255),
-                        2,
-                    )
-                    cv2.putText(
-                        grid,
-                        f"Step: {frame_idx}",
-                        (495, 380),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (200, 200, 200),
-                        1,
+                    assigned_obs = copy.deepcopy(current_obs)
+                    transitions.append(
+                        {
+                            "current_obs": assigned_obs,
+                            "action_taken": track_actions_flat,
+                            "next_obs": track_next_obs,
+                            "energy": energy_ensemble[0],
+                            "tactile": float(grasp_success),
+                            "s_target": s_target,
+                        }
                     )
 
-                    # Convert to BGR format for OpenCV
-                    grid_bgr = cv2.cvtColor(grid, cv2.COLOR_RGB2BGR)
-                    video_writer.write(grid_bgr)
-
-                video_writer.release()
-                print(f"[Video Utility] Saved rollout video: {video_path}")
+            # 2. DISPATCH BACKGROUND UNROLL WORKER FOR TRACKS 1..15 AND VIDEO RENDERING (NON-BLOCKING)
+            asyncio.create_task(
+                async_track_unroll_worker(
+                    eval_sim,
+                    initial_qpos,
+                    initial_qvel,
+                    initial_ctrl,
+                    action_np,
+                    energy_ensemble,
+                    ep_idx,
+                    env_step,
+                )
+            )
 
             # Compute correlation between latent energies and physical distances
             step_mean_phys_dist = None

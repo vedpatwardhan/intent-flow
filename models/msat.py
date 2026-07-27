@@ -38,13 +38,12 @@ class MultiStreamActionTransformer(nn.Module):
         """
         batch_size = next(iter(modality_dict.values())).size(0)
         tokens_list = []
+        active_keys = ["vision", "vggt", "proprioception"]
 
-        for key, tokens in modality_dict.items():
-            if tokens is None:
+        for key in active_keys:
+            if key not in modality_dict or modality_dict[key] is None:
                 continue
-            # Ensure tokens are 3D: [Batch, Len, Dim]
-            if tokens.dim() == 2:
-                tokens = tokens.unsqueeze(1)
+            tokens = modality_dict[key]  # [Batch, Len, Dim]
 
             # Unified Modality Bounding System
             if key == "vggt":
@@ -67,9 +66,8 @@ class MultiStreamActionTransformer(nn.Module):
             tokens_list.append(tokens)
 
         # Concatenate all streams along the sequence dimension
-        fused_sequence = torch.cat(
-            tokens_list, dim=1
-        )  # [Batch, TotalSeqLen, LatentDim]
+        # [Batch, TotalSeqLen, LatentDim]
+        fused_sequence = torch.cat(tokens_list, dim=1)
 
         # Process through transformer
         transformed = self.transformer(fused_sequence)
@@ -78,9 +76,10 @@ class MultiStreamActionTransformer(nn.Module):
         with torch.no_grad():
             profiles = {}
             current_idx = 0
-            for key, tokens in modality_dict.items():
-                if tokens is None:
+            for key in active_keys:
+                if key not in modality_dict or modality_dict[key] is None:
                     continue
+                tokens = modality_dict[key]
                 seq_len = tokens.size(1) if tokens.dim() == 3 else 1
                 segment_states = transformed[:, current_idx : current_idx + seq_len, :]
                 profiles[f"modality_weight/{key}"] = segment_states.abs().mean().item()

@@ -94,7 +94,10 @@ def get_vggt_motion_field(frames: list[str]) -> tuple:
 
     # Magnitude = sqrt(dx^2 + dy^2)
     motion_magnitude = np.sqrt(dx**2 + dy**2)  # [224, 224]
-    return motion_magnitude
+    motion_min = motion_magnitude.min()
+    motion_max = motion_magnitude.max()
+    motion_norm = (motion_magnitude - motion_min) / (motion_max - motion_min + 1e-8)
+    return motion_norm
 
 
 def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
