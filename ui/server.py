@@ -207,6 +207,50 @@ def build_stage3_obs_payload(
     }
 
 
+def write_tiled_mp4(
+    video_path: str, track_frames: list, track_idx: int, energy_val: float
+):
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    video_writer = cv2.VideoWriter(video_path, fourcc, 4.0, (720, 480))
+    for frame_idx, frame_dict in enumerate(track_frames):
+        grid = np.zeros((480, 720, 3), dtype=np.uint8)
+        grid[0:240, 0:240] = cv2.resize(frame_dict["world_center"], (240, 240))
+        grid[0:240, 240:480] = cv2.resize(frame_dict["world_top"], (240, 240))
+        grid[0:240, 480:720] = cv2.resize(frame_dict["world_left"], (240, 240))
+        grid[240:480, 0:240] = cv2.resize(frame_dict["world_right"], (240, 240))
+        grid[240:480, 240:480] = cv2.resize(frame_dict["world_wrist"], (240, 240))
+        cv2.putText(
+            grid,
+            f"Track {track_idx:02d}",
+            (495, 300),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            grid,
+            f"Energy: {energy_val:.6f}",
+            (495, 340),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2,
+        )
+        cv2.putText(
+            grid,
+            f"Step: {frame_idx}",
+            (495, 380),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (200, 200, 200),
+            1,
+        )
+        grid_bgr = cv2.cvtColor(grid, cv2.COLOR_RGB2BGR)
+        video_writer.write(grid_bgr)
+    video_writer.release()
+
+
 async def async_track_unroll_worker(
     eval_sim,
     initial_qpos,
@@ -216,14 +260,23 @@ async def async_track_unroll_worker(
     energy_ensemble,
     ep_idx,
     env_step,
+    track_frames_0,
 ):
     """
-    Asynchronously handles physics unrolling for background evaluation tracks,
+    Asynchronously handles physics unrolling for background evaluation tracks (1..15),
     generates tiled OpenCV rollouts, and writes telemetry videos to disk
     without blocking main environment training loop execution.
     """
     try:
-        for track_idx in range(0, action_np.shape[0]):
+        video_dir = f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
+        os.makedirs(video_dir, exist_ok=True)
+
+        # 1. Write track_00.mp4 directly using pre-rendered frames from main thread
+        video_path_0 = os.path.join(video_dir, "track_00.mp4")
+        write_tiled_mp4(video_path_0, track_frames_0, 0, float(energy_ensemble[0]))
+
+        # 2. Unroll tracks 1..15 for background rendering
+        for track_idx in range(1, action_np.shape[0]):
             eval_sim.data.qpos[:] = initial_qpos
             eval_sim.data.qvel[:] = initial_qvel if initial_qvel is not None else 0.0
             eval_sim.data.ctrl[:] = initial_ctrl
@@ -255,58 +308,10 @@ async def async_track_unroll_worker(
                     step_frames[cam_name] = eval_sim.renderer.render().copy()
                 track_frames.append(step_frames)
 
-            video_dir = (
-                f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
-            )
-            os.makedirs(video_dir, exist_ok=True)
             video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
-
-            fourcc = cv2.VideoWriter_fourcc(*"avc1")
-            video_writer = cv2.VideoWriter(video_path, fourcc, 4.0, (720, 480))
-
-            for frame_idx, frame_dict in enumerate(track_frames):
-                grid = np.zeros((480, 720, 3), dtype=np.uint8)
-                grid[0:240, 0:240] = cv2.resize(frame_dict["world_center"], (240, 240))
-                grid[0:240, 240:480] = cv2.resize(frame_dict["world_top"], (240, 240))
-                grid[0:240, 480:720] = cv2.resize(frame_dict["world_left"], (240, 240))
-                grid[240:480, 0:240] = cv2.resize(frame_dict["world_right"], (240, 240))
-                grid[240:480, 240:480] = cv2.resize(
-                    frame_dict["world_wrist"], (240, 240)
-                )
-
-                energy_val = energy_ensemble[track_idx]
-                cv2.putText(
-                    grid,
-                    f"Track {track_idx:02d}",
-                    (495, 300),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2,
-                )
-                cv2.putText(
-                    grid,
-                    f"Energy: {energy_val:.6f}",
-                    (495, 340),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
-                cv2.putText(
-                    grid,
-                    f"Step: {frame_idx}",
-                    (495, 380),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (200, 200, 200),
-                    1,
-                )
-
-                grid_bgr = cv2.cvtColor(grid, cv2.COLOR_RGB2BGR)
-                video_writer.write(grid_bgr)
-
-            video_writer.release()
+            write_tiled_mp4(
+                video_path, track_frames, track_idx, float(energy_ensemble[track_idx])
+            )
     except Exception as background_err:
         print(
             f"⚠️ [Background Worker Warning] Telemetry video unroll skipped: {background_err}"
@@ -448,64 +453,71 @@ async def run_stage3_training_loop(
             transitions = []
             committed_qpos = None
 
-            # 1. PROCESS COMMITTED TRAJECTORY (TRACK 0) IMMEDIATELY
-            eval_sim.data.qpos[:] = initial_qpos
-            eval_sim.data.qvel[:] = initial_qvel
-            eval_sim.data.ctrl[:] = initial_ctrl
-            mujoco.mj_forward(eval_sim.model, eval_sim.data)
-
+            # UNIFIED 16-TRACK EVALUATION LOOP (ALL CANDIDATES 0..15)
             track_frames_0 = []
-            recording_history_frames_0 = []
+            for track_k in range(action_np.shape[0]):
+                eval_sim.data.qpos[:] = initial_qpos
+                eval_sim.data.qvel[:] = initial_qvel
+                eval_sim.data.ctrl[:] = initial_ctrl
+                mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
-            start_frames_0 = {}
-            frames_all_views_start_0 = {}
-            for cam_name in eval_sim.cam_names:
-                eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                rgb_cam_start = eval_sim.renderer.render().copy()
-                start_frames_0[cam_name] = rgb_cam_start.copy()
-                img_cam_start = Image.fromarray(rgb_cam_start)
-                img_cam_start_224 = img_cam_start.resize((224, 224))
-                buf_cam_start = io.BytesIO()
-                img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
-                frames_all_views_start_0[cam_name] = (
-                    "data:image/jpeg;base64,"
-                    + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
-                )
-            track_frames_0.append(start_frames_0)
-            recording_history_frames_0.append(frames_all_views_start_0)
+                if track_k == 0:
+                    start_frames_0 = {}
+                    frames_all_views_start_0 = {}
+                    for cam_name in eval_sim.cam_names:
+                        eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+                        rgb_cam_start = eval_sim.renderer.render().copy()
+                        start_frames_0[cam_name] = rgb_cam_start.copy()
+                        img_cam_start = Image.fromarray(rgb_cam_start)
+                        img_cam_start_224 = img_cam_start.resize((224, 224))
+                        buf_cam_start = io.BytesIO()
+                        img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
+                        frames_all_views_start_0[cam_name] = (
+                            "data:image/jpeg;base64,"
+                            + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
+                        )
+                    track_frames_0.append(start_frames_0)
+                    recording_history_frames_0 = [frames_all_views_start_0]
 
-            track_actions_flat = []
-
-            for h in range(action_np.shape[1]):
-                track_action = action_np[0, h, :]
-                track_actions_flat.extend(track_action.tolist())
-                action_32_clamped = np.clip(track_action[:32], -1.0, 1.0)
-
-                eval_sim.process_target_32(action_32_clamped)
-                eval_sim.dispatch_action(
-                    action_32_norm=action_32_clamped,
-                    target_q=eval_sim.last_target_q,
-                    n_steps=2,
-                    render_freq=0,
-                    reset_start=False,
-                )
-
+                track_actions_flat_k = []
                 frames_all_views_next = {}
-                step_frames = {}
-                for cam_name in eval_sim.cam_names:
-                    eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                    rgb_cam_next = eval_sim.renderer.render().copy()
-                    step_frames[cam_name] = rgb_cam_next.copy()
-                    img_cam_next = Image.fromarray(rgb_cam_next)
-                    img_cam_next_224 = img_cam_next.resize((224, 224))
-                    buf_cam_next = io.BytesIO()
-                    img_cam_next_224.save(buf_cam_next, format="JPEG", quality=75)
-                    frames_all_views_next[cam_name] = (
-                        "data:image/jpeg;base64,"
-                        + base64.b64encode(buf_cam_next.getvalue()).decode("utf-8")
+
+                for h in range(action_np.shape[1]):
+                    action_k = action_np[track_k, h, :]
+                    track_actions_flat_k.extend(action_k.tolist())
+                    action_32_clamped = np.clip(action_k[:32], -1.0, 1.0)
+
+                    eval_sim.process_target_32(action_32_clamped)
+                    eval_sim.dispatch_action(
+                        action_32_norm=action_32_clamped,
+                        target_q=eval_sim.last_target_q,
+                        n_steps=2,
+                        render_freq=0,
+                        reset_start=False,
                     )
-                track_frames_0.append(step_frames)
-                recording_history_frames_0.append(frames_all_views_next)
+
+                    if track_k == 0:
+                        step_frames = {}
+                        for cam_name in eval_sim.cam_names:
+                            eval_sim.renderer.update_scene(
+                                eval_sim.data, camera=cam_name
+                            )
+                            rgb_cam_next = eval_sim.renderer.render().copy()
+                            step_frames[cam_name] = rgb_cam_next.copy()
+                            img_cam_next = Image.fromarray(rgb_cam_next)
+                            img_cam_next_224 = img_cam_next.resize((224, 224))
+                            buf_cam_next = io.BytesIO()
+                            img_cam_next_224.save(
+                                buf_cam_next, format="JPEG", quality=75
+                            )
+                            frames_all_views_next[cam_name] = (
+                                "data:image/jpeg;base64,"
+                                + base64.b64encode(buf_cam_next.getvalue()).decode(
+                                    "utf-8"
+                                )
+                            )
+                        track_frames_0.append(step_frames)
+                        recording_history_frames_0.append(frames_all_views_next)
 
                 index_pos = eval_sim.data.xpos[index_id]
                 thumb_pos = eval_sim.data.xpos[thumb_id]
@@ -523,8 +535,10 @@ async def run_stage3_training_loop(
                 tactile_grid_next[1][1] = touch_thumb_next
 
                 track_next_obs = {
-                    "frames": frames_all_views_next,
-                    "history_frames": recording_history_frames_0,
+                    "frames": frames_all_views_next if track_k == 0 else {},
+                    "history_frames": (
+                        recording_history_frames_0 if track_k == 0 else []
+                    ),
                     "proprioception": eval_sim.unscaler.scale_state(
                         eval_sim.get_state_32()
                     ).tolist(),
@@ -534,32 +548,31 @@ async def run_stage3_training_loop(
                     "is_easy_task": False,
                 }
 
-                if h == action_np.shape[1] - 1:
+                grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
+                hand_center = (index_pos + thumb_pos) / 2.0
+                phys_dist = float(np.linalg.norm(hand_center - cube_pos))
+                if not hasattr(sim, "_step_physical_distances"):
+                    sim._step_physical_distances = []
+                sim._step_physical_distances.append(phys_dist)
+
+                transitions.append(
+                    {
+                        "current_obs": copy.deepcopy(current_obs),
+                        "action_taken": track_actions_flat_k,
+                        "next_obs": track_next_obs,
+                        "energy": energy_ensemble[track_k],
+                        "tactile": float(grasp_success),
+                        "s_target": s_target,
+                    }
+                )
+
+                if track_k == 0:
                     committed_qpos = eval_sim.data.qpos.copy()
                     committed_qvel = eval_sim.data.qvel.copy()
                     committed_ctrl = eval_sim.data.ctrl.copy()
                     committed_next_obs = track_next_obs
                     committed_touch_index_next = touch_index_next
                     committed_touch_thumb_next = touch_thumb_next
-
-                    grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
-                    hand_center = (index_pos + thumb_pos) / 2.0
-                    phys_dist = float(np.linalg.norm(hand_center - cube_pos))
-                    if not hasattr(sim, "_step_physical_distances"):
-                        sim._step_physical_distances = []
-                    sim._step_physical_distances.append(phys_dist)
-
-                    assigned_obs = copy.deepcopy(current_obs)
-                    transitions.append(
-                        {
-                            "current_obs": assigned_obs,
-                            "action_taken": track_actions_flat,
-                            "next_obs": track_next_obs,
-                            "energy": energy_ensemble[0],
-                            "tactile": float(grasp_success),
-                            "s_target": s_target,
-                        }
-                    )
 
             # 2. DISPATCH BACKGROUND UNROLL WORKER FOR TRACKS 1..15 AND VIDEO RENDERING (NON-BLOCKING)
             asyncio.create_task(
@@ -572,10 +585,11 @@ async def run_stage3_training_loop(
                     energy_ensemble,
                     ep_idx,
                     env_step,
+                    track_frames_0,
                 )
             )
 
-            # Compute correlation between latent energies and physical distances
+            # Compute correlation between latent energies and physical distances across ALL 16 candidate tracks
             step_mean_phys_dist = None
             step_energy_dist_corr = None
             if (
@@ -585,12 +599,15 @@ async def run_stage3_training_loop(
                 phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
                 energies_np = np.array(energy_ensemble, dtype=np.float32)
                 step_mean_phys_dist = float(np.mean(phys_dists_np))
-                corr_mat = np.corrcoef(phys_dists_np, energies_np)
-                step_energy_dist_corr = (
-                    float(corr_mat[0, 1]) if not np.isnan(corr_mat[0, 1]) else 0.0
-                )
+                if len(phys_dists_np) > 1 and len(phys_dists_np) == len(energies_np):
+                    corr_mat = np.corrcoef(phys_dists_np, energies_np)
+                    step_energy_dist_corr = (
+                        float(corr_mat[0, 1]) if not np.isnan(corr_mat[0, 1]) else 0.0
+                    )
+                else:
+                    step_energy_dist_corr = 0.0
                 print(
-                    f"📈 [Telemetry Summary] Step {env_step} -> Avg Physical Effector-Cube Dist: {step_mean_phys_dist:.4f}m | Energy-Distance Correlation: {step_energy_dist_corr:.4f}"
+                    f"📈 [Telemetry Summary] Step {env_step} -> Avg Physical Effector-Cube Dist (16 tracks): {step_mean_phys_dist:.4f}m | Energy-Distance Correlation: {step_energy_dist_corr:.4f}"
                 )
                 sim._step_physical_distances = []
 
