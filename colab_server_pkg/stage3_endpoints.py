@@ -325,6 +325,7 @@ def ensure_stage3_models():
             "[Colab] WARNING: Neither Stage 3 nor Stage 2 checkpoints were found. Models initialized with default random weights!"
         )
 
+    stage3_lr = max(config["stage3"]["lr"], 2e-4)
     state.stage3_optimizer = torch.optim.AdamW(
         list(state.stage3_models["flow_matcher"].parameters())
         + list(state.stage3_models["gnn_library"].parameters())
@@ -335,7 +336,7 @@ def ensure_stage3_models():
         + list(state.stage3_models["action_down_proj"].parameters())
         + list(state.stage3_models["goal_attention"].parameters())
         + list(state.stage3_models["latent_adapter"].parameters()),
-        lr=config["stage3"]["lr"],
+        lr=stage3_lr,
     )
 
 

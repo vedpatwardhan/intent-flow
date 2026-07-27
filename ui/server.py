@@ -223,7 +223,7 @@ async def async_track_unroll_worker(
     without blocking main environment training loop execution.
     """
     try:
-        for track_idx in range(1, action_np.shape[0]):
+        for track_idx in range(0, action_np.shape[0]):
             eval_sim.data.qpos[:] = initial_qpos
             eval_sim.data.qvel[:] = initial_qvel if initial_qvel is not None else 0.0
             eval_sim.data.ctrl[:] = initial_ctrl
@@ -545,6 +545,9 @@ async def run_stage3_training_loop(
                     grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
                     hand_center = (index_pos + thumb_pos) / 2.0
                     phys_dist = float(np.linalg.norm(hand_center - cube_pos))
+                    if not hasattr(sim, "_step_physical_distances"):
+                        sim._step_physical_distances = []
+                    sim._step_physical_distances.append(phys_dist)
 
                     assigned_obs = copy.deepcopy(current_obs)
                     transitions.append(
@@ -641,7 +644,7 @@ async def run_stage3_training_loop(
                 r = await client.post(
                     f"{colab_url}/stage3/distill",
                     json={"reward": final_reward},
-                    timeout=20.0,
+                    timeout=100.0,
                 )
                 if r.status_code == 200:
                     res = r.json()
