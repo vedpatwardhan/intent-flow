@@ -207,6 +207,22 @@ def build_stage3_obs_payload(
     }
 
 
+def render_camera_views(eval_sim):
+    raw_frames = {}
+    base64_frames = {}
+    for cam_name in eval_sim.cam_names:
+        eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
+        rgb_cam = eval_sim.renderer.render().copy()
+        raw_frames[cam_name] = rgb_cam.copy()
+        img_cam = Image.fromarray(rgb_cam).resize((224, 224))
+        buf = io.BytesIO()
+        img_cam.save(buf, format="JPEG", quality=75)
+        base64_frames[cam_name] = "data:image/jpeg;base64," + base64.b64encode(
+            buf.getvalue()
+        ).decode("utf-8")
+    return raw_frames, base64_frames
+
+
 def write_tiled_mp4(
     video_path: str, track_frames: list, track_idx: int, energy_val: float
 ):
@@ -252,62 +268,20 @@ def write_tiled_mp4(
 
 
 async def async_track_unroll_worker(
-    eval_sim,
-    initial_qpos,
-    initial_qvel,
-    initial_ctrl,
-    action_np,
+    all_track_frames,
     energy_ensemble,
     ep_idx,
     env_step,
-    track_frames_0,
 ):
     """
-    Asynchronously handles physics unrolling for background evaluation tracks (1..15),
-    generates tiled OpenCV rollouts, and writes telemetry videos to disk
+    Asynchronously handles writing telemetry videos to disk from pre-rendered frame buffers
     without blocking main environment training loop execution.
     """
     try:
         video_dir = f"logs/training/latent-flow/rollouts/ep_{ep_idx}_step_{env_step}"
         os.makedirs(video_dir, exist_ok=True)
 
-        # 1. Write track_00.mp4 directly using pre-rendered frames from main thread
-        video_path_0 = os.path.join(video_dir, "track_00.mp4")
-        write_tiled_mp4(video_path_0, track_frames_0, 0, float(energy_ensemble[0]))
-
-        # 2. Unroll tracks 1..15 for background rendering
-        for track_idx in range(1, action_np.shape[0]):
-            eval_sim.data.qpos[:] = initial_qpos
-            eval_sim.data.qvel[:] = initial_qvel if initial_qvel is not None else 0.0
-            eval_sim.data.ctrl[:] = initial_ctrl
-            mujoco.mj_forward(eval_sim.model, eval_sim.data)
-
-            track_frames = []
-            start_frames = {}
-            for cam_name in eval_sim.cam_names:
-                eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                start_frames[cam_name] = eval_sim.renderer.render().copy()
-            track_frames.append(start_frames)
-
-            for h in range(action_np.shape[1]):
-                track_action = action_np[track_idx, h, :]
-                action_32_clamped = np.clip(track_action[:32], -1.0, 1.0)
-
-                eval_sim.process_target_32(action_32_clamped)
-                eval_sim.dispatch_action(
-                    action_32_norm=action_32_clamped,
-                    target_q=eval_sim.last_target_q,
-                    n_steps=2,
-                    render_freq=0,
-                    reset_start=False,
-                )
-
-                step_frames = {}
-                for cam_name in eval_sim.cam_names:
-                    eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                    step_frames[cam_name] = eval_sim.renderer.render().copy()
-                track_frames.append(step_frames)
-
+        for track_idx, track_frames in enumerate(all_track_frames):
             video_path = os.path.join(video_dir, f"track_{track_idx:02d}.mp4")
             write_tiled_mp4(
                 video_path, track_frames, track_idx, float(energy_ensemble[track_idx])
@@ -453,34 +427,24 @@ async def run_stage3_training_loop(
             transitions = []
             committed_qpos = None
 
-            # UNIFIED 16-TRACK EVALUATION LOOP (ALL CANDIDATES 0..15)
-            track_frames_0 = []
+            # UNIFIED 16-TRACK OBSERVATION & TELEMETRY EVALUATION LOOP (ALL CANDIDATES 0..15)
+            all_track_frames = []
             for track_k in range(action_np.shape[0]):
                 eval_sim.data.qpos[:] = initial_qpos
                 eval_sim.data.qvel[:] = initial_qvel
                 eval_sim.data.ctrl[:] = initial_ctrl
                 mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
-                if track_k == 0:
-                    start_frames_0 = {}
-                    frames_all_views_start_0 = {}
-                    for cam_name in eval_sim.cam_names:
-                        eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
-                        rgb_cam_start = eval_sim.renderer.render().copy()
-                        start_frames_0[cam_name] = rgb_cam_start.copy()
-                        img_cam_start = Image.fromarray(rgb_cam_start)
-                        img_cam_start_224 = img_cam_start.resize((224, 224))
-                        buf_cam_start = io.BytesIO()
-                        img_cam_start_224.save(buf_cam_start, format="JPEG", quality=75)
-                        frames_all_views_start_0[cam_name] = (
-                            "data:image/jpeg;base64,"
-                            + base64.b64encode(buf_cam_start.getvalue()).decode("utf-8")
-                        )
-                    track_frames_0.append(start_frames_0)
-                    recording_history_frames_0 = [frames_all_views_start_0]
+                track_frames_k = []
+                recording_history_frames_k = []
+
+                # Initial posture camera rendering (t = 0)
+                start_frames_k, frames_all_views_start_k = render_camera_views(eval_sim)
+                track_frames_k.append(start_frames_k)
+                recording_history_frames_k.append(frames_all_views_start_k)
 
                 track_actions_flat_k = []
-                frames_all_views_next = {}
+                frames_all_views_next_k = {}
 
                 for h in range(action_np.shape[1]):
                     action_k = action_np[track_k, h, :]
@@ -496,28 +460,14 @@ async def run_stage3_training_loop(
                         reset_start=False,
                     )
 
-                    if track_k == 0:
-                        step_frames = {}
-                        for cam_name in eval_sim.cam_names:
-                            eval_sim.renderer.update_scene(
-                                eval_sim.data, camera=cam_name
-                            )
-                            rgb_cam_next = eval_sim.renderer.render().copy()
-                            step_frames[cam_name] = rgb_cam_next.copy()
-                            img_cam_next = Image.fromarray(rgb_cam_next)
-                            img_cam_next_224 = img_cam_next.resize((224, 224))
-                            buf_cam_next = io.BytesIO()
-                            img_cam_next_224.save(
-                                buf_cam_next, format="JPEG", quality=75
-                            )
-                            frames_all_views_next[cam_name] = (
-                                "data:image/jpeg;base64,"
-                                + base64.b64encode(buf_cam_next.getvalue()).decode(
-                                    "utf-8"
-                                )
-                            )
-                        track_frames_0.append(step_frames)
-                        recording_history_frames_0.append(frames_all_views_next)
+                    # Action step camera rendering (t = 1..7)
+                    step_frames_k, frames_all_views_next_k = render_camera_views(
+                        eval_sim
+                    )
+                    track_frames_k.append(step_frames_k)
+                    recording_history_frames_k.append(frames_all_views_next_k)
+
+                all_track_frames.append(track_frames_k)
 
                 index_pos = eval_sim.data.xpos[index_id]
                 thumb_pos = eval_sim.data.xpos[thumb_id]
@@ -535,10 +485,8 @@ async def run_stage3_training_loop(
                 tactile_grid_next[1][1] = touch_thumb_next
 
                 track_next_obs = {
-                    "frames": frames_all_views_next if track_k == 0 else {},
-                    "history_frames": (
-                        recording_history_frames_0 if track_k == 0 else []
-                    ),
+                    "frames": frames_all_views_next_k,
+                    "history_frames": recording_history_frames_k,
                     "proprioception": eval_sim.unscaler.scale_state(
                         eval_sim.get_state_32()
                     ).tolist(),
@@ -574,18 +522,10 @@ async def run_stage3_training_loop(
                     committed_touch_index_next = touch_index_next
                     committed_touch_thumb_next = touch_thumb_next
 
-            # 2. DISPATCH BACKGROUND UNROLL WORKER FOR TRACKS 1..15 AND VIDEO RENDERING (NON-BLOCKING)
+            # 2. DISPATCH BACKGROUND UNROLL WORKER FOR VIDEO DISK ENCODING (NON-BLOCKING)
             asyncio.create_task(
                 async_track_unroll_worker(
-                    eval_sim,
-                    initial_qpos,
-                    initial_qvel,
-                    initial_ctrl,
-                    action_np,
-                    energy_ensemble,
-                    ep_idx,
-                    env_step,
-                    track_frames_0,
+                    all_track_frames, energy_ensemble, ep_idx, env_step
                 )
             )
 

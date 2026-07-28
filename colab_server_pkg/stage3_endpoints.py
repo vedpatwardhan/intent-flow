@@ -874,7 +874,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             attn_output, _ = state.stage3_models["goal_attention"](
                 query=query, key=key_value, value=key_value
             )
-            s_target_adapted = attn_output.squeeze(1)
+
+            # RUN 100 FIX: Enforce 80/20 residual anchor to freeze target goal geometry
+            s_target_adapted = 0.8 * s_target_batch + 0.2 * attn_output.squeeze(1)
 
             # 2. CFM Flow Matching with True \pi-StepNFT Contrastive Push-Pull Loss
             batch_size = batch_action_3d.size(0)
@@ -966,9 +968,11 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
-            # 4. Direct Goal Target Alignment & Domain Cross-Attention Losses
-            goal_attention_loss = F.mse_loss(s_next_pred, s_target_adapted)
-            attn_alignment_loss = F.mse_loss(s_target_adapted, s_target_batch)
+            # 4. Direct Goal Target Alignment & Pre-Energy L2 Normalization
+            s_next_pred_norm = F.normalize(s_next_pred, p=2, dim=-1)
+            s_target_adapted_norm = F.normalize(s_target_adapted, p=2, dim=-1)
+            goal_attention_loss = F.mse_loss(s_next_pred_norm, s_target_adapted_norm)
+            loss_goal_drift = F.mse_loss(s_target_adapted, s_target_batch)
 
             # 5. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
             z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
@@ -1002,13 +1006,13 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 96
+            # Combined total optimization payload for Run 100 (Anchored Goal & L2 Pre-Normalizer)
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + goal_attention_loss * 0.3
-                + attn_alignment_loss * 0.25
+                + loss_goal_drift * 0.5
                 + sigreg_loss * beta_sig
                 + reg_action_norm * 0.0025
                 + loss_smoothness * 0.1
