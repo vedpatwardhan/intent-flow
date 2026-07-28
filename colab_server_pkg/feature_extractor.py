@@ -143,6 +143,15 @@ def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:
     return sam_combined_mask, sam_combined_mask_224
 
 
+def apply_70th_percentile_dino_thresholding(dino_tensor: torch.Tensor) -> torch.Tensor:
+    """DRY helper: Zeroes out the bottom 30% intensity values (below 70th percentile) of a DINO feature map."""
+    if dino_tensor.numel() == 0:
+        return dino_tensor
+    vals = dino_tensor.detach().float().cpu().numpy()
+    p70 = np.percentile(vals, 70)
+    return torch.where(dino_tensor >= p70, dino_tensor, torch.zeros_like(dino_tensor))
+
+
 def pad_features(feature, target_dim):
     if len(feature) < target_dim:
         feature = torch.cat(
@@ -235,6 +244,7 @@ def extract_single_view_stage3_obs_features(
     vision_feat = torch.tensor(dino_attn.flatten()[:384], dtype=torch.float32).to(
         device
     )
+    vision_feat = apply_70th_percentile_dino_thresholding(vision_feat)
     vision_feat = pad_features(vision_feat, 384)
     dino_subspace = torch.tensor(
         features["task_isolated_features"]["dino_subspace"].flatten()[:384],

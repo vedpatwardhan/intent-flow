@@ -873,18 +873,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
             batch_action_3d = batch_action.view(B_size, 7, 58)
 
-            # 1. Temperature-Scaled Context-Aware Latent Cross-Attention Goal Adaptation (tau = 0.50)
-            # Query (Q) = live randomized state scaled by tau (batch_s_t / 0.50)
-            # Key/Value (K,V) = UI goal specification (s_target_batch)
-            tau = 0.50
-            query = (batch_s_t / tau).unsqueeze(1)
-            key_value = s_target_batch.unsqueeze(1)
-            attn_output, _ = state.stage3_models["goal_attention"](
-                query=query, key=key_value, value=key_value
-            )
-
-            # RUN 100 FIX: Enforce 80/20 residual anchor to freeze target goal geometry
-            s_target_adapted = 0.8 * s_target_batch + 0.2 * attn_output.squeeze(1)
+            # RUN 102 FIX: Direct Manifold Target Routing (Bypassing goal_attention cross-attention head)
+            s_target_adapted = s_target_batch
 
             # 2. CFM Flow Matching with True \pi-StepNFT Contrastive Push-Pull Loss
             batch_size = batch_action_3d.size(0)
@@ -976,20 +966,14 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
             predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
-            # 4. Direct Goal Target Alignment & Pre-Energy L2 Normalization
-            s_next_pred_norm = F.normalize(s_next_pred, p=2, dim=-1)
-            s_target_adapted_norm = F.normalize(s_target_adapted, p=2, dim=-1)
-            goal_attention_loss = F.mse_loss(s_next_pred_norm, s_target_adapted_norm)
-            loss_goal_drift = F.mse_loss(s_target_adapted, s_target_batch)
-
-            # 5. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
+            # 4. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
             z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
             z_a = z_action / (z_action.norm(dim=-1, keepdim=True) + 1e-8)
             sim_matrix = torch.matmul(z_s, z_a.T) / 0.07
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
-            # 6. Anti-collapse regularization (SIGReg) with Step Decay Schedule
+            # 5. Anti-collapse regularization (SIGReg) with Step Decay Schedule
             random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
             projected = torch.matmul(s_next_pred, random_dirs)
@@ -1014,16 +998,14 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 101 (Anchored Goal, L2 Pre-Normalizer & Boosted Smoothness)
+            # Combined total optimization payload for Run 102 (Direct Target Routing, No Goal Attn Losses)
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
-                + goal_attention_loss * 0.3
-                + loss_goal_drift * 0.5
                 + sigreg_loss * beta_sig
                 + reg_action_norm * 0.0025
-                + loss_smoothness * 0.4
+                + loss_smoothness * 0.65
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
@@ -1055,8 +1037,6 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "loss/casa_loss": casa_loss.item(),
                 "loss/sigreg_loss": sigreg_loss.item(),
                 "loss/predictor_loss": predictor_loss.item(),
-                "loss/goal_attention_loss": goal_attention_loss.item(),
-                "loss/goal_drift_loss": loss_goal_drift.item(),
                 "drift/state_magnitude": state_magnitude,
                 "drift/state_variance": state_variance,
                 "policy/action_magnitude": action_magnitude,
