@@ -130,19 +130,19 @@ def encode_obs_to_latent(obs_dict, state):
     with torch.amp.autocast("cuda"):
         # Adapters
         vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
-        txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
-        pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
+        # txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
+        # pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
         vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
-        tactile_tok = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
+        # tactile_tok = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
         proprio_tok = state.stage3_models["state_adapter"](obs_dict["proprioception"])
 
         # MSAT
         modality_dict = {
             "vision": vis_tok,
-            "text": txt_tok,
-            "pointnext": pt_tok,
+            # "text": txt_tok,
+            # "pointnext": pt_tok,
             "vggt": vggt_tok,
-            "tactile": tactile_tok,
+            # "tactile": tactile_tok,
             "proprioception": proprio_tok,
         }
         out = state.stage3_models["msat"](modality_dict)
@@ -1048,7 +1048,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 "loss/sigreg_loss": sigreg_loss.item(),
                 "loss/predictor_loss": predictor_loss.item(),
                 "loss/goal_attention_loss": goal_attention_loss.item(),
-                "loss/attn_alignment_loss": attn_alignment_loss.item(),
+                "loss/goal_drift_loss": loss_goal_drift.item(),
                 "drift/state_magnitude": state_magnitude,
                 "drift/state_variance": state_variance,
                 "policy/action_magnitude": action_magnitude,
