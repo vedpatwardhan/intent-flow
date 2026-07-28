@@ -353,20 +353,28 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
-                # Construct on-manifold target goal representation via post-extraction feature transformations
-                annotations = payload.ui_annotations
-                goal_obs_dict, goal_combined_obs = (
-                    construct_stage3_latent_goal_features(obs_dict, annotations)
-                )
+                # Construct and cache target goal representation strictly at Episode 0 Step 0
+                is_start_of_training = (
+                    payload.episode_idx == 0 and payload.step_idx == 0
+                ) or not hasattr(state, "active_goal_combined_obs")
 
-                # Save 4-panel diagnostic comparison plots (Original, UI Drawing Overlay, Transformed DINO, Transformed VGGT)
-                pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
-                save_stage3_goal_features_plots(
-                    pil_frame,
-                    annotations,
-                    goal_obs_dict,
-                    view_name="world_center",
-                )
+                if is_start_of_training:
+                    annotations = payload.ui_annotations
+                    goal_obs_dict, goal_combined_obs = (
+                        construct_stage3_latent_goal_features(obs_dict, annotations)
+                    )
+                    state.active_goal_combined_obs = goal_combined_obs
+
+                    # Save 4-panel diagnostic comparison plots for the initial frame
+                    pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
+                    save_stage3_goal_features_plots(
+                        pil_frame,
+                        annotations,
+                        goal_obs_dict,
+                        view_name="world_center",
+                    )
+                else:
+                    goal_combined_obs = state.active_goal_combined_obs
 
         with torch.no_grad():
             # Get clean live state latent [1, latent_dim]
