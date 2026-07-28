@@ -320,8 +320,8 @@ async def run_stage3_training_loop(
         "ctrl": sim.data.ctrl.copy(),
     }
 
-    num_epochs = 20
-    max_steps = 5
+    num_epochs = 10
+    max_steps = 25
 
     print(
         f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."

@@ -171,7 +171,7 @@ def extract_features_common(
     h, w, _ = frame.shape
 
     dino_attn = get_dino_attn_map(frame)  # [14, 14]
-    dino_attn = apply_70th_percentile_dino_thresholding(dino_attn)
+    dino_attn = apply_70th_percentile_dino_thresholding(dino_attn) * 0.8
     clip_sim, text_feat = get_clip_cosine_similarity(text_prompt, pil_frame)
     motion_field = get_vggt_motion_field(history_frames)  # [224, 224]
 
@@ -469,10 +469,11 @@ def construct_stage3_latent_goal_features(obs_dict, ui_annotations):
             r_indices = np.linspace(h_start, h_end, num_bridge_steps).astype(int)
             c_indices = np.linspace(w_start, w_end, num_bridge_steps).astype(int)
             dino_max = dino_grid.max().item()
+            bridge_val = dino_max * (1.0 / 0.8)
             for step_i in range(num_bridge_steps):
                 r = min(max(r_indices[step_i], 0), 13)
                 c = min(max(c_indices[step_i], 0), 13)
-                dino_grid[r, c] = dino_max
+                dino_grid[r, c] = bridge_val
 
         # Re-flatten and save transformed DINO features
         dino_transformed = dino_grid.flatten()[:384]

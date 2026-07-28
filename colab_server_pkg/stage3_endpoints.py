@@ -830,7 +830,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        num_opsd_steps = 45
+        num_opsd_steps = 20
         batch_size = min(len(state.stage3_trajectory_history), 16)
         total_loss = 0.0
         accumulated_diagnostics = []
