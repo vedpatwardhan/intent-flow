@@ -1014,7 +1014,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 100 (Anchored Goal & L2 Pre-Normalizer)
+            # Combined total optimization payload for Run 101 (Anchored Goal, L2 Pre-Normalizer & Boosted Smoothness)
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
@@ -1023,7 +1023,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 + loss_goal_drift * 0.5
                 + sigreg_loss * beta_sig
                 + reg_action_norm * 0.0025
-                + loss_smoothness * 0.1
+                + loss_smoothness * 0.4
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---

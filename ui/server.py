@@ -539,16 +539,32 @@ async def run_stage3_training_loop(
                 phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
                 energies_np = np.array(energy_ensemble, dtype=np.float32)
                 step_mean_phys_dist = float(np.mean(phys_dists_np))
-                if len(phys_dists_np) > 1 and len(phys_dists_np) == len(energies_np):
-                    corr_mat = np.corrcoef(phys_dists_np, energies_np)
-                    step_energy_dist_corr = (
-                        float(corr_mat[0, 1]) if not np.isnan(corr_mat[0, 1]) else 0.0
+
+                if len(phys_dists_np) <= 1 or len(phys_dists_np) != len(energies_np):
+                    raise RuntimeError(
+                        f"❌ [Telemetry Error] Shape mismatch: phys_dists ({len(phys_dists_np)}) vs candidate energies ({len(energies_np)})"
                     )
-                else:
-                    step_energy_dist_corr = 0.0
+
+                std_dist = np.std(phys_dists_np)
+                std_energy = np.std(energies_np)
+
+                if std_dist == 0.0 or std_energy == 0.0:
+                    raise RuntimeError(
+                        f"❌ [Telemetry Error] Zero variance in candidate rollouts: std_dist={std_dist:.6f}, std_energy={std_energy:.6f}"
+                    )
+
+                corr_mat = np.corrcoef(phys_dists_np, energies_np)
+                val = corr_mat[0, 1]
+                if np.isnan(val):
+                    raise RuntimeError(
+                        "❌ [Telemetry Error] Energy-distance correlation computed as NaN!"
+                    )
+
+                step_energy_dist_corr = float(val)
                 print(
                     f"📈 [Telemetry Summary] Step {env_step} -> Avg Physical Effector-Cube Dist (16 tracks): {step_mean_phys_dist:.4f}m | Energy-Distance Correlation: {step_energy_dist_corr:.4f}"
                 )
+
                 sim._step_physical_distances = []
 
             # Rewind physics back to the committed path's final outcome to capture its state
