@@ -347,8 +347,10 @@ async def run_stage3_training_loop(
         episode_reward = 0.0
 
         for env_step in range(max_steps):
-            # 1. Randomize both robot posture and cube position at the start of EVERY step
-            sim.reset_env(lock_posture=True, randomize_cube=True)
+            # 1. Randomize robot posture and cube position on all steps EXCEPT Episode 0 Step 0
+            # to preserve exact posture & cube position where user drew UI annotations.
+            if not (ep_idx == 0 and env_step == 0):
+                sim.reset_env(lock_posture=True, randomize_cube=True)
 
             # 2. Seed a fresh, clean zero-velocity frame history for this step
             # Prevents VGGT motion extractor from comparing across teleported worlds
