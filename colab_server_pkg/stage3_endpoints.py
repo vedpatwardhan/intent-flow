@@ -998,7 +998,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 102 (Direct Target Routing, No Goal Attn Losses)
+            # Combined total optimization payload for Run 105 (Direct Target Routing, Slashed Smoothness to 0.1)
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2

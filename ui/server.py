@@ -128,6 +128,7 @@ sim.reset_env(lock_posture=True)
 eval_sim = GR1SimulationServer()
 eval_sim.reset_env(lock_posture=True)
 
+
 # Initialize Rerun logger for evaluation stream
 # rr.init("latent_flow_offline_eval", spawn=False)
 # try:
