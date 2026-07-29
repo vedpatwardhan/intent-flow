@@ -701,7 +701,7 @@ async def run_stage3_training_loop(
                                     await asyncio.sleep(3.0)
                                     status_resp = await client.get(
                                         f"{colab_url}/stage3/calibrate/status/{job_id}",
-                                        timeout=10.0,
+                                        timeout=30.0,
                                     )
                                     if status_resp.status_code == 200:
                                         s_data = status_resp.json()
@@ -720,6 +720,8 @@ async def run_stage3_training_loop(
                     print(
                         f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                     )
+                    import traceback
+                    traceback.print_exc()
 
                 buffered_transitions = []
                 accumulated_phys_dists = []
@@ -754,7 +756,7 @@ async def run_stage3_training_loop(
                             await asyncio.sleep(3.0)
                             status_resp = await client.get(
                                 f"{colab_url}/stage3/distill/status/{job_id}",
-                                timeout=10.0,
+                                timeout=30.0,
                             )
                             if status_resp.status_code == 200:
                                 s_data = status_resp.json()

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import uuid
 import pickle
 import io
@@ -650,7 +651,7 @@ import uuid
 calibration_jobs = {}
 
 
-async def process_calibration_job(job_id: str, payload: Stage3CalibratePayload):
+def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
     try:
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
@@ -832,7 +833,9 @@ async def process_calibration_job(job_id: str, payload: Stage3CalibratePayload):
 async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
     job_id = f"calib_{uuid.uuid4().hex[:10]}"
     calibration_jobs[job_id] = {"status": "processing", "loss": None, "error": None}
-    asyncio.create_task(process_calibration_job(job_id, payload))
+    threading.Thread(
+        target=run_calibration_worker, args=(job_id, payload), daemon=True
+    ).start()
     return {"job_id": job_id, "status": "processing"}
 
 
@@ -845,7 +848,7 @@ async def get_calibration_job_status(job_id: str):
 distill_jobs = {}
 
 
-async def process_distill_job(job_id: str, payload: Stage3DistillPayload):
+def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
     try:
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
@@ -1266,7 +1269,9 @@ async def process_distill_job(job_id: str, payload: Stage3DistillPayload):
 async def handle_stage3_distill(payload: Stage3DistillPayload):
     job_id = f"distill_{uuid.uuid4().hex[:10]}"
     distill_jobs[job_id] = {"status": "processing", "opsd_loss": None, "error": None}
-    asyncio.create_task(process_distill_job(job_id, payload))
+    threading.Thread(
+        target=run_distill_worker, args=(job_id, payload), daemon=True
+    ).start()
     return {"job_id": job_id, "status": "processing"}
 
 
