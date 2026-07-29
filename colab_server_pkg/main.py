@@ -20,6 +20,7 @@ from colab_server_pkg.stage3_endpoints import (
     handle_stage3_calibrate,
     handle_stage3_distill,
     get_calibration_job_status,
+    get_distill_job_status,
 )
 
 try:
@@ -174,6 +175,11 @@ async def stage3_calibrate_status(job_id: str):
 @app.post("/stage3/distill")
 async def stage3_distill(payload: Stage3DistillPayload):
     return await handle_stage3_distill(payload)
+
+
+@app.get("/stage3/distill/status/{job_id}")
+async def stage3_distill_status(job_id: str):
+    return await get_distill_job_status(job_id)
 
 
 if __name__ == "__main__":

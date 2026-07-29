@@ -741,14 +741,34 @@ async def run_stage3_training_loop(
                 r = await client.post(
                     f"{colab_url}/stage3/distill",
                     json={"reward": final_reward},
-                    timeout=2000.0,
+                    timeout=30.0,
                 )
                 if r.status_code == 200:
                     res = r.json()
-                    print(
-                        f"[Training] Distill completed for Episode {ep_idx + 1}."
-                        f" Loss: {res.get('opsd_loss')}"
-                    )
+                    job_id = res.get("job_id")
+                    if job_id:
+                        print(
+                            f"[Distill] Dispatched job {job_id}. Polling Colab for completion..."
+                        )
+                        while True:
+                            await asyncio.sleep(3.0)
+                            status_resp = await client.get(
+                                f"{colab_url}/stage3/distill/status/{job_id}",
+                                timeout=10.0,
+                            )
+                            if status_resp.status_code == 200:
+                                s_data = status_resp.json()
+                                st = s_data.get("status")
+                                if st == "completed":
+                                    print(
+                                        f"✅ [Distill] Job {job_id} completed for Episode {ep_idx + 1}. OPSD Loss: {s_data.get('opsd_loss')}"
+                                    )
+                                    break
+                                elif st == "failed":
+                                    print(
+                                        f"❌ [Distill Error] Job {job_id} failed: {s_data.get('error')}"
+                                    )
+                                    break
         except Exception as e:
             print(f"[Training Error] Episode {ep_idx + 1} distill failed: {e}")
 

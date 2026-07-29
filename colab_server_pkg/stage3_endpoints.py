@@ -842,13 +842,22 @@ async def get_calibration_job_status(job_id: str):
     return calibration_jobs[job_id]
 
 
-async def handle_stage3_distill(payload: Stage3DistillPayload):
+distill_jobs = {}
+
+
+async def process_distill_job(job_id: str, payload: Stage3DistillPayload):
     try:
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
         if len(state.stage3_trajectory_history) == 0:
-            return {"status": "no data to distill"}
+            distill_jobs[job_id] = {
+                "status": "completed",
+                "opsd_loss": 0.0,
+                "error": None,
+                "message": "no data to distill",
+            }
+            return
 
         config_path = os.path.abspath(
             os.path.join(
@@ -860,7 +869,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
 
         # Deterministic Epoch Partitioning: Isolate fresh rollout transitions (up to 400)
         total_history_len = len(state.stage3_trajectory_history)
-        print(f"[DISTILL] Total History Length: {total_history_len}")
+        print(f"[DISTILL JOB {job_id}] Total History Length: {total_history_len}")
         fresh_data_size = min(total_history_len, 400)
         fresh_indices = np.arange(
             total_history_len - fresh_data_size, total_history_len
@@ -881,7 +890,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         total_loss = 0.0
         accumulated_diagnostics = []
 
-        opsd_pbar = tqdm(range(num_opsd_steps), desc="⚡ [OPSD Distill]", unit="batch")
+        opsd_pbar = tqdm(
+            range(num_opsd_steps), desc=f"⚡ [OPSD Distill {job_id}]", unit="batch"
+        )
         for opsd_step in opsd_pbar:
             state.stage3_optimizer.zero_grad()
 
@@ -1022,7 +1033,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
             projected = torch.matmul(s_next_pred, random_dirs)
             mean_proj = projected.mean(dim=0, keepdim=True)
-            std_proj = projected.std(dim=0, keepdim=True)
+            var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
+            std_proj = torch.sqrt(var_proj) + 1e-8
+
             sigreg_loss = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(
                 mean_proj, torch.zeros_like(mean_proj)
             )
@@ -1037,19 +1050,20 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             # Penalty on action magnitude and jerk for overall smoothness
             reg_action_norm = torch.mean(batch_action**2)
 
+            # 6. Smoothness regularization loss penalty on output joint space deltas
             # Multi-scale sliding window jerk regularization (1st and 2nd order deltas over H=7 horizon)
             deltas_1 = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 105 (Direct Target Routing, Slashed Smoothness to 0.1)
+            # Combined total optimization payload for Run 105 (Direct Target Routing, Slashed Smoothness to 0.10)
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + sigreg_loss * beta_sig
-                + reg_action_norm * 0.001
-                + loss_smoothness * 0.1
+                + reg_action_norm * 0.0025
+                + loss_smoothness * 0.10
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
@@ -1189,7 +1203,6 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         # Cleared the buffer
         state.stage3_trajectory_history.clear()
 
-        # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "..", config["paths"]["checkpoint_dir"]
@@ -1234,9 +1247,30 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 f"💾 [Checkpoint] Persisted dynamic epoch checkpoint: {epoch_ckpt_path}"
             )
 
-        return {"status": "distilled", "opsd_loss": avg_loss, "checkpoint": final_path}
+        distill_jobs[job_id] = {
+            "status": "completed",
+            "opsd_loss": float(avg_loss),
+            "checkpoint": final_path,
+            "error": None,
+        }
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500, detail=f"Stage 3 distillation error: {str(e)}"
-        )
+        distill_jobs[job_id] = {
+            "status": "failed",
+            "opsd_loss": None,
+            "checkpoint": None,
+            "error": str(e),
+        }
+
+
+async def handle_stage3_distill(payload: Stage3DistillPayload):
+    job_id = f"distill_{uuid.uuid4().hex[:10]}"
+    distill_jobs[job_id] = {"status": "processing", "opsd_loss": None, "error": None}
+    asyncio.create_task(process_distill_job(job_id, payload))
+    return {"job_id": job_id, "status": "processing"}
+
+
+async def get_distill_job_status(job_id: str):
+    if job_id not in distill_jobs:
+        raise HTTPException(status_code=404, detail="Distill job ID not found")
+    return distill_jobs[job_id]
