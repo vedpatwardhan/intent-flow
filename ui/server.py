@@ -657,9 +657,6 @@ async def run_stage3_training_loop(
             touch_index_next = committed_touch_index_next
             touch_thumb_next = committed_touch_thumb_next
 
-            physics_state = sim.get_physics_state()
-            step_reward = -physics_state["target_dist"]
-
             # Accumulate transitions into 5-step buffer
             buffered_transitions.extend(transitions)
             if step_mean_phys_dist is not None:

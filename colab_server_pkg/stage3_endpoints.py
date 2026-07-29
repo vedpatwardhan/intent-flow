@@ -700,7 +700,12 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                 (s_t, action, s_next, trans.energy, trans.tactile, s_target)
             )
 
-        while len(state.stage3_trajectory_history) > 100:
+        while len(state.stage3_trajectory_history) > 2000:
+            print(
+                f"[CALIBRATE] WARNING: Trajectory history is too long! Current size: "
+                f"{len(state.stage3_trajectory_history)}. "
+                "Popping oldest trajectories..."
+            )
             state.stage3_trajectory_history.pop(0)
 
         num_transitions = len(payload.transitions)
