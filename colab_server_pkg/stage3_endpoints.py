@@ -427,7 +427,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.2,
+                    step_nft_scale=0.4,
                 )
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
@@ -1004,7 +1004,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + sigreg_loss * beta_sig
-                + reg_action_norm * 0.0025
+                + reg_action_norm * 0.001
                 + loss_smoothness * 0.1
             )
 
