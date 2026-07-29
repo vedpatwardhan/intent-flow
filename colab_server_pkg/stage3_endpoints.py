@@ -5,6 +5,7 @@ import json
 import os
 import yaml
 import numpy as np
+from tqdm import tqdm
 from pydantic import BaseModel
 
 EXEMPLAR_DIR = os.path.abspath(
@@ -651,10 +652,8 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         num_transitions = len(payload.transitions)
         print(f"\n[CALIBRATE] Starting calibration on {num_transitions} transitions...")
 
-        for i, trans in enumerate(payload.transitions):
-            print(
-                f"[CALIBRATE] Processing transition {i + 1}/{num_transitions} ({(i + 1) / num_transitions * 100:.1f}%)..."
-            )
+        pbar = tqdm(payload.transitions, desc="[CALIBRATE]", unit="trans")
+        for i, trans in enumerate(pbar):
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
                     _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
@@ -669,7 +668,7 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                             if torch.is_tensor(v) and (
                                 torch.isnan(v).any() or torch.isinf(v).any()
                             ):
-                                print(
+                                pbar.write(
                                     f"⚠️ [NaN/Inf Warning] {name} observation contains "
                                     f"NaN/Inf in feature: '{k}'!"
                                 )
@@ -683,12 +682,12 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
 
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
-            print(
-                f"[CALIBRATE] s_t bounds: [{s_t.min().item():.6f}, "
-                f"{s_t.max().item():.6f}] "
-                f"s_next bounds: [{s_next.min().item():.6f}, "
-                f"{s_next.max().item():.6f}] "
-                f"action bounds: [{action.min().item():.6f}, {action.max().item():.6f}]"
+            pbar.set_postfix(
+                {
+                    "s_t": f"[{s_t.min().item():.2f},{s_t.max().item():.2f}]",
+                    "s_next": f"[{s_next.min().item():.2f},{s_next.max().item():.2f}]",
+                    "act": f"[{action.min().item():.2f},{action.max().item():.2f}]",
+                }
             )
 
             # Retrieve real target goal anchor vector if present, or fall back to s_t
@@ -855,7 +854,8 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         total_loss = 0.0
         accumulated_diagnostics = []
 
-        for opsd_step in range(num_opsd_steps):
+        opsd_pbar = tqdm(range(num_opsd_steps), desc="⚡ [OPSD Distill]", unit="batch")
+        for opsd_step in opsd_pbar:
             state.stage3_optimizer.zero_grad()
 
             indices = batches_pool[opsd_step]
@@ -1075,6 +1075,15 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             loss_opsd.backward()
             state.stage3_optimizer.step()
             total_loss += loss_opsd.item()
+
+            opsd_pbar.set_postfix(
+                {
+                    "loss": f"{loss_opsd.item():.4f}",
+                    "cfm": f"{cfm_loss.item():.4f}",
+                    "pred": f"{predictor_loss.item():.4f}",
+                    "casa": f"{casa_loss.item():.4f}",
+                }
+            )
 
         # Release fragmented allocation pools
         torch.cuda.empty_cache()
