@@ -250,8 +250,8 @@ export default function TrajectoryExplorer() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: '12px',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '14px',
                   paddingRight: '4px'
                 }}
               >
