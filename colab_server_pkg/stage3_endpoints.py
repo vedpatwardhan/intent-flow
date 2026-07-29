@@ -1005,7 +1005,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
                 + predictor_loss * 0.5
                 + sigreg_loss * beta_sig
                 + reg_action_norm * 0.0025
-                + loss_smoothness * 0.65
+                + loss_smoothness * 0.1
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
