@@ -1,4 +1,5 @@
 import os
+import asyncio
 import pickle
 from time import perf_counter
 import torch
@@ -18,6 +19,7 @@ from colab_server_pkg.stage3_endpoints import (
     handle_stage3_step,
     handle_stage3_calibrate,
     handle_stage3_distill,
+    get_calibration_job_status,
 )
 
 try:
@@ -162,6 +164,11 @@ async def stage3_step(payload: Stage3StepPayload):
 @app.post("/stage3/calibrate")
 async def stage3_calibrate(payload: Stage3CalibratePayload):
     return await handle_stage3_calibrate(payload)
+
+
+@app.get("/stage3/calibrate/status/{job_id}")
+async def stage3_calibrate_status(job_id: str):
+    return await get_calibration_job_status(job_id)
 
 
 @app.post("/stage3/distill")

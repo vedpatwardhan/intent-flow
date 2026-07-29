@@ -477,7 +477,7 @@ async def run_stage3_training_loop(
             try:
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
-                        f"{colab_url}/stage3/step", json=current_obs, timeout=100.0
+                        f"{colab_url}/stage3/step", json=current_obs, timeout=2000.0
                     )
                     if r.status_code == 200:
                         res = r.json()
@@ -685,11 +685,37 @@ async def run_stage3_training_loop(
 
                 try:
                     async with httpx.AsyncClient() as client:
-                        await client.post(
+                        r = await client.post(
                             f"{colab_url}/stage3/calibrate",
                             json=calibrate_payload,
-                            timeout=100.0,
+                            timeout=30.0,
                         )
+                        if r.status_code == 200:
+                            job_data = r.json()
+                            job_id = job_data.get("job_id")
+                            if job_id:
+                                print(
+                                    f"[Calibrate] Dispatched job {job_id}. Polling Colab for completion..."
+                                )
+                                while True:
+                                    await asyncio.sleep(3.0)
+                                    status_resp = await client.get(
+                                        f"{colab_url}/stage3/calibrate/status/{job_id}",
+                                        timeout=10.0,
+                                    )
+                                    if status_resp.status_code == 200:
+                                        s_data = status_resp.json()
+                                        st = s_data.get("status")
+                                        if st == "completed":
+                                            print(
+                                                f"✅ [Calibrate] Job {job_id} completed. Dynamics Loss: {s_data.get('loss'):.6f}"
+                                            )
+                                            break
+                                        elif st == "failed":
+                                            print(
+                                                f"❌ [Calibrate Error] Job {job_id} failed: {s_data.get('error')}"
+                                            )
+                                            break
                 except Exception as e:
                     print(
                         f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
@@ -715,7 +741,7 @@ async def run_stage3_training_loop(
                 r = await client.post(
                     f"{colab_url}/stage3/distill",
                     json={"reward": final_reward},
-                    timeout=100.0,
+                    timeout=2000.0,
                 )
                 if r.status_code == 200:
                     res = r.json()

@@ -1,3 +1,5 @@
+import asyncio
+import uuid
 import pickle
 import io
 import base64
@@ -643,23 +645,29 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         raise HTTPException(status_code=500, detail=f"Stage 3 step error: {str(e)}")
 
 
-async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
+import uuid
+
+calibration_jobs = {}
+
+
+async def process_calibration_job(job_id: str, payload: Stage3CalibratePayload):
     try:
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
         s_t_first = None
         num_transitions = len(payload.transitions)
-        print(f"\n[CALIBRATE] Starting calibration on {num_transitions} transitions...")
+        print(
+            f"\n[CALIBRATE JOB {job_id}] Starting calibration on {num_transitions} transitions..."
+        )
 
-        pbar = tqdm(payload.transitions, desc="[CALIBRATE]", unit="trans")
+        pbar = tqdm(payload.transitions, desc=f"[CALIBRATE {job_id}]", unit="trans")
         for i, trans in enumerate(pbar):
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
                     _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
                     _, combined_obs_next = extract_stage3_obs_features(trans.next_obs)
 
-                    # Check for NaNs/Infs in combined features before encoding
                     for name, d_dict in [
                         ("current", combined_obs_t),
                         ("next", combined_obs_next),
@@ -807,12 +815,31 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                 except Exception:
                     pass
 
-        return {"status": "batch_calibrated", "loss": avg_loss_dynamics}
+        calibration_jobs[job_id] = {
+            "status": "completed",
+            "loss": float(avg_loss_dynamics),
+            "error": None,
+        }
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500, detail=f"Stage 3 calibration error: {str(e)}"
-        )
+        calibration_jobs[job_id] = {
+            "status": "failed",
+            "loss": None,
+            "error": str(e),
+        }
+
+
+async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
+    job_id = f"calib_{uuid.uuid4().hex[:10]}"
+    calibration_jobs[job_id] = {"status": "processing", "loss": None, "error": None}
+    asyncio.create_task(process_calibration_job(job_id, payload))
+    return {"job_id": job_id, "status": "processing"}
+
+
+async def get_calibration_job_status(job_id: str):
+    if job_id not in calibration_jobs:
+        raise HTTPException(status_code=404, detail="Calibration job ID not found")
+    return calibration_jobs[job_id]
 
 
 async def handle_stage3_distill(payload: Stage3DistillPayload):
