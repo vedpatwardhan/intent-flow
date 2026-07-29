@@ -419,7 +419,9 @@ async def run_stage3_training_loop(
             )
         )
 
-        episode_reward = 0.0
+        buffered_transitions = []
+        accumulated_phys_dists = []
+        accumulated_corrs = []
 
         for env_step in range(max_steps):
             # 1. Randomize robot posture and cube position on all steps EXCEPT Episode 0 Step 0
@@ -657,26 +659,48 @@ async def run_stage3_training_loop(
 
             physics_state = sim.get_physics_state()
             step_reward = -physics_state["target_dist"]
-            episode_reward += step_reward
 
-            # Report calibration with evaluation telemetry payload for Colab W&B server logging
-            calibrate_payload = {
-                "transitions": transitions,
-                "eval_mean_physical_distance": step_mean_phys_dist,
-                "eval_energy_distance_correlation": step_energy_dist_corr,
-            }
+            # Accumulate transitions into 5-step buffer
+            buffered_transitions.extend(transitions)
+            if step_mean_phys_dist is not None:
+                accumulated_phys_dists.append(step_mean_phys_dist)
+            if step_energy_dist_corr is not None:
+                accumulated_corrs.append(step_energy_dist_corr)
 
-            try:
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        f"{colab_url}/stage3/calibrate",
-                        json=calibrate_payload,
-                        timeout=100.0,
-                    )
-            except Exception as e:
-                print(
-                    f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
+            # Report calibration payload to Colab once every 5 steps (or on final step)
+            if (env_step + 1) % 5 == 0 or env_step == max_steps - 1:
+                avg_phys_dist = (
+                    float(np.mean(accumulated_phys_dists))
+                    if len(accumulated_phys_dists) > 0
+                    else None
                 )
+                avg_corr = (
+                    float(np.mean(accumulated_corrs))
+                    if len(accumulated_corrs) > 0
+                    else None
+                )
+
+                calibrate_payload = {
+                    "transitions": buffered_transitions,
+                    "eval_mean_physical_distance": avg_phys_dist,
+                    "eval_energy_distance_correlation": avg_corr,
+                }
+
+                try:
+                    async with httpx.AsyncClient() as client:
+                        await client.post(
+                            f"{colab_url}/stage3/calibrate",
+                            json=calibrate_payload,
+                            timeout=100.0,
+                        )
+                except Exception as e:
+                    print(
+                        f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
+                    )
+
+                buffered_transitions = []
+                accumulated_phys_dists = []
+                accumulated_corrs = []
 
             # Step loop ends cleanly; next step starts with sim.reset_env(lock_posture=True, randomize_cube=True)
 

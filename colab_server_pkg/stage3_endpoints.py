@@ -703,93 +703,90 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
         while len(state.stage3_trajectory_history) > 100:
             state.stage3_trajectory_history.pop(0)
 
-        batch_size = min(len(state.stage3_trajectory_history), 8)
-        indices = np.random.choice(
-            len(state.stage3_trajectory_history), batch_size, replace=False
-        )
+        num_transitions = len(payload.transitions)
+        loss_dynamics_accum = 0.0
+        loss_sigreg_accum = 0.0
+        loss_total_accum = 0.0
 
-        # batch_s_t: Shape [batch_size, 512]
-        batch_s_t = torch.cat(
-            [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
-        )
-        # batch_action: Shape [batch_size, 406]
-        batch_action = torch.cat(
-            [state.stage3_trajectory_history[idx][1] for idx in indices], dim=0
-        )
-        # batch_s_next: Shape [batch_size, 512]
-        batch_s_next = torch.cat(
-            [state.stage3_trajectory_history[idx][2] for idx in indices], dim=0
-        )
-
-        state.stage3_optimizer.zero_grad()
-
-        # z_action: Shape [batch_size, 512] (projected action trajectory latents)
-        z_action = state.stage3_models["action_adapter"](batch_action)
-
-        # z_action_16: Shape [batch_size, 16] (bottleneck dynamics conditioning latent)
-        z_action_16 = state.stage3_models["action_down_proj"](z_action)
-
-        # s_next_pred: Shape [batch_size, 512] (predicted macro-step outcome latent state)
-        s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
-
-        # Dynamics loss (predictor update without goal attention) - Scalar loss
-        print(
-            f"s_next_pred bounds: [{s_next_pred.min().item():.6f}, {s_next_pred.max().item():.6f}]"
-        )
-        print(
-            f"batch_s_next bounds: [{batch_s_next.min().item():.6f}, {batch_s_next.max().item():.6f}]"
-        )
-        loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
-
-        # Anti-Collapse Regularization: Enforce diversity on predicted future states
-        if s_next_pred.size(0) > 1:
-            # Project predicted states onto random directions to check for isotropic distribution
-            random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
-            random_dirs = random_dirs / (random_dirs.norm(dim=0, keepdim=True) + 1e-8)
-
-            # Project the predicted outputs, not the identical inputs
-            projected = torch.matmul(s_next_pred, random_dirs)
-            mean_proj = projected.mean(dim=0, keepdim=True)
-
-            # Calculate variance safely on the predictor's diverse outputs
-            var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
-            std_proj = torch.sqrt(var_proj) + 1e-8
-
-            loss_sigreg = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(
-                mean_proj, torch.zeros_like(mean_proj)
+        for grad_step in range(num_transitions):
+            batch_size = min(len(state.stage3_trajectory_history), 8)
+            indices = np.random.choice(
+                len(state.stage3_trajectory_history), batch_size, replace=False
             )
-            loss_total = loss_dynamics + 0.01 * loss_sigreg
-        else:
-            loss_total = loss_dynamics
 
-        # Backpropagate the gradients cleanly
-        loss_total.backward()
-
-        # Extract parameters of the predictor
-        model_obj = state.stage3_models.get("predictor")
-        if not model_obj or not hasattr(model_obj, "parameters"):
-            raise RuntimeError(
-                "🔥 FATAL: The 'predictor' module was not found in state.stage3_models! "
-                "Calibration cannot proceed without active dynamics updates."
+            # batch_s_t: Shape [batch_size, 512]
+            batch_s_t = torch.cat(
+                [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
             )
-        trainable_params = list(model_obj.parameters())
+            # batch_action: Shape [batch_size, 406]
+            batch_action = torch.cat(
+                [state.stage3_trajectory_history[idx][1] for idx in indices], dim=0
+            )
+            # batch_s_next: Shape [batch_size, 512]
+            batch_s_next = torch.cat(
+                [state.stage3_trajectory_history[idx][2] for idx in indices], dim=0
+            )
 
-        # Apply safety rails to clip exploding gradient updates
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            state.stage3_optimizer.zero_grad()
 
-        # Step the optimizer forward safely
-        state.stage3_optimizer.step()
+            # z_action: Shape [batch_size, 512] (projected action trajectory latents)
+            z_action = state.stage3_models["action_adapter"](batch_action)
 
-        # Release fragmented allocation pools
+            # z_action_16: Shape [batch_size, 16] (bottleneck dynamics conditioning latent)
+            z_action_16 = state.stage3_models["action_down_proj"](z_action)
+
+            # s_next_pred: Shape [batch_size, 512] (predicted macro-step outcome latent state)
+            s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
+
+            loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
+
+            # Anti-Collapse Regularization: Enforce diversity on predicted future states
+            if s_next_pred.size(0) > 1:
+                random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
+                random_dirs = random_dirs / (
+                    random_dirs.norm(dim=0, keepdim=True) + 1e-8
+                )
+
+                projected = torch.matmul(s_next_pred, random_dirs)
+                mean_proj = projected.mean(dim=0, keepdim=True)
+
+                var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
+                std_proj = torch.sqrt(var_proj) + 1e-8
+
+                loss_sigreg = F.mse_loss(
+                    std_proj, torch.ones_like(std_proj)
+                ) + F.mse_loss(mean_proj, torch.zeros_like(mean_proj))
+                loss_total = loss_dynamics + 0.01 * loss_sigreg
+            else:
+                loss_sigreg = torch.tensor(0.0, device=device)
+                loss_total = loss_dynamics
+
+            loss_total.backward()
+
+            model_obj = state.stage3_models.get("predictor")
+            if not model_obj or not hasattr(model_obj, "parameters"):
+                raise RuntimeError(
+                    "🔥 FATAL: The 'predictor' module was not found in state.stage3_models! "
+                    "Calibration cannot proceed without active dynamics updates."
+                )
+            trainable_params = list(model_obj.parameters())
+
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            state.stage3_optimizer.step()
+
+            loss_dynamics_accum += loss_dynamics.item()
+            loss_sigreg_accum += loss_sigreg.item()
+            loss_total_accum += loss_total.item()
+
         torch.cuda.empty_cache()
 
+        avg_loss_dynamics = loss_dynamics_accum / num_transitions
+        avg_loss_sigreg = loss_sigreg_accum / num_transitions
+        avg_loss_total = loss_total_accum / num_transitions
+
         print(
-            f"[Calibrate] Optimization complete. Dynamics loss: {loss_dynamics.item():.6f}"
+            f"[Calibrate] Ingested {num_transitions} transitions across {num_transitions} optimization steps. Avg Dynamics Loss: {avg_loss_dynamics:.6f} | Avg SIGReg: {avg_loss_sigreg:.6f} | Avg Total: {avg_loss_total:.6f}\n"
         )
-        if batch_s_t.size(0) > 1:
-            print(
-                f"            SIGReg loss: {loss_sigreg.item():.6f} | Total loss: {loss_total.item():.6f}\n"
-            )
 
         # Log evaluation telemetry passed from simulation step payload
         if HAS_WANDB and payload.eval_mean_physical_distance is not None:
@@ -806,7 +803,7 @@ async def handle_stage3_calibrate(payload: Stage3CalibratePayload):
                 except Exception:
                     pass
 
-        return {"status": "batch_calibrated", "loss": loss_dynamics.item()}
+        return {"status": "batch_calibrated", "loss": avg_loss_dynamics}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(
@@ -830,18 +827,32 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        num_opsd_steps = 20
-        batch_size = min(len(state.stage3_trajectory_history), 16)
+        # Deterministic Epoch Partitioning: Isolate fresh rollout transitions (up to 400)
+        total_history_len = len(state.stage3_trajectory_history)
+        fresh_data_size = min(total_history_len, 400)
+        fresh_indices = np.arange(
+            total_history_len - fresh_data_size, total_history_len
+        )
+        np.random.shuffle(fresh_indices)
+
+        target_batch_size = 16
+        batches_pool = [
+            fresh_indices[i : i + target_batch_size]
+            for i in range(0, len(fresh_indices), target_batch_size)
+        ]
+
+        num_opsd_steps = len(batches_pool)
+        print(
+            f"📊 [Epoch Partition] Processing exactly {num_opsd_steps} non-overlapping batches across {fresh_data_size} fresh transitions. Parity guaranteed."
+        )
+
         total_loss = 0.0
         accumulated_diagnostics = []
 
         for opsd_step in range(num_opsd_steps):
             state.stage3_optimizer.zero_grad()
 
-            # Sample batch from trajectory history
-            indices = np.random.choice(
-                len(state.stage3_trajectory_history), batch_size, replace=False
-            )
+            indices = batches_pool[opsd_step]
             batch_s_t = torch.cat(
                 [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
             )
