@@ -834,6 +834,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
 
         # Deterministic Epoch Partitioning: Isolate fresh rollout transitions (up to 400)
         total_history_len = len(state.stage3_trajectory_history)
+        print(f"[DISTILL] Total History Length: {total_history_len}")
         fresh_data_size = min(total_history_len, 400)
         fresh_indices = np.arange(
             total_history_len - fresh_data_size, total_history_len
