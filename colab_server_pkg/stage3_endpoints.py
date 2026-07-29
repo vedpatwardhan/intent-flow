@@ -1149,6 +1149,9 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
             state.stage3_models["flow_matcher"].state_dict()
         )
 
+        # Cleared the buffer
+        state.stage3_trajectory_history = []
+
         # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
             os.path.join(
