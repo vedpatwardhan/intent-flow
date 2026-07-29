@@ -1151,7 +1151,7 @@ async def handle_stage3_distill(payload: Stage3DistillPayload):
         )
 
         # Cleared the buffer
-        state.stage3_trajectory_history = []
+        state.stage3_trajectory_history.clear()
 
         # ... Rest of checkpoint saving code remains identical ...
         checkpoint_dir = os.path.abspath(
