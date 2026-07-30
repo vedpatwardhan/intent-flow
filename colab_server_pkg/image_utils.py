@@ -434,19 +434,19 @@ def save_stage3_oracle_goal_plots(
         history_frames = [frames[view_name] for frames in oracle_payload.history_frames]
         start_frame_str = history_frames[-2]
         oracle_frame_str = history_frames[-1]
-        start_pil = decode_base64_image(start_frame_str)
-        oracle_pil = decode_base64_image(oracle_frame_str)
+        start_np = decode_base64_image(start_frame_str)
+        oracle_np = decode_base64_image(oracle_frame_str)
 
         fig, axes = plt.subplots(1, 4, figsize=(20, 5))
-        img_w, img_h = start_pil.width, start_pil.height
+        img_h, img_w, _ = start_np.shape
 
         # --- Panel 1: Initial Environment Starting Posture ---
-        axes[0].imshow(start_pil)
+        axes[0].imshow(start_np)
         axes[0].set_title(f"1. Initial Start Posture ({view_name})", fontsize=10)
         axes[0].axis("off")
 
         # --- Panel 2: Ground-Truth Oracle Target Goal Posture ---
-        axes[1].imshow(oracle_pil)
+        axes[1].imshow(oracle_np)
         axes[1].set_title(
             f"2. Ground-Truth Oracle Goal Snapshot ({view_name})", fontsize=10
         )
@@ -456,7 +456,7 @@ def save_stage3_oracle_goal_plots(
         dino_map = oracle_obs_dict[view_name]["vision"].squeeze(0)[:196].view(14, 14)
         dino_map = dino_map.detach().cpu().numpy()
 
-        axes[2].imshow(oracle_pil)
+        axes[2].imshow(oracle_np)
         axes[2].imshow(
             dino_map,
             cmap="jet",
@@ -471,7 +471,7 @@ def save_stage3_oracle_goal_plots(
         vggt_tensor = oracle_obs_dict[view_name]["vggt"].squeeze(0)
         vggt_map = vggt_tensor.detach().cpu().numpy()
 
-        axes[3].imshow(oracle_pil)
+        axes[3].imshow(oracle_np)
         axes[3].imshow(
             vggt_map,
             cmap="jet",
