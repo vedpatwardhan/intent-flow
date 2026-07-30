@@ -62,9 +62,9 @@ def get_clip_cosine_similarity(text_prompt: str, pil_frame: Image):
 
 
 def get_vggt_motion_field(frames: list[str]) -> tuple:
-    if len(frames) < 2:
-        raise IndexError("Motion vectors require atleast two frames of history.")
-    frames = frames[-2:]
+    if len(frames) < 4:
+        raise IndexError("Motion vectors require at least four frames of history.")
+    frames = frames[-4:]
     frames = [decode_base64_image(frame) for frame in frames]
     transform_pipeline = transforms.Compose(
         [
@@ -81,19 +81,21 @@ def get_vggt_motion_field(frames: list[str]) -> tuple:
     # Execute model forward pass
     with torch.no_grad():
         outputs = models["vggt"](processed_tensors)
-        # Shape: [2, 224, 224, 3]
+        # Shape: [N, 224, 224, 3] where N = len(frames)
         world_points = outputs["world_points"].squeeze(0).cpu().numpy()
 
-    # Extract the absolute spatial positioning fields
-    wp_t0 = world_points[0]  # Shape: [224, 224, 3]
-    wp_t1 = world_points[1]  # Shape: [224, 224, 3]
+    num_frames = len(world_points)
+    motion_magnitude = np.zeros((224, 224), dtype=np.float32)
 
-    # Delta trajectories matrix = Point(t1) - Point(t0)
-    dx = wp_t1[:, :, 0] - wp_t0[:, :, 0]  # [224, 224]
-    dy = wp_t1[:, :, 1] - wp_t0[:, :, 1]  # [224, 224]
+    # Accumulate step-by-step consecutive displacement magnitudes across all frame steps (t_{i} -> t_{i+1})
+    for i in range(num_frames - 1):
+        wp_curr = world_points[i]
+        wp_next = world_points[i + 1]
+        dx = wp_next[:, :, 0] - wp_curr[:, :, 0]
+        dy = wp_next[:, :, 1] - wp_curr[:, :, 1]
+        step_mag = np.sqrt(dx**2 + dy**2)
+        motion_magnitude += step_mag
 
-    # Magnitude = sqrt(dx^2 + dy^2)
-    motion_magnitude = np.sqrt(dx**2 + dy**2)  # [224, 224]
     motion_min = motion_magnitude.min()
     motion_max = motion_magnitude.max()
     motion_norm = (motion_magnitude - motion_min) / (motion_max - motion_min + 1e-8)

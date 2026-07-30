@@ -244,7 +244,7 @@ cached_sam_mask = None
 cached_motion_field = None
 cached_task_isolated_features = None
 cached_oracle_goal_obs = None
-baseline_oracle_frames = None
+baseline_oracle_frames = []
 
 
 def capture_sim_frames(sim):
@@ -273,9 +273,11 @@ def build_stage3_obs_payload(
 ):
     current_frames = capture_sim_frames(sim)
     base_frames = (
-        base_history_frames if base_history_frames is not None else current_frames
+        base_history_frames
+        if base_history_frames is not None
+        else [current_frames, current_frames, current_frames]
     )
-    frame_history = [base_frames, current_frames]
+    frame_history = [*base_frames, current_frames]
     tactile_grid = [[0.0] * 4 for _ in range(4)]
     return {
         "frames": current_frames,
@@ -868,14 +870,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
 
+                elif payload.get("type") == "capture_oracle_frame":
+                    step_num = payload.get("step", 1)
+                    frames = capture_sim_frames(sim)
+                    if step_num == 1:
+                        baseline_oracle_frames = [frames]
+                        print(
+                            f"📸 [Oracle Cache] Step 1 (Start) Anchor Snapshot recorded!"
+                        )
+                    else:
+                        baseline_oracle_frames.append(frames)
+                        print(
+                            f"📸 [Oracle Cache] Step {step_num} Anchor Snapshot recorded!"
+                        )
+
                 elif payload.get("type") == "capture_start_snapshot":
-                    print(
-                        "📸 Recording Oracle Start Baseline Anchor Snapshot locally..."
-                    )
-                    baseline_oracle_frames = capture_sim_frames(sim)
-                    print(
-                        "📸 [Oracle Cache] Baseline Start Anchor Snapshot captured successfully!"
-                    )
+                    frames = capture_sim_frames(sim)
+                    baseline_oracle_frames = [frames]
+                    print("📸 [Oracle Cache] Baseline Start Anchor Snapshot recorded!")
 
                 elif payload.get("type") == "capture_goal_snapshot":
                     print("🎯 Recording Ground-Truth Goal Oracle Snapshot locally...")
@@ -889,7 +901,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             base_history_frames=baseline_oracle_frames,
                         )
                         print(
-                            "🎯 [Oracle Cache] Ground-truth target oracle_goal_obs captured locally with temporal history!"
+                            "🎯 [Oracle Cache] Ground-truth target oracle_goal_obs captured locally with 4-frame temporal history!"
                         )
                     except Exception as e:
                         print(f"❌ Error capturing goal snapshot: {e}")

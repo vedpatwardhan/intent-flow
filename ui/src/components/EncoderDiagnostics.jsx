@@ -658,16 +658,16 @@ export default function EncoderDiagnostics({
               Record start & goal oracle snapshots for unwarped Stage 3 goal representations, or save evaluation exemplars.
             </p>
 
-            {/* Ground-Truth Goal Oracle Controls */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginBottom: '8px' }}>
+            {/* Ground-Truth Goal Oracle Controls (4-Stage Sequence Flow) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', marginBottom: '8px' }}>
               <button
-                onClick={() => onInteraction({ type: 'capture_start_snapshot' })}
+                onClick={() => onInteraction({ type: 'capture_oracle_frame', step: 1 })}
                 disabled={isTraining}
                 style={{
                   background: '#09090d',
                   border: '1px solid rgba(245, 158, 11, 0.4)',
                   color: '#fbbf24',
-                  padding: '6px 8px',
+                  padding: '6px 4px',
                   borderRadius: '4px',
                   fontSize: '10px',
                   fontWeight: 700,
@@ -675,14 +675,59 @@ export default function EncoderDiagnostics({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '4px',
+                  gap: '2px',
                   lineHeight: '1',
                   boxSizing: 'border-box',
                   transition: 'all 0.2s'
                 }}
               >
-                <Camera size={11} />
-                1. Start Posture
+                1. Start
+              </button>
+              <button
+                onClick={() => onInteraction({ type: 'capture_oracle_frame', step: 2 })}
+                disabled={isTraining}
+                style={{
+                  background: '#09090d',
+                  border: '1px solid rgba(6, 182, 212, 0.4)',
+                  color: 'var(--accent-cyan)',
+                  padding: '6px 4px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '2px',
+                  lineHeight: '1',
+                  boxSizing: 'border-box',
+                  transition: 'all 0.2s'
+                }}
+              >
+                2. Step 2
+              </button>
+              <button
+                onClick={() => onInteraction({ type: 'capture_oracle_frame', step: 3 })}
+                disabled={isTraining}
+                style={{
+                  background: '#09090d',
+                  border: '1px solid rgba(168, 85, 247, 0.4)',
+                  color: '#c084fc',
+                  padding: '6px 4px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '2px',
+                  lineHeight: '1',
+                  boxSizing: 'border-box',
+                  transition: 'all 0.2s'
+                }}
+              >
+                3. Step 3
               </button>
               <button
                 onClick={() => onInteraction({ type: 'capture_goal_snapshot' })}
@@ -691,7 +736,7 @@ export default function EncoderDiagnostics({
                   background: '#09090d',
                   border: '1px solid rgba(16, 185, 129, 0.4)',
                   color: '#34d399',
-                  padding: '6px 8px',
+                  padding: '6px 4px',
                   borderRadius: '4px',
                   fontSize: '10px',
                   fontWeight: 700,
@@ -699,14 +744,13 @@ export default function EncoderDiagnostics({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '4px',
+                  gap: '2px',
                   lineHeight: '1',
                   boxSizing: 'border-box',
                   transition: 'all 0.2s'
                 }}
               >
-                <Target size={11} />
-                2. Goal Posture
+                4. Goal
               </button>
             </div>
 
