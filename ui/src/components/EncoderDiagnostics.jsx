@@ -177,7 +177,7 @@ export default function EncoderDiagnostics({
   };
 
   const triggerRandomize = () => {
-    onInteraction({ type: 'wild_randomize' });
+    onInteraction({ type: 'reset' });
     setJointValues({});
     setSegmentMarkers({});
     setTrackMarkers({});

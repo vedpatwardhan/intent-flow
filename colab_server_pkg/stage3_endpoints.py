@@ -375,9 +375,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         )
                         state.active_goal_combined_obs = goal_combined_obs
 
-                        # Save 3-panel PNG plot for the Oracle goal snapshot comparison
+                        # Save 4-panel PNG plot for the Oracle goal snapshot comparison
                         save_stage3_oracle_goal_plots(
-                            obs_dict, oracle_obs_dict, view_name="world_center"
+                            oracle_payload, oracle_obs_dict, view_name="world_center"
                         )
                     else:
                         print(

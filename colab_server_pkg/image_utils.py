@@ -420,7 +420,7 @@ def save_stage3_goal_features_plots(
 
 
 def save_stage3_oracle_goal_plots(
-    start_obs_dict, oracle_obs_dict, view_name="world_center"
+    oracle_payload, oracle_obs_dict, view_name="world_center"
 ):
     """
     Saves a 4-panel diagnostic PNG plot comparing:
@@ -430,8 +430,12 @@ def save_stage3_oracle_goal_plots(
     4. Target VGGT Motion Trajectory Field Overlay (I_goal_VGGT)
     """
     try:
-        start_pil = start_obs_dict[view_name]["features"]["pil_frame"]
-        oracle_pil = oracle_obs_dict[view_name]["features"]["pil_frame"]
+        # Extract starting frame and goal frame from oracle_payload
+        history_frames = [frames[view_name] for frames in oracle_payload.history_frames]
+        start_frame_str = history_frames[-2]
+        oracle_frame_str = history_frames[-1]
+        start_pil = decode_base64_image(start_frame_str)
+        oracle_pil = decode_base64_image(oracle_frame_str)
 
         fig, axes = plt.subplots(1, 4, figsize=(20, 5))
         img_w, img_h = start_pil.size
