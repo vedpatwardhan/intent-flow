@@ -124,8 +124,7 @@ class ActionVelocityField(nn.Module):
         motion_primitives = self.block2(macro_anchors, cond)  # [B, H, action_dim]
         joint_trajectory = self.block3(motion_primitives, cond)  # [B, H, action_dim]
 
-        v_raw = self.out_net(joint_trajectory)  # [B, H, action_dim]
-        return 18.0 * torch.tanh(v_raw / 18.0)  # tanh velocity activation clamp
+        return self.out_net(joint_trajectory)  # [B, H, action_dim]
 
 
 class CLAPFlowMatcher(nn.Module):

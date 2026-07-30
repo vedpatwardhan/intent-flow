@@ -60,6 +60,7 @@ from colab_server_pkg.image_utils import (
     decode_base64_image,
     save_stage3_debug_plots,
     save_stage3_goal_features_plots,
+    save_stage3_oracle_goal_plots,
 )
 
 from models.adapters import (
@@ -105,6 +106,7 @@ class Stage3StepPayload(BaseModel):
     point_clouds: dict | None = None
     episode_idx: int = 0
     step_idx: int = 0
+    oracle_goal_obs: dict | None = None
 
 
 class Stage3CalibrateTransition(BaseModel):
@@ -363,20 +365,38 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 ) or not hasattr(state, "active_goal_combined_obs")
 
                 if is_start_of_training:
-                    annotations = payload.ui_annotations
-                    goal_obs_dict, goal_combined_obs = (
-                        construct_stage3_latent_goal_features(obs_dict, annotations)
-                    )
-                    state.active_goal_combined_obs = goal_combined_obs
+                    if payload.oracle_goal_obs is not None:
+                        print(
+                            "🎯 [Oracle Goal Alignment] Extracting unwarped ground-truth goal features from cached oracle goal obs..."
+                        )
+                        oracle_payload = Stage3StepPayload(**payload.oracle_goal_obs)
+                        oracle_obs_dict, goal_combined_obs = (
+                            extract_stage3_obs_features(oracle_payload)
+                        )
+                        state.active_goal_combined_obs = goal_combined_obs
 
-                    # Save 4-panel diagnostic comparison plots for the initial frame
-                    pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
-                    save_stage3_goal_features_plots(
-                        pil_frame,
-                        annotations,
-                        goal_obs_dict,
-                        view_name="world_center",
-                    )
+                        # Save 3-panel PNG plot for the Oracle goal snapshot comparison
+                        save_stage3_oracle_goal_plots(
+                            obs_dict, oracle_obs_dict, view_name="world_center"
+                        )
+                    else:
+                        print(
+                            "✏️ [UI Annotation Alignment] Constructing goal features from drawn annotations..."
+                        )
+                        annotations = payload.ui_annotations
+                        goal_obs_dict, goal_combined_obs = (
+                            construct_stage3_latent_goal_features(obs_dict, annotations)
+                        )
+                        state.active_goal_combined_obs = goal_combined_obs
+
+                        # Save 4-panel diagnostic comparison plots for the initial frame
+                        pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
+                        save_stage3_goal_features_plots(
+                            pil_frame,
+                            annotations,
+                            goal_obs_dict,
+                            view_name="world_center",
+                        )
                 else:
                     goal_combined_obs = state.active_goal_combined_obs
 
@@ -431,7 +451,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.4,
+                    step_nft_scale=0.2,
                 )
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
@@ -452,7 +472,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # Learning rate for action adjustment and timeline rollback scale
         eta = 0.12
         timeline_advance_rate = 0.05
-        error_threshold = 0.0008
 
         # Create embodiment-aware action mask (first 32 GR-1 active joints)
         action_mask = torch.zeros(1, 1, joint_dim, device=device)
@@ -1059,14 +1078,14 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 105 (Direct Target Routing, Slashed Smoothness to 0.10)
+            # Combined total optimization payload for Run 107
             loss_opsd = (
                 cfm_loss
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + sigreg_loss * beta_sig
-                + reg_action_norm * 0.0025
-                + loss_smoothness * 0.10
+                + reg_action_norm * 0.0045
+                + loss_smoothness * 0.35
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---

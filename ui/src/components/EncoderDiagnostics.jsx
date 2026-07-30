@@ -646,67 +646,124 @@ export default function EncoderDiagnostics({
             </div>
           </div>
 
-          {/* Third Block: Exemplar Recorder & Goal Alignment Audit */}
+          {/* Third Block: Exemplar Recorder & Ground-Truth Goal Oracle Audit */}
           <div className="panel" style={{ display: 'flex', flexDirection: 'column', padding: '10px 12px', boxSizing: 'border-box' }}>
             <div className="panel-header" style={{ marginBottom: '6px' }}>
               <span className="panel-title" style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Camera size={13} className="text-cyan-400" />
-                Exemplar Recorder & Goal Alignment Audit
+                <Camera size={13} className="text-emerald-400" />
+                Ground-Truth Goal Oracle & Exemplars
               </span>
             </div>
-            <p style={{ fontSize: '9px', color: '#64748b', margin: '0 0 8px 0' }}>
-              Record observation footprints (images, proprioception, tactile) for Stage 3 latent distance auditing across 4 operational phases.
+            <p style={{ fontSize: '9px', color: '#64748b', margin: '0 0 6px 0' }}>
+              Record start & goal oracle snapshots for unwarped Stage 3 goal representations, or save evaluation exemplars.
             </p>
-            <button
-              onClick={() => triggerRecordExemplar('phase_0')}
-              disabled={isTraining}
-              style={{
-                background: '#09090d',
-                border: '1px solid rgba(34, 197, 94, 0.4)',
-                color: '#4ade80',
-                padding: '6px 10px',
-                borderRadius: '4px',
-                fontSize: '10px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                marginBottom: '8px',
-                width: '100%',
-                transition: 'all 0.2s'
-              }}
-            >
-              <Camera size={12} />
-              Set Baseline Anchor (Phase 0)
-            </button>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
-              {['phase_1', 'phase_2', 'phase_3', 'phase_4'].map((phaseName, idx) => (
-                <button
-                  key={phaseName}
-                  onClick={() => triggerRecordExemplar(phaseName)}
-                  disabled={isTraining}
-                  style={{
-                    background: '#09090d',
-                    border: '1px solid rgba(6, 182, 212, 0.3)',
-                    color: 'var(--accent-cyan)',
-                    padding: '6px 8px',
-                    borderRadius: '4px',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  <Camera size={11} />
-                  Phase {idx + 1}
-                </button>
-              ))}
+
+            {/* Ground-Truth Goal Oracle Controls */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginBottom: '8px' }}>
+              <button
+                onClick={() => onInteraction({ type: 'capture_start_snapshot' })}
+                disabled={isTraining}
+                style={{
+                  background: '#09090d',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  color: '#fbbf24',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px',
+                  lineHeight: '1',
+                  boxSizing: 'border-box',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Camera size={11} />
+                1. Start Posture
+              </button>
+              <button
+                onClick={() => onInteraction({ type: 'capture_goal_snapshot' })}
+                disabled={isTraining}
+                style={{
+                  background: '#09090d',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  color: '#34d399',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px',
+                  lineHeight: '1',
+                  boxSizing: 'border-box',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Target size={11} />
+                2. Goal Posture
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '8px', marginTop: '4px' }}>
+              <button
+                onClick={() => triggerRecordExemplar('phase_0')}
+                disabled={isTraining}
+                style={{
+                  background: '#09090d',
+                  border: '1px solid rgba(34, 197, 94, 0.4)',
+                  color: '#4ade80',
+                  padding: '6px 10px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  marginBottom: '8px',
+                  width: '100%',
+                  transition: 'all 0.2s'
+                }}
+              >
+                <Camera size={12} />
+                Set Baseline Anchor (Phase 0)
+              </button>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+                {['phase_1', 'phase_2', 'phase_3', 'phase_4'].map((phaseName, idx) => (
+                  <button
+                    key={phaseName}
+                    onClick={() => triggerRecordExemplar(phaseName)}
+                    disabled={isTraining}
+                    style={{
+                      background: '#09090d',
+                      border: '1px solid rgba(6, 182, 212, 0.3)',
+                      color: 'var(--accent-cyan)',
+                      padding: '6px 8px',
+                      borderRadius: '4px',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      lineHeight: '1',
+                      boxSizing: 'border-box',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <Camera size={11} />
+                    Phase {idx + 1}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>

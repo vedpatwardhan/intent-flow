@@ -243,6 +243,8 @@ cached_clip_sim = None
 cached_sam_mask = None
 cached_motion_field = None
 cached_task_isolated_features = None
+cached_oracle_goal_obs = None
+baseline_oracle_frames = None
 
 
 def capture_sim_frames(sim):
@@ -262,11 +264,18 @@ def capture_sim_frames(sim):
 
 
 def build_stage3_obs_payload(
-    sim, text_prompt="grasp cube", ui_annotations=None, ep_idx=0, env_step=0
+    sim,
+    text_prompt="grasp cube",
+    ui_annotations=None,
+    ep_idx=0,
+    env_step=0,
+    base_history_frames=None,
 ):
-    # Use explicitly set baseline_exemplar_frames (Phase 0) or fall back to current_frames
     current_frames = capture_sim_frames(sim)
-    frame_history = [current_frames, current_frames]
+    base_frames = (
+        base_history_frames if base_history_frames is not None else current_frames
+    )
+    frame_history = [base_frames, current_frames]
     tactile_grid = [[0.0] * 4 for _ in range(4)]
     return {
         "frames": current_frames,
@@ -466,6 +475,7 @@ async def run_stage3_training_loop(
                 "is_easy_task": False,
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
+                "oracle_goal_obs": cached_oracle_goal_obs,
             }
             print(
                 f"Frame History: {len(frame_history)}, "
@@ -720,8 +730,6 @@ async def run_stage3_training_loop(
                     print(
                         f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                     )
-                    import traceback
-                    traceback.print_exc()
 
                 buffered_transitions = []
                 accumulated_phys_dists = []
@@ -798,7 +806,7 @@ async def run_stage3_training_loop(
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
-    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features, cached_oracle_goal_obs, baseline_oracle_frames
     global ui_annotations, is_training_active
     await websocket.accept()
     print("UI Connected via WebSocket")
@@ -859,6 +867,32 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
+
+                elif payload.get("type") == "capture_start_snapshot":
+                    print(
+                        "📸 Recording Oracle Start Baseline Anchor Snapshot locally..."
+                    )
+                    baseline_oracle_frames = capture_sim_frames(sim)
+                    print(
+                        "📸 [Oracle Cache] Baseline Start Anchor Snapshot captured successfully!"
+                    )
+
+                elif payload.get("type") == "capture_goal_snapshot":
+                    print("🎯 Recording Ground-Truth Goal Oracle Snapshot locally...")
+                    try:
+                        cached_oracle_goal_obs = build_stage3_obs_payload(
+                            sim,
+                            text_prompt,
+                            ui_annotations=None,
+                            ep_idx=0,
+                            env_step=0,
+                            base_history_frames=baseline_oracle_frames,
+                        )
+                        print(
+                            "🎯 [Oracle Cache] Ground-truth target oracle_goal_obs captured locally with temporal history!"
+                        )
+                    except Exception as e:
+                        print(f"❌ Error capturing goal snapshot: {e}")
 
                 elif payload.get("type") == "record_exemplar":
                     name = payload.get("name", "phase_1")

@@ -417,3 +417,75 @@ def save_stage3_goal_features_plots(
         plt.close()
     except Exception as e:
         print(f"Error saving stage3 goal feature comparison plot: {e}")
+
+
+def save_stage3_oracle_goal_plots(
+    start_obs_dict, oracle_obs_dict, view_name="world_center"
+):
+    """
+    Saves a 4-panel diagnostic PNG plot comparing:
+    1. Initial Environment Starting Posture (I_0)
+    2. Ground-Truth Oracle Target Goal Posture (I_goal)
+    3. Target DINOv3 Feature Map Overlay (I_goal_DINO)
+    4. Target VGGT Motion Trajectory Field Overlay (I_goal_VGGT)
+    """
+    try:
+        start_pil = start_obs_dict[view_name]["features"]["pil_frame"]
+        oracle_pil = oracle_obs_dict[view_name]["features"]["pil_frame"]
+
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        img_w, img_h = start_pil.size
+
+        # --- Panel 1: Initial Environment Starting Posture ---
+        axes[0].imshow(start_pil)
+        axes[0].set_title(f"1. Initial Start Posture ({view_name})", fontsize=10)
+        axes[0].axis("off")
+
+        # --- Panel 2: Ground-Truth Oracle Target Goal Posture ---
+        axes[1].imshow(oracle_pil)
+        axes[1].set_title(
+            f"2. Ground-Truth Oracle Goal Snapshot ({view_name})", fontsize=10
+        )
+        axes[1].axis("off")
+
+        # --- Panel 3: Target DINOv3 Feature Map Overlay ---
+        dino_map = oracle_obs_dict[view_name]["vision"].squeeze(0)[:196].view(14, 14)
+        dino_map = dino_map.detach().cpu().numpy()
+
+        axes[2].imshow(oracle_pil)
+        axes[2].imshow(
+            dino_map,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[2].set_title("3. Oracle Goal DINOv3 Feature Map", fontsize=10)
+        axes[2].axis("off")
+
+        # --- Panel 4: Target VGGT Motion Trajectory Field Overlay ---
+        vggt_tensor = oracle_obs_dict[view_name]["vggt"].squeeze(0)
+        vggt_map = vggt_tensor.detach().cpu().numpy()
+
+        axes[3].imshow(oracle_pil)
+        axes[3].imshow(
+            vggt_map,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[3].set_title("4. Oracle Goal VGGT Trajectory Field", fontsize=10)
+        axes[3].axis("off")
+
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+        output_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            f"debug_oracle_goal_{view_name}.png",
+        )
+        plt.savefig(output_path, dpi=150)
+        plt.close()
+        print(f"📸 Saved 4-Panel Oracle Goal diagnostic plot to: {output_path}")
+    except Exception as e:
+        print(f"Error saving stage3 oracle goal diagnostic plot: {e}")

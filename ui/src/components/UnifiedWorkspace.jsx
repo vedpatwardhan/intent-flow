@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Crosshair, Navigation, Target, RotateCcw, Maximize2, Minimize2, Trash2, MousePointer } from 'lucide-react';
+import { Crosshair, Navigation, Target, RotateCcw, Maximize2, Minimize2, Trash2, MousePointer, Camera } from 'lucide-react';
 
 export default function UnifiedWorkspace({ frames, activeCam, onInteraction, samMask }) {
   const canvasRef = useRef(null);
