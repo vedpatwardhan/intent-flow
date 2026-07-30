@@ -527,12 +527,10 @@ async def run_stage3_training_loop(
                 mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
                 track_frames_k = []
-                recording_history_frames_k = []
-
-                # Initial posture camera rendering (t = 0)
+                # Initial posture camera rendering (h = 0 start keyframe 1)
                 start_frames_k, frames_all_views_start_k = render_camera_views(eval_sim)
                 track_frames_k.append(start_frames_k)
-                recording_history_frames_k.append(frames_all_views_start_k)
+                recording_history_frames_k = [frames_all_views_start_k]
 
                 track_actions_flat_k = []
                 frames_all_views_next_k = {}
@@ -556,7 +554,10 @@ async def run_stage3_training_loop(
                         eval_sim
                     )
                     track_frames_k.append(step_frames_k)
-                    recording_history_frames_k.append(frames_all_views_next_k)
+
+                    # Sample 4 keyframes across candidate action execution: h=1,3,6
+                    if h in [1, 3, 6]:
+                        recording_history_frames_k.append(frames_all_views_next_k)
 
                 all_track_frames.append(track_frames_k)
 
