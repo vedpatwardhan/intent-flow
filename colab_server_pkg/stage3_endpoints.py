@@ -691,7 +691,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     )  # contains zeroed history
                     _, combined_obs_next = extract_stage3_obs_features(
                         trans.next_obs
-                    )  # contains proper 3-frame history
+                    )  # contains proper 4-frame history
 
                     if i == 0:
                         save_stage3_calibrate_plots(

@@ -507,7 +507,7 @@ def save_stage3_calibrate_plots(
     """
     try:
         history_frames = trans_payload.next_obs.history_frames
-        start_frame_str = history_frames[0][view_name]
+        start_frame_str = history_frames[-4][view_name]
         outcome_frame_str = history_frames[-1][view_name]
         start_np = decode_base64_image(start_frame_str)
         outcome_np = decode_base64_image(outcome_frame_str)
