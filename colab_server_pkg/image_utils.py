@@ -438,7 +438,7 @@ def save_stage3_oracle_goal_plots(
         oracle_pil = decode_base64_image(oracle_frame_str)
 
         fig, axes = plt.subplots(1, 4, figsize=(20, 5))
-        img_w, img_h = start_pil.size
+        img_w, img_h = start_pil.width, start_pil.height
 
         # --- Panel 1: Initial Environment Starting Posture ---
         axes[0].imshow(start_pil)
