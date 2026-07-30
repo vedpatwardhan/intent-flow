@@ -432,7 +432,7 @@ def save_stage3_oracle_goal_plots(
     try:
         # Extract starting frame and goal frame from oracle_payload
         history_frames = [frames[view_name] for frames in oracle_payload.history_frames]
-        start_frame_str = history_frames[-2]
+        start_frame_str = history_frames[-4]
         oracle_frame_str = history_frames[-1]
         start_np = decode_base64_image(start_frame_str)
         oracle_np = decode_base64_image(oracle_frame_str)
@@ -493,3 +493,80 @@ def save_stage3_oracle_goal_plots(
         print(f"📸 Saved 4-Panel Oracle Goal diagnostic plot to: {output_path}")
     except Exception as e:
         print(f"Error saving stage3 oracle goal diagnostic plot: {e}")
+
+
+def save_stage3_calibrate_plots(
+    trans_payload, obs_dict_next, view_name: str = "world_center", track_idx: int = 0
+):
+    """
+    Saves a 4-panel diagnostic PNG plot verifying calibration transition observation features:
+    1. Transition Start Frame (history_frames[0])
+    2. Transition Outcome Frame (history_frames[-1])
+    3. Outcome Frame DINOv3 Feature Map Overlay
+    4. 4-Frame Accumulated VGGT Motion Trajectory Field Overlay
+    """
+    try:
+        history_frames = trans_payload.next_obs.history_frames
+        start_frame_str = history_frames[0][view_name]
+        outcome_frame_str = history_frames[-1][view_name]
+        start_np = decode_base64_image(start_frame_str)
+        outcome_np = decode_base64_image(outcome_frame_str)
+
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        img_h, img_w, _ = outcome_np.shape
+
+        # --- Panel 1: Transition Start Posture ---
+        axes[0].imshow(start_np)
+        axes[0].set_title(
+            f"1. Track {track_idx} Start Posture ({view_name})", fontsize=10
+        )
+        axes[0].axis("off")
+
+        # --- Panel 2: Transition Outcome Posture ---
+        axes[1].imshow(outcome_np)
+        axes[1].set_title(
+            f"2. Track {track_idx} Outcome Posture ({view_name})", fontsize=10
+        )
+        axes[1].axis("off")
+
+        # --- Panel 3: Outcome DINOv3 Feature Map Overlay ---
+        dino_map = obs_dict_next[view_name]["vision"].squeeze(0)[:196].view(14, 14)
+        dino_map = dino_map.detach().cpu().numpy()
+
+        axes[2].imshow(outcome_np)
+        axes[2].imshow(
+            dino_map,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[2].set_title(f"3. Track {track_idx} DINOv3 Map", fontsize=10)
+        axes[2].axis("off")
+
+        # --- Panel 4: 4-Frame Accumulated VGGT Motion Field Overlay ---
+        vggt_tensor = obs_dict_next[view_name]["vggt"].squeeze(0)
+        vggt_map = vggt_tensor.detach().cpu().numpy()
+
+        axes[3].imshow(outcome_np)
+        axes[3].imshow(
+            vggt_map,
+            cmap="jet",
+            alpha=0.45,
+            extent=[0, img_w, img_h, 0],
+            interpolation="bilinear",
+        )
+        axes[3].set_title(f"4. Track {track_idx} VGGT Motion Field", fontsize=10)
+        axes[3].axis("off")
+
+        plt.tight_layout(rect=[0, 0, 1, 0.93])
+        output_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            f"debug_calibrate_track_{track_idx}_{view_name}.png",
+        )
+        plt.savefig(output_path, dpi=150)
+        plt.close()
+        print(f"📸 Saved 4-Panel Calibrate Track {track_idx} plot to: {output_path}")
+    except Exception as e:
+        print(f"Error saving stage3 calibrate diagnostic plot: {e}")

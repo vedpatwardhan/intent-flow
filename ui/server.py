@@ -443,7 +443,12 @@ async def run_stage3_training_loop(
             # 2. Seed a fresh, clean zero-velocity frame history for this step
             # Prevents VGGT motion extractor from comparing across teleported worlds
             step_init_frames = capture_sim_frames(sim)
-            frame_history = [step_init_frames, step_init_frames]
+            frame_history = [
+                step_init_frames,
+                step_init_frames,
+                step_init_frames,
+                step_init_frames,
+            ]
             frame_all_views = step_init_frames.copy()
 
             # 3. Capture observation natively
@@ -468,7 +473,7 @@ async def run_stage3_training_loop(
 
             current_obs = {
                 "frames": frame_all_views,
-                "history_frames": list(frame_history),
+                "history_frames": list(frame_history),  # length 4
                 "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
                 "tactile": tactile_grid,
                 "text_prompt": text_prompt or "grasp cube",
@@ -597,9 +602,11 @@ async def run_stage3_training_loop(
 
                 transitions.append(
                     {
-                        "current_obs": copy.deepcopy(current_obs),
+                        "current_obs": copy.deepcopy(
+                            current_obs
+                        ),  # contains zeroed history
                         "action_taken": track_actions_flat_k,
-                        "next_obs": track_next_obs,
+                        "next_obs": track_next_obs,  # contains history of 4 different frames
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,
@@ -874,16 +881,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif payload.get("type") == "capture_oracle_frame":
                     step_num = payload.get("step", 1)
                     frames = capture_sim_frames(sim)
-                    if step_num == 1:
-                        baseline_oracle_frames = [frames]
-                        print(
-                            f"📸 [Oracle Cache] Step 1 (Start) Anchor Snapshot recorded!"
-                        )
-                    else:
-                        baseline_oracle_frames.append(frames)
-                        print(
-                            f"📸 [Oracle Cache] Step {step_num} Anchor Snapshot recorded!"
-                        )
+                    baseline_oracle_frames.append(frames)
+                    print(
+                        f"📸 [Oracle Cache] Step {step_num} Anchor Snapshot recorded!"
+                    )
 
                 elif payload.get("type") == "capture_start_snapshot":
                     frames = capture_sim_frames(sim)
@@ -899,7 +900,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             ui_annotations=None,
                             ep_idx=0,
                             env_step=0,
-                            base_history_frames=baseline_oracle_frames,
+                            base_history_frames=baseline_oracle_frames,  # length 3
                         )
                         print(
                             "🎯 [Oracle Cache] Ground-truth target oracle_goal_obs captured locally with 4-frame temporal history!"

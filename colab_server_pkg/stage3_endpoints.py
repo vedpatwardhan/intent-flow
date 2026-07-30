@@ -61,6 +61,7 @@ from colab_server_pkg.image_utils import (
     save_stage3_debug_plots,
     save_stage3_goal_features_plots,
     save_stage3_oracle_goal_plots,
+    save_stage3_calibrate_plots,
 )
 
 from models.adapters import (
@@ -685,8 +686,20 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         for i, trans in enumerate(pbar):
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
-                    _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
-                    _, combined_obs_next = extract_stage3_obs_features(trans.next_obs)
+                    _, combined_obs_t = extract_stage3_obs_features(
+                        trans.current_obs
+                    )  # contains zeroed history
+                    _, combined_obs_next = extract_stage3_obs_features(
+                        trans.next_obs
+                    )  # contains proper 3-frame history
+
+                    if i == 0:
+                        save_stage3_calibrate_plots(
+                            trans,
+                            combined_obs_next,
+                            view_name="world_center",
+                            track_idx=0,
+                        )
 
                     for name, d_dict in [
                         ("current", combined_obs_t),
