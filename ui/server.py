@@ -22,8 +22,7 @@ from simulation_base import GR1MuJoCoBase
 import mujoco
 from depth_unprojector import unproject_ui_annotations_to_3d
 from ik_trajectory_sampler import (
-    generate_ik_positive_trajectories,
-    generate_ik_negative_trajectories,
+    generate_ik_trajectories,
     save_ik_trajectory_diagnostic_plots,
 )
 
@@ -475,21 +474,25 @@ async def run_stage3_training_loop(
                 raise ValueError("Could not find end effector")
 
             # 2. IK Trajectory Generation (Unrolling on isolated eval_sim)
-            pos_trajectories = generate_ik_positive_trajectories(
+            pos_trajectories = generate_ik_trajectories(
                 eval_sim,
                 initial_state,
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
                 n=5,
+                scale_multiplier=0.3,
+                is_positive=True,
             )
-            neg_trajectories = generate_ik_negative_trajectories(
+            neg_trajectories = generate_ik_trajectories(
                 eval_sim,
                 initial_state,
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
                 n=10,
+                scale_multiplier=0.9,
+                is_positive=False,
             )
             print(
                 f"✅ [IK Sampler] Generated {len(pos_trajectories)} Positive (D+) & "

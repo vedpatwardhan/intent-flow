@@ -33,24 +33,26 @@ CAM_NAMES = [
 ]
 
 
-def generate_ik_positive_trajectories(
+def generate_ik_trajectories(
     sim,
     initial_state: dict,
     target_3d: np.ndarray,
-    target_3d_bounds: dict | None = None,
+    target_3d_bounds: dict,
     site_name: str = "R_wrist_roll_link",
-    n: int = 5,
+    n: int = 4,
+    scale_multiplier: float = 0.3,
+    is_positive: bool = True,
 ) -> list[dict]:
     """
-    Generates n positive IK trajectories surrounding the target 3D object for a dynamically selected site_name.
-    Uses target_3d_bounds to perturb target positions along the physical 3D extents of the object.
+    Generates n IK trajectories surrounding the target 3D object for a dynamically selected site_name.
+    Uses target_3d_bounds and scale_multiplier (0.3 for positive, 0.9 for negative) to perturb target positions.
     Renders 5 camera views per step.
     """
     trajectories = []
 
     # Calculate perturbation scale based on object 3D spatial extents
     extents = np.array(target_3d_bounds["extents_3d"]).max()
-    delta = max(0.01, float(extents) * 0.3)
+    delta = max(0.01, float(extents) * scale_multiplier)
     offsets = [
         np.array([0.0, 0.0, 0.0]),
         np.array([delta, 0.0, 0.0]),
@@ -58,6 +60,13 @@ def generate_ik_positive_trajectories(
         np.array([0.0, delta, 0.0]),
         np.array([0.0, -delta, 0.0]),
     ]
+    if not is_positive:
+        offsets = offsets[1:] + [
+            np.array([delta, delta, 0.0]),
+            np.array([-delta, -delta, 0.0]),
+            np.array([delta, -delta, 0.0]),
+            np.array([-delta, delta, 0.0])
+        ]
 
     for k in range(n):
         # Reset sim to identical initial state
@@ -67,7 +76,7 @@ def generate_ik_positive_trajectories(
         mujoco.mj_forward(sim.model, sim.data)
 
         target_k = target_3d + offsets[k % len(offsets)]
-        print(f"target_k: {target_k}")
+        print(f"target_k ({'positive' if is_positive else 'negative'}): {target_k}")
         q_target_norm, q_target_full = solve_ik_target(
             sim, target_k, site_name=site_name
         )
@@ -108,84 +117,7 @@ def generate_ik_positive_trajectories(
                 "target_3d": target_k.tolist(),
                 "trajectory_steps": step_trajectories,
                 "multi_view_frames": multi_view_frames,
-                "is_positive": True,
-            }
-        )
-
-    return trajectories
-
-
-def generate_ik_negative_trajectories(
-    sim,
-    initial_state: dict,
-    target_3d: np.ndarray,
-    target_3d_bounds: dict | None = None,
-    site_name: str = "R_wrist_roll_link",
-    n: int = 10,
-) -> list[dict]:
-    """
-    Generates n negative distractor IK trajectories away from the target 3D object for a dynamically selected site_name.
-    Resets sim to initial_state for each trajectory.
-    Renders 5 camera views per step.
-    """
-    trajectories = []
-    np.random.seed(42)
-
-    for k in range(n):
-        # Reset sim to identical initial state
-        sim.data.qpos[:] = initial_state["qpos"].copy()
-        sim.data.qvel[:] = initial_state["qvel"].copy()
-        sim.data.ctrl[:] = initial_state["ctrl"].copy()
-        mujoco.mj_forward(sim.model, sim.data)
-
-        random_dir = np.random.uniform(-1.0, 1.0, size=3)
-        random_dir /= np.linalg.norm(random_dir) + 1e-8
-        distractor_dist = np.random.uniform(0.15, 0.30)
-        target_k = target_3d + random_dir * distractor_dist
-
-        q_target_norm, q_target_full = solve_ik_target(
-            sim, target_k, site_name=site_name
-        )
-        step_trajectories = []
-        multi_view_frames = {cam: [] for cam in CAM_NAMES}
-
-        q_start_norm = sim.get_state_32()
-        step_trajectories = [q_start_norm.tolist()]
-        multi_view_frames = {cam: [] for cam in CAM_NAMES}
-
-        # Render initial start frame (t=0) across all 5 cameras before stepping
-        for cam in CAM_NAMES:
-            sim.renderer.update_scene(sim.data, camera=cam)
-            rgb = sim.renderer.render().copy()
-            multi_view_frames[cam].append(rgb)
-
-        for h in range(7):
-            alpha = (h + 1) / 7.0
-            q_interp = (1.0 - alpha) * q_start_norm + alpha * q_target_norm
-            step_trajectories.append(q_interp.tolist())
-
-            # Dispatch action to step physical sim
-            sim.dispatch_action(
-                action_32_norm=q_interp,
-                target_q=q_target_full,
-                n_steps=10,
-                render_freq=0,
-                reset_start=False,
-            )
-
-            # Render frames across all 5 cameras
-            for cam in CAM_NAMES:
-                sim.renderer.update_scene(sim.data, camera=cam)
-                rgb = sim.renderer.render().copy()
-                multi_view_frames[cam].append(rgb)
-
-        trajectories.append(
-            {
-                "track_idx": k,
-                "target_3d": target_k.tolist(),
-                "trajectory_steps": step_trajectories,
-                "multi_view_frames": multi_view_frames,
-                "is_positive": False,
+                "is_positive": is_positive,
             }
         )
 
