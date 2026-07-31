@@ -20,6 +20,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from simulation_base import GR1MuJoCoBase
 import mujoco
+from depth_unprojector import unproject_ui_annotations_to_3d
+from ik_trajectory_sampler import (
+    generate_ik_positive_trajectories,
+    generate_ik_negative_trajectories,
+    save_ik_trajectory_diagnostic_plots,
+)
 
 
 class GR1SimulationServer(GR1MuJoCoBase):
@@ -141,6 +147,13 @@ import re
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from depth_unprojector import unproject_ui_annotations_to_3d
+from ik_trajectory_sampler import (
+    generate_ik_positive_trajectories,
+    generate_ik_negative_trajectories,
+    save_ik_trajectory_diagnostic_plots,
+    save_ik_trajectory_video,
+)
 
 app = FastAPI()
 
@@ -243,8 +256,6 @@ cached_clip_sim = None
 cached_sam_mask = None
 cached_motion_field = None
 cached_task_isolated_features = None
-cached_oracle_goal_obs = None
-baseline_oracle_frames = []
 
 
 def capture_sim_frames(sim):
@@ -409,9 +420,47 @@ async def run_stage3_training_loop(
     num_epochs = 10
     max_steps = 25
 
-    print(
-        f"[Training] Starting Stage 3 training sandbox: {num_epochs} epochs, {max_steps} steps."
-    )
+    # --- STAGE 3 IK TRAJECTORY GENERATION EVALUATION HOOK (INSERTED ABOVE LINE 414) ---
+    if ui_annotations and (
+        ui_annotations.get("vectors") or ui_annotations.get("crops")
+    ):
+        print(
+            "\n🚀 [IK Evaluation Mode] Triggering 2D-to-3D Unprojection & Trajectory Generation..."
+        )
+        try:
+            # 1. 2D-to-3D Depth Unprojection & 3D Coordinates Printing (Local UI Server)
+            start_3d, target_3d = unproject_ui_annotations_to_3d(
+                sim, ui_annotations, camera_name="world_center"
+            )
+            print(f"📍 [3D Unprojection Result] Effector Link 3D Start: {start_3d}")
+            print(f"📍 [3D Unprojection Result] Target Object 3D Goal: {target_3d}")
+
+            # 2. IK Trajectory Generation (Resetting to identical initial_state for each track)
+            pos_trajectories = generate_ik_positive_trajectories(
+                sim, initial_state, target_3d, n=4
+            )
+            neg_trajectories = generate_ik_negative_trajectories(
+                sim, initial_state, target_3d, n=10
+            )
+            print(
+                f"✅ [IK Sampler] Generated {len(pos_trajectories)} Positive (D+) & "
+                f"{len(neg_trajectories)} Negative (D-) IK Trajectories!"
+            )
+
+            # 3. Save Trajectory Diagnostic Plot & Video Files
+            save_ik_trajectory_diagnostic_plots(sim, pos_trajectories, neg_trajectories)
+            save_ik_trajectory_video(pos_trajectories, neg_trajectories, fps=4)
+
+            # 4. EXPLICIT RETURN STATEMENT (Halts before training epochs begin)
+            print(
+                "🛑 [IK Evaluation Mode] Halting execution via explicit return statement to allow trajectory inspection.\n"
+            )
+            return
+        except Exception as e:
+            print(f"❌ [IK Evaluation Mode Error] Failed to generate trajectories: {e}")
+            import traceback
+
+            traceback.print_exc()
 
     for ep_idx in range(num_epochs):
         if ep_idx > 0:
@@ -877,36 +926,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 elif payload.get("type") == "trigger_attack":
                     attack_active = payload["active"]
-
-                elif payload.get("type") == "capture_oracle_frame":
-                    step_num = payload.get("step", 1)
-                    frames = capture_sim_frames(sim)
-                    baseline_oracle_frames.append(frames)
-                    print(
-                        f"📸 [Oracle Cache] Step {step_num} Anchor Snapshot recorded!"
-                    )
-
-                elif payload.get("type") == "capture_start_snapshot":
-                    frames = capture_sim_frames(sim)
-                    baseline_oracle_frames = [frames]
-                    print("📸 [Oracle Cache] Baseline Start Anchor Snapshot recorded!")
-
-                elif payload.get("type") == "capture_goal_snapshot":
-                    print("🎯 Recording Ground-Truth Goal Oracle Snapshot locally...")
-                    try:
-                        cached_oracle_goal_obs = build_stage3_obs_payload(
-                            sim,
-                            text_prompt,
-                            ui_annotations=None,
-                            ep_idx=0,
-                            env_step=0,
-                            base_history_frames=baseline_oracle_frames,  # length 3
-                        )
-                        print(
-                            "🎯 [Oracle Cache] Ground-truth target oracle_goal_obs captured locally with 4-frame temporal history!"
-                        )
-                    except Exception as e:
-                        print(f"❌ Error capturing goal snapshot: {e}")
 
                 elif payload.get("type") == "record_exemplar":
                     name = payload.get("name", "phase_1")

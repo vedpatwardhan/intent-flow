@@ -54,13 +54,10 @@ from colab_server_pkg.models_state import (
 from colab_server_pkg.feature_extractor import (
     extract_stage3_obs_features,
     extract_single_view_stage3_obs_features,
-    construct_stage3_latent_goal_features,
 )
 from colab_server_pkg.image_utils import (
     decode_base64_image,
     save_stage3_debug_plots,
-    save_stage3_goal_features_plots,
-    save_stage3_oracle_goal_plots,
     save_stage3_calibrate_plots,
 )
 
@@ -107,7 +104,6 @@ class Stage3StepPayload(BaseModel):
     point_clouds: dict | None = None
     episode_idx: int = 0
     step_idx: int = 0
-    oracle_goal_obs: dict | None = None
 
 
 class Stage3CalibrateTransition(BaseModel):
@@ -360,44 +356,15 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
-                # Construct and cache target goal representation strictly at Episode 0 Step 0
+                # Cache target goal representation strictly at Episode 0 Step 0
                 is_start_of_training = (
                     payload.episode_idx == 0 and payload.step_idx == 0
                 ) or not hasattr(state, "active_goal_combined_obs")
 
                 if is_start_of_training:
-                    if payload.oracle_goal_obs is not None:
-                        print(
-                            "🎯 [Oracle Goal Alignment] Extracting unwarped ground-truth goal features from cached oracle goal obs..."
-                        )
-                        oracle_payload = Stage3StepPayload(**payload.oracle_goal_obs)
-                        oracle_obs_dict, goal_combined_obs = (
-                            extract_stage3_obs_features(oracle_payload)
-                        )
-                        state.active_goal_combined_obs = goal_combined_obs
-
-                        # Save 4-panel PNG plot for the Oracle goal snapshot comparison
-                        save_stage3_oracle_goal_plots(
-                            oracle_payload, oracle_obs_dict, view_name="world_center"
-                        )
-                    else:
-                        print(
-                            "✏️ [UI Annotation Alignment] Constructing goal features from drawn annotations..."
-                        )
-                        annotations = payload.ui_annotations
-                        goal_obs_dict, goal_combined_obs = (
-                            construct_stage3_latent_goal_features(obs_dict, annotations)
-                        )
-                        state.active_goal_combined_obs = goal_combined_obs
-
-                        # Save 4-panel diagnostic comparison plots for the initial frame
-                        pil_frame = obs_dict["world_center"]["features"]["pil_frame"]
-                        save_stage3_goal_features_plots(
-                            pil_frame,
-                            annotations,
-                            goal_obs_dict,
-                            view_name="world_center",
-                        )
+                    oracle_payload = Stage3StepPayload(**payload.oracle_goal_obs)
+                    _, goal_combined_obs = extract_stage3_obs_features(oracle_payload)
+                    state.active_goal_combined_obs = goal_combined_obs
                 else:
                     goal_combined_obs = state.active_goal_combined_obs
 
@@ -686,12 +653,11 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         for i, trans in enumerate(pbar):
             with torch.no_grad():
                 with torch.amp.autocast("cuda"):
-                    _, combined_obs_t = extract_stage3_obs_features(
-                        trans.current_obs
-                    )  # contains zeroed history
-                    _, combined_obs_next = extract_stage3_obs_features(
-                        trans.next_obs
-                    )  # contains proper 4-frame history
+                    # contains zeroed history
+                    _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
+
+                    # contains proper 4-frame history
+                    _, combined_obs_next = extract_stage3_obs_features(trans.next_obs)
 
                     if i == 0:
                         save_stage3_calibrate_plots(
@@ -919,7 +885,8 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
 
         num_opsd_steps = len(batches_pool)
         print(
-            f"📊 [Epoch Partition] Processing exactly {num_opsd_steps} non-overlapping batches across {fresh_data_size} fresh transitions. Parity guaranteed."
+            f"📊 [Epoch Partition] Processing exactly {num_opsd_steps} non-overlapping "
+            f"batches across {fresh_data_size} fresh transitions. Parity guaranteed."
         )
 
         total_loss = 0.0
