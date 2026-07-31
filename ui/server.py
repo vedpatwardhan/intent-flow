@@ -711,8 +711,6 @@ async def run_stage3_training_loop(
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,
-                        "pos_trajectories": pos_trajectories,
-                        "neg_trajectories": neg_trajectories,
                     }
                 )
 
@@ -863,7 +861,11 @@ async def run_stage3_training_loop(
             async with httpx.AsyncClient() as client:
                 r = await client.post(
                     f"{colab_url}/stage3/distill",
-                    json={"reward": final_reward},
+                    json={
+                        "reward": final_reward,
+                        "pos_trajectories": pos_trajectories,
+                        "neg_trajectories": neg_trajectories,
+                    },
                     timeout=30.0,
                 )
                 if r.status_code == 200:

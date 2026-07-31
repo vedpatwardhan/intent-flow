@@ -121,8 +121,6 @@ class Stage3CalibrateTransition(BaseModel):
     energy: float
     tactile: float
     s_target: list[list[float]] | None = None
-    pos_trajectories: list[dict] | None = None
-    neg_trajectories: list[dict] | None = None
 
 
 class Stage3CalibratePayload(BaseModel):
@@ -132,7 +130,9 @@ class Stage3CalibratePayload(BaseModel):
 
 
 class Stage3DistillPayload(BaseModel):
-    reward: float
+    reward: float  # placeholder for the tactile stuff
+    pos_trajectories: list[dict]
+    neg_trajectories: list[dict]
 
 
 def encode_obs_to_latent(obs_dict, state):
@@ -710,8 +710,6 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     trans.energy,
                     trans.tactile,
                     s_target,
-                    trans.pos_trajectories,
-                    trans.neg_trajectories,
                 )
             )
 
@@ -917,72 +915,55 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             )
 
             # Retrieve the true baseline step targets saved during the calibration trace: Shape [B, 512]
-            s_target_batch = torch.cat(
+            batch_s_target = torch.cat(
                 [state.stage3_trajectory_history[idx][5] for idx in indices], dim=0
-            )
+            ).to(device, dtype=torch.float32)
 
-            # Retrieve trajectory identity boolean (D+ vs D-): Shape [B]
-            batch_is_pos = torch.tensor(
-                [
-                    (
-                        state.stage3_trajectory_history[idx][6]
-                        if len(state.stage3_trajectory_history[idx]) > 6
-                        else True
-                    )
-                    for idx in indices
-                ],
-                dtype=torch.bool,
-                device=device,
-            )
-
+            # Initialize data for flow matcher
             B_size = batch_action.size(0)
             batch_action_3d = batch_action.view(B_size, 7, 58)  # Shape [B, 7, 58]
-            s_target_adapted = s_target_batch  # Shape [B, 512]
-
             embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
                 B_size
-            )  # Shape [B]
-
+            )
             x_0 = torch.randn_like(batch_action_3d)  # Shape [B, 7, 58]
             target_velocity = batch_action_3d - x_0  # Shape [B, 7, 58]
-            num_solver_steps = 10
-            dt = 1.0 / num_solver_steps
+            t_sample = torch.full_like(batch_action_3d, fill_value=0.5, device=device)
 
-            pos_mask = batch_is_pos  # Shape [B]
-            neg_mask = ~batch_is_pos  # Shape [B]
+            # Evaluate model vector field output
+            v_theta = state.stage3_models["flow_matcher"].evaluate_step_transitions(
+                batch_action_3d, t_sample, batch_s_t, batch_s_target, embodiment_id
+            )
+            cfm_loss = F.mse_loss(v_theta, target_velocity)
 
-            # If batch contains both positive and negative traces, compute contrastive DPO loss
-            if pos_mask.sum() > 0 and neg_mask.sum() > 0:
-                t_sample = torch.full_like(
-                    batch_action_3d, fill_value=0.5, device=device
-                )  # Shape [B, 7, 58]
-                v_theta = state.stage3_models["flow_matcher"].evaluate_step_transitions(
-                    batch_action_3d,
-                    t_sample,
-                    batch_s_t,
-                    s_target_adapted,
-                    embodiment_id,
-                )  # Shape [B, 7, 58]
-                err_all = torch.mean(
-                    (target_velocity - v_theta) ** 2, dim=(1, 2)
-                )  # Shape [B]
-                err_pos = err_all[pos_mask].mean()  # Scalar
-                err_neg = err_all[neg_mask].mean()  # Scalar
-                dpo_beta = 1.0
-                cfm_loss = F.softplus((err_pos - err_neg) * dpo_beta)  # Scalar
-            else:
-                # Standard flow matching MSE loss fallback
-                t_sample = torch.full_like(
-                    batch_action_3d, fill_value=0.5, device=device
-                )
-                v_theta = state.stage3_models["flow_matcher"].evaluate_step_transitions(
-                    batch_action_3d,
-                    t_sample,
-                    batch_s_t,
-                    s_target_adapted,
-                    embodiment_id,
-                )
-                cfm_loss = F.mse_loss(v_theta, target_velocity)
+            # Extract the raw IK trajectory payloads from our history indices
+            pos_actions = torch.tensor(
+                [tr["actions"] for tr in payload.pos_trajectories],
+                dtype=torch.float32,
+                device=device,
+            ).view(-1, 7, 58)
+            neg_actions = torch.tensor(
+                [tr["actions"] for tr in payload.neg_trajectories],
+                dtype=torch.float32,
+                device=device,
+            ).view(-1, 7, 58)
+
+            # Get velocities for both trajectories
+            pos_vel = pos_actions.unsqueeze(0) - x_0.unsqueeze(1)  # Shape [B, 5, 7, 58]
+            neg_vel = neg_actions.unsqueeze(0) - x_0.unsqueeze(1)  # Shape [B, 8, 7, 58]
+
+            # Expand model prediction to [B, 1, 7, 58] to get errors
+            err_pos = torch.mean(
+                (v_theta.unsqueeze(1) - pos_vel) ** 2, dim=(-2, -1)
+            ).min(dim=1)[0]
+            err_neg = torch.mean(
+                (v_theta.unsqueeze(1) - neg_vel) ** 2, dim=(-2, -1)
+            ).min(dim=1)[0]
+
+            # Hinge loss formulation: push away from distractor velocities by a margin of 1.0
+            margin = 1.0
+            contrastive_loss = torch.mean(
+                err_pos + torch.clamp(margin - err_neg, min=0.0)
+            )
 
             # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
@@ -1019,6 +1000,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             # Combined total optimization payload for Run 107
             loss_opsd = (
                 cfm_loss
+                + contrastive_loss * 0.5
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
                 + sigreg_loss * beta_sig
@@ -1153,7 +1135,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                             raw_payload.history_frames = [base_frames, curr_frames]
                         eval_payloads[name] = raw_payload
             if eval_payloads:
-                run_exemplar_diagnostic_check(s_target_batch[0], state, eval_payloads)
+                run_exemplar_diagnostic_check(batch_s_target[0], state, eval_payloads)
 
         # Synchronize frozen reference snapshot model with newly learned weights
         state.stage3_models["flow_matcher_ref"].load_state_dict(
