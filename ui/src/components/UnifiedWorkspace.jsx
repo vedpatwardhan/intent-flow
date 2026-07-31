@@ -397,7 +397,7 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
               <Crosshair className="text-cyan-400" size={18} />
               Unified Workspace
             </h2>
-            <p className="panel-subtitle">Single viewport with multi-tool annotation (480x480 scale)</p>
+            <p className="panel-subtitle">Viewport for annotation</p>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <select
