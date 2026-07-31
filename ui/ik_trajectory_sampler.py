@@ -242,7 +242,7 @@ def save_ik_trajectory_diagnostic_plots(
 def save_ik_trajectory_video(
     pos_trajectories: list,
     neg_trajectories: list,
-    output_dir: str = "latent-flow/ui/logs/training",
+    output_dir: str = "latent-flow/ui/logs/training/goals",
     fps: int = 4,
 ):
     """

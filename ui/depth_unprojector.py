@@ -66,59 +66,58 @@ def unproject_pixel_to_world(
     return p_world
 
 
-def extract_region_2d_extremes(anno: dict) -> list[tuple[float, float]]:
+def extract_region_2d_extremes(
+    mask_224: np.ndarray,
+    target_pt: tuple[float, float],
+    other_pt: tuple[float, float] | None = None,
+) -> list[tuple[float, float]]:
     """
-    Extracts the 4 2D extreme boundary pixels (x_min, x_max, y_min, y_max) from a segment or crop annotation.
+    Extracts the 4 2D extreme boundary pixels (x_min, x_max, y_min, y_max) from a SAM combined_mask_224
+    in 224x224 coordinate space for the object cluster closest to target_pt.
     """
-    if (
-        "width" in anno
-        and "height" in anno
-        and anno["width"] > 0
-        and anno["height"] > 0
-    ):  # Crop Bounding Box
-        x1, y1 = anno["x"], anno["y"]
-        w, h = anno["width"], anno["height"]
-        x2, y2 = x1 + w, y1 + h
-        x_mid, y_mid = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        return [(x1, y_mid), (x2, y_mid), (x_mid, y1), (x_mid, y2)]
-
-    if "boundingBox" in anno:
-        bbox = anno["boundingBox"]
-        x1, y1, w, h = (
-            bbox.get("x", 0),
-            bbox.get("y", 0),
-            bbox.get("width", 0),
-            bbox.get("height", 0),
+    if mask_224 is None or not isinstance(mask_224, np.ndarray):
+        raise ValueError(
+            "❌ [Annotation Error] combined_mask_224 in task_isolated_features must be a valid numpy array."
         )
-        if w > 0 and h > 0:
-            x2, y2 = x1 + w, y1 + h
-            x_mid, y_mid = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            return [(x1, y_mid), (x2, y_mid), (x_mid, y1), (x_mid, y2)]
 
-    # Segment Point Cloud / Mask / Path
-    points = (
-        anno.get("points")
-        or anno.get("path")
-        or anno.get("contour")
-        or anno.get("polygon")
-    )
-    if points and len(points) > 0:
-        pts = np.array(points)  # Shape [N, 2]
-        if pts.ndim == 2 and pts.shape[1] >= 2:
-            x_min_idx = np.argmin(pts[:, 0])
-            x_max_idx = np.argmax(pts[:, 0])
-            y_min_idx = np.argmin(pts[:, 1])
-            y_max_idx = np.argmax(pts[:, 1])
-            return [
-                (float(pts[x_min_idx, 0]), float(pts[x_min_idx, 1])),
-                (float(pts[x_max_idx, 0]), float(pts[x_max_idx, 1])),
-                (float(pts[y_min_idx, 0]), float(pts[y_min_idx, 1])),
-                (float(pts[y_max_idx, 0]), float(pts[y_max_idx, 1])),
-            ]
+    ys, xs = np.where(mask_224 > 0)
+    if len(xs) == 0:
+        raise ValueError(
+            "❌ [Annotation Error] SAM combined_mask_224 is empty (no activated mask pixels)."
+        )
 
-    # Single Point Fallback
-    cx, cy = float(anno.get("x", 112)), float(anno.get("y", 112))
-    return [(cx, cy), (cx, cy), (cx, cy), (cx, cy)]
+    pts = np.column_stack((xs, ys))  # Shape [N, 2] in (x, y) 224 space
+
+    # 1. Partition mask pixels if both start and end points are provided
+    tx, ty = target_pt
+    if other_pt is not None:
+        ox, oy = other_pt
+        d_target = (pts[:, 0] - tx) ** 2 + (pts[:, 1] - ty) ** 2
+        d_other = (pts[:, 0] - ox) ** 2 + (pts[:, 1] - oy) ** 2
+        pts = pts[d_target < d_other]
+
+    # 2. Filter mask pixels to object cluster near target_pt (within 50 pixels radius)
+    if len(pts) > 0:
+        dists = (pts[:, 0] - tx) ** 2 + (pts[:, 1] - ty) ** 2
+        close_mask = dists <= (50.0**2)
+        if np.any(close_mask):
+            pts = pts[close_mask]
+
+    if len(pts) == 0:
+        # Fallback to single point if no cluster pixels remain near target_pt
+        return [(tx, ty), (tx, ty), (tx, ty), (tx, ty)]
+
+    x_min_idx = np.argmin(pts[:, 0])
+    x_max_idx = np.argmax(pts[:, 0])
+    y_min_idx = np.argmin(pts[:, 1])
+    y_max_idx = np.argmax(pts[:, 1])
+
+    return [
+        (float(pts[x_min_idx, 0]), float(pts[x_min_idx, 1])),
+        (float(pts[x_max_idx, 0]), float(pts[x_max_idx, 1])),
+        (float(pts[y_min_idx, 0]), float(pts[y_min_idx, 1])),
+        (float(pts[y_max_idx, 0]), float(pts[y_max_idx, 1])),
+    ]
 
 
 def find_nearest_robot_body_multi(sim, effector_3d_extremes: list[np.ndarray]) -> str:
@@ -155,34 +154,46 @@ def find_nearest_robot_body_multi(sim, effector_3d_extremes: list[np.ndarray]) -
 
 
 def unproject_ui_annotations_to_3d(
-    sim, ui_annotations: dict, camera_name: str = "world_center"
+    sim,
+    ui_annotations: dict,
+    task_isolated_features: dict,
+    camera_name: str = "world_center",
 ) -> tuple[np.ndarray, np.ndarray, dict, str]:
     """
-    Strictly parses user 2D annotations (vectors, crops, segments) by matching vector
-    start/end points to segments/crops, extracting 4 2D extreme boundary pixels,
-    unprojecting them to 3D world space, resolving the robot link, and returning 3D
-    bounding extents.
+    Strictly parses user 2D annotations (vectors) and SAM combined_mask_224 from task_isolated_features
+    by extracting 4 2D extreme boundary pixels, unprojecting them to 3D world space, resolving the
+    robot link, and returning 3D bounding extents. Strictly fails if features or vectors are missing.
 
     Returns:
         tuple[np.ndarray, np.ndarray, dict, str]:
             (effector_start_3d, target_object_3d, target_3d_bounds, selected_body_name)
     """
+    if not task_isolated_features or not isinstance(task_isolated_features, dict):
+        raise ValueError(
+            "❌ [Annotation Error] task_isolated_features dictionary is required and cannot be None."
+        )
+
+    combined_mask_224 = task_isolated_features.get("combined_mask_224")
+    if combined_mask_224 is None:
+        raise ValueError(
+            "❌ [Annotation Error] task_isolated_features['combined_mask_224'] is missing or invalid."
+        )
+    combined_mask_224 = np.array(combined_mask_224)
+
     vectors = ui_annotations.get("vectors", [])
     if not vectors:
         raise ValueError(
-            f"❌ [Annotation Error] No 2D intent vectors found in "
-            "annotations for view '{camera_name}'."
+            f"❌ [Annotation Error] No 2D intent vectors found in annotations for view '{camera_name}'."
         )
 
     v = vectors[0]
     if "start" not in v or "end" not in v:
         raise ValueError(
-            "❌ [Annotation Error] Invalid vector structure in "
-            f"annotations: {v}. Must contain 'start' and 'end'."
+            f"❌ [Annotation Error] Invalid vector structure in annotations: {v}. Must contain 'start' and 'end'."
         )
 
-    start_x, start_y = v["start"][0], v["start"][1]
-    end_x, end_y = v["end"][0], v["end"][1]
+    start_x, start_y = float(v["start"][0]), float(v["start"][1])
+    end_x, end_y = float(v["end"][0]), float(v["end"][1])
 
     # 1. Unproject vector start and end centroids to 3D world space
     effector_3d = unproject_pixel_to_world(
@@ -190,53 +201,12 @@ def unproject_ui_annotations_to_3d(
     )
     target_3d = unproject_pixel_to_world(sim, end_x, end_y, camera_name=camera_name)
 
-    # 2. Match vector start/end to active crops/segments
-    active_regions = ui_annotations.get("crops", []) + ui_annotations.get(
-        "segments", []
+    # 2. Extract 2D extreme boundary pixels for effector and target object clusters
+    effector_2d_extremes = extract_region_2d_extremes(
+        combined_mask_224, target_pt=(start_x, start_y), other_pt=(end_x, end_y)
     )
-
-    start_region = None
-    end_region = None
-
-    if active_regions:
-
-        def get_region_centroid(reg: dict) -> tuple[float, float]:
-            if "width" in reg and "height" in reg:
-                return (
-                    reg.get("x", 0) + reg["width"] / 2.0,
-                    reg.get("y", 0) + reg["height"] / 2.0,
-                )
-            elif "points" in reg and reg["points"]:
-                pts = np.array(reg["points"])
-                return (float(pts[:, 0].mean()), float(pts[:, 1].mean()))
-            elif "center" in reg:
-                return (reg["center"][0], reg["center"][1])
-            return (reg.get("x", 0), reg.get("y", 0))
-
-        # Find region closest to vector start
-        start_dists = [
-            (get_region_centroid(reg)[0] - start_x) ** 2
-            + (get_region_centroid(reg)[1] - start_y) ** 2
-            for reg in active_regions
-        ]
-        start_region = active_regions[int(np.argmin(start_dists))]
-
-        # Find region closest to vector end
-        end_dists = [
-            (get_region_centroid(reg)[0] - end_x) ** 2
-            + (get_region_centroid(reg)[1] - end_y) ** 2
-            for reg in active_regions
-        ]
-        end_region = active_regions[int(np.argmin(end_dists))]
-
-    # Extract 2D extreme boundary pixels
-    effector_2d_extremes = (
-        extract_region_2d_extremes(start_region)
-        if start_region
-        else [(start_x, start_y)] * 4
-    )
-    target_2d_extremes = (
-        extract_region_2d_extremes(end_region) if end_region else [(end_x, end_y)] * 4
+    target_2d_extremes = extract_region_2d_extremes(
+        combined_mask_224, target_pt=(end_x, end_y), other_pt=(start_x, start_y)
     )
 
     # 3. Unproject 2D extremes to 3D world space
@@ -249,13 +219,25 @@ def unproject_ui_annotations_to_3d(
         for (px, py) in target_2d_extremes
     ]
 
-    # Calculate 3D bounding extents for target object
-    target_3d_pts = np.array(target_3d_extremes)  # [4, 3]
+    # Filter out any unprojected extreme point that hit background/off-workspace depth
+    valid_target_pts = []
+    for p3d in target_3d_extremes:
+        # Distance from target_3d centroid should be within 25cm
+        if np.linalg.norm(p3d - target_3d) <= 0.25:
+            valid_target_pts.append(p3d)
+
+    if not valid_target_pts:
+        valid_target_pts = [target_3d]
+
+    target_3d_pts = np.array(valid_target_pts)  # [N, 3]
+
+    extents_raw = target_3d_pts.max(axis=0) - target_3d_pts.min(axis=0)
+
     target_3d_bounds = {
         "min_3d": target_3d_pts.min(axis=0).tolist(),
         "max_3d": target_3d_pts.max(axis=0).tolist(),
         "center_3d": target_3d.tolist(),
-        "extents_3d": (target_3d_pts.max(axis=0) - target_3d_pts.min(axis=0)).tolist(),
+        "extents_3d": extents_raw.tolist(),
     }
 
     # 4. Dynamically find closest robot body link across all 4 3D effector extreme points

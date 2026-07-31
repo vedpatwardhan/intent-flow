@@ -457,7 +457,10 @@ async def run_stage3_training_loop(
                 target_3d_bounds,
                 selected_body_name,
             ) = unproject_ui_annotations_to_3d(
-                eval_sim, ui_annotations[view_name], camera_name=view_name
+                eval_sim,
+                ui_annotations[view_name],
+                camera_name=view_name,
+                task_isolated_features=cached_task_isolated_features,
             )
             print(
                 f"📍 [3D Unprojection Result] Selected Effector Body/Link: '{selected_body_name}'"
@@ -500,7 +503,7 @@ async def run_stage3_training_loop(
             save_ik_trajectory_video(
                 pos_trajectories,
                 neg_trajectories,
-                output_dir="latent-flow/ui/logs/training",
+                output_dir="latent-flow/ui/logs/training/goals",
                 fps=4,
             )
 
@@ -918,7 +921,7 @@ async def run_stage3_training_loop(
 async def websocket_endpoint(websocket: WebSocket):
     global active_camera, encoder_processing_enabled, attack_active, combostoc_noise, click_x, click_y, click_type, text_prompt, text_modifier
     global colab_is_processing, needs_colab_processing, last_colab_query_time
-    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features, cached_oracle_goal_obs, baseline_oracle_frames
+    global cached_dino_attn, cached_clip_sim, cached_sam_mask, cached_motion_field, cached_task_isolated_features
     global ui_annotations, is_training_active
     await websocket.accept()
     print("UI Connected via WebSocket")
