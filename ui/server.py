@@ -481,7 +481,7 @@ async def run_stage3_training_loop(
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
-                n=4,
+                n=5,
             )
             neg_trajectories = generate_ik_negative_trajectories(
                 eval_sim,

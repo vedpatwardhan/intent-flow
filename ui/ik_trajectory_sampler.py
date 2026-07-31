@@ -39,7 +39,7 @@ def generate_ik_positive_trajectories(
     target_3d: np.ndarray,
     target_3d_bounds: dict | None = None,
     site_name: str = "R_wrist_roll_link",
-    n: int = 4,
+    n: int = 5,
 ) -> list[dict]:
     """
     Generates n positive IK trajectories surrounding the target 3D object for a dynamically selected site_name.
@@ -49,23 +49,15 @@ def generate_ik_positive_trajectories(
     trajectories = []
 
     # Calculate perturbation scale based on object 3D spatial extents
-    if target_3d_bounds and "extents_3d" in target_3d_bounds:
-        extents = np.array(target_3d_bounds["extents_3d"])
-        dx = max(0.01, float(extents[0]) * 0.5)
-        dy = max(0.01, float(extents[1]) * 0.5)
-        offsets = [
-            np.array([dx, 0.0, 0.0]),
-            np.array([-dx, 0.0, 0.0]),
-            np.array([0.0, dy, 0.0]),
-            np.array([0.0, -dy, 0.0]),
-        ]
-    else:
-        offsets = [
-            np.array([0.015, 0.0, 0.0]),
-            np.array([-0.015, 0.0, 0.0]),
-            np.array([0.0, 0.015, 0.0]),
-            np.array([0.0, -0.015, 0.0]),
-        ]
+    extents = np.array(target_3d_bounds["extents_3d"]).max()
+    delta = max(0.01, float(extents) * 0.3)
+    offsets = [
+        np.array([0.0, 0.0, 0.0]),
+        np.array([delta, 0.0, 0.0]),
+        np.array([-delta, 0.0, 0.0]),
+        np.array([0.0, delta, 0.0]),
+        np.array([0.0, -delta, 0.0]),
+    ]
 
     for k in range(n):
         # Reset sim to identical initial state
@@ -258,8 +250,6 @@ def save_ik_trajectory_video(
         abs_output_dir = os.path.abspath(output_dir)
         pos_output_dir = os.path.join(abs_output_dir, "positive")
         neg_output_dir = os.path.join(abs_output_dir, "negative")
-        os.makedirs(pos_output_dir, exist_ok=True)
-        os.makedirs(neg_output_dir, exist_ok=True)
 
         for cam in CAM_NAMES:
             pos_cam_dir = os.path.join(pos_output_dir, cam)
