@@ -70,27 +70,51 @@ def extract_region_2d_extremes(anno: dict) -> list[tuple[float, float]]:
     """
     Extracts the 4 2D extreme boundary pixels (x_min, x_max, y_min, y_max) from a segment or crop annotation.
     """
-    if "width" in anno and "height" in anno:  # Crop Bounding Box
+    if (
+        "width" in anno
+        and "height" in anno
+        and anno["width"] > 0
+        and anno["height"] > 0
+    ):  # Crop Bounding Box
         x1, y1 = anno["x"], anno["y"]
         w, h = anno["width"], anno["height"]
         x2, y2 = x1 + w, y1 + h
         x_mid, y_mid = (x1 + x2) / 2.0, (y1 + y2) / 2.0
         return [(x1, y_mid), (x2, y_mid), (x_mid, y1), (x_mid, y2)]
 
-    # Segment Point Cloud / Mask
-    points = anno.get("points", [])
-    if points:
+    if "boundingBox" in anno:
+        bbox = anno["boundingBox"]
+        x1, y1, w, h = (
+            bbox.get("x", 0),
+            bbox.get("y", 0),
+            bbox.get("width", 0),
+            bbox.get("height", 0),
+        )
+        if w > 0 and h > 0:
+            x2, y2 = x1 + w, y1 + h
+            x_mid, y_mid = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            return [(x1, y_mid), (x2, y_mid), (x_mid, y1), (x_mid, y2)]
+
+    # Segment Point Cloud / Mask / Path
+    points = (
+        anno.get("points")
+        or anno.get("path")
+        or anno.get("contour")
+        or anno.get("polygon")
+    )
+    if points and len(points) > 0:
         pts = np.array(points)  # Shape [N, 2]
-        x_min_idx = np.argmin(pts[:, 0])
-        x_max_idx = np.argmax(pts[:, 0])
-        y_min_idx = np.argmin(pts[:, 1])
-        y_max_idx = np.argmax(pts[:, 1])
-        return [
-            (float(pts[x_min_idx, 0]), float(pts[x_min_idx, 1])),
-            (float(pts[x_max_idx, 0]), float(pts[x_max_idx, 1])),
-            (float(pts[y_min_idx, 0]), float(pts[y_min_idx, 1])),
-            (float(pts[y_max_idx, 0]), float(pts[y_max_idx, 1])),
-        ]
+        if pts.ndim == 2 and pts.shape[1] >= 2:
+            x_min_idx = np.argmin(pts[:, 0])
+            x_max_idx = np.argmax(pts[:, 0])
+            y_min_idx = np.argmin(pts[:, 1])
+            y_max_idx = np.argmax(pts[:, 1])
+            return [
+                (float(pts[x_min_idx, 0]), float(pts[x_min_idx, 1])),
+                (float(pts[x_max_idx, 0]), float(pts[x_max_idx, 1])),
+                (float(pts[y_min_idx, 0]), float(pts[y_min_idx, 1])),
+                (float(pts[y_max_idx, 0]), float(pts[y_max_idx, 1])),
+            ]
 
     # Single Point Fallback
     cx, cy = float(anno.get("x", 112)), float(anno.get("y", 112))
@@ -175,16 +199,32 @@ def unproject_ui_annotations_to_3d(
     end_region = None
 
     if active_regions:
+
+        def get_region_centroid(reg: dict) -> tuple[float, float]:
+            if "width" in reg and "height" in reg:
+                return (
+                    reg.get("x", 0) + reg["width"] / 2.0,
+                    reg.get("y", 0) + reg["height"] / 2.0,
+                )
+            elif "points" in reg and reg["points"]:
+                pts = np.array(reg["points"])
+                return (float(pts[:, 0].mean()), float(pts[:, 1].mean()))
+            elif "center" in reg:
+                return (reg["center"][0], reg["center"][1])
+            return (reg.get("x", 0), reg.get("y", 0))
+
         # Find region closest to vector start
         start_dists = [
-            (reg.get("x", 0) - start_x) ** 2 + (reg.get("y", 0) - start_y) ** 2
+            (get_region_centroid(reg)[0] - start_x) ** 2
+            + (get_region_centroid(reg)[1] - start_y) ** 2
             for reg in active_regions
         ]
         start_region = active_regions[int(np.argmin(start_dists))]
 
         # Find region closest to vector end
         end_dists = [
-            (reg.get("x", 0) - end_x) ** 2 + (reg.get("y", 0) - end_y) ** 2
+            (get_region_centroid(reg)[0] - end_x) ** 2
+            + (get_region_centroid(reg)[1] - end_y) ** 2
             for reg in active_regions
         ]
         end_region = active_regions[int(np.argmin(end_dists))]

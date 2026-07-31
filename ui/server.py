@@ -428,10 +428,16 @@ async def run_stage3_training_loop(
     index_id = sim.model.body("R_index_tip_link").id
     thumb_id = sim.model.body("R_thumb_tip_link").id
     cube_id = sim.model.body("cube").id
+    # Use eval_sim for offline IK trajectory sampling so main UI sim state remains completely unaffected
+    eval_sim.data.qpos[:] = sim.data.qpos.copy()
+    eval_sim.data.qvel[:] = sim.data.qvel.copy()
+    eval_sim.data.ctrl[:] = sim.data.ctrl.copy()
+    mujoco.mj_forward(eval_sim.model, eval_sim.data)
+
     initial_state = {
-        "qpos": sim.data.qpos.copy(),
-        "qvel": sim.data.qvel.copy(),
-        "ctrl": sim.data.ctrl.copy(),
+        "qpos": eval_sim.data.qpos.copy(),
+        "qvel": eval_sim.data.qvel.copy(),
+        "ctrl": eval_sim.data.ctrl.copy(),
     }
 
     num_epochs = 10
@@ -441,17 +447,17 @@ async def run_stage3_training_loop(
     print(f"UI ANNOTATIONS: {ui_annotations}")
     for view_name in ui_annotations:
         print(
-            "\n🚀 [IK Evaluation Mode] Triggering 2D-to-3D Unprojection & Trajectory Generation..."
+            "\n🚀 [IK Evaluation Mode] Triggering 2D-to-3D Unprojection & Trajectory Generation (via eval_sim)..."
         )
         try:
-            # 1. 2D-to-3D Depth Unprojection & 3D Coordinates Printing (Local UI Server)
+            # 1. 2D-to-3D Depth Unprojection & 3D Coordinates Printing (using isolated eval_sim)
             (
                 start_3d,
                 target_3d,
                 target_3d_bounds,
                 selected_body_name,
             ) = unproject_ui_annotations_to_3d(
-                sim, ui_annotations[view_name], camera_name=view_name
+                eval_sim, ui_annotations[view_name], camera_name=view_name
             )
             print(
                 f"📍 [3D Unprojection Result] Selected Effector Body/Link: '{selected_body_name}'"
@@ -465,9 +471,9 @@ async def run_stage3_training_loop(
             if selected_body_name is None:
                 raise ValueError("Could not find end effector")
 
-            # 2. IK Trajectory Generation (Resetting to identical initial_state for each track)
+            # 2. IK Trajectory Generation (Unrolling on isolated eval_sim)
             pos_trajectories = generate_ik_positive_trajectories(
-                sim,
+                eval_sim,
                 initial_state,
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
@@ -475,7 +481,7 @@ async def run_stage3_training_loop(
                 n=4,
             )
             neg_trajectories = generate_ik_negative_trajectories(
-                sim,
+                eval_sim,
                 initial_state,
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
@@ -488,8 +494,15 @@ async def run_stage3_training_loop(
             )
 
             # 3. Save Trajectory Diagnostic Plot & Video Files
-            save_ik_trajectory_diagnostic_plots(sim, pos_trajectories, neg_trajectories)
-            save_ik_trajectory_video(pos_trajectories, neg_trajectories, fps=4)
+            save_ik_trajectory_diagnostic_plots(
+                eval_sim, pos_trajectories, neg_trajectories
+            )
+            save_ik_trajectory_video(
+                pos_trajectories,
+                neg_trajectories,
+                output_dir="latent-flow/ui/logs/training",
+                fps=4,
+            )
 
             # 4. EXPLICIT RETURN STATEMENT (Halts before training epochs begin)
             print(

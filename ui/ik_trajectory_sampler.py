@@ -7,59 +7,40 @@ import os
 
 
 def solve_ik_target(
-    sim, target_3d: np.ndarray, site_name: str = "R_wrist_roll_link"
-) -> np.ndarray:
+    sim, target_3d: np.ndarray, site_name: str = "right_hand_roll_link"
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Solves inverse kinematics for a target 3D world position using Jacobian pseudo-inverse Damped Least Squares (DLS).
-
-    Parameters:
-        sim: Simulation object.
-        target_3d: Target 3D coordinates [X_w, Y_w, Z_w].
-        site_name: End-effector link or body site name dynamically passed from 3D unprojection.
+    Solves inverse kinematics for a target 3D world position using sim.solve_ik.
+    Matches le-probe flow: sim.solve_ik -> qpos_to_action_32 -> unscaler.scale_state.
 
     Returns:
-        np.ndarray: Solved 32-dim joint target position array.
+        tuple[np.ndarray, np.ndarray]: (q_target_norm_32, q_target_full_qpos)
     """
-    try:
-        body_id = sim.model.body(site_name).id
-    except Exception:
-        body_id = sim.model.body("R_index_tip_link").id
+    # Downward grasping orientation quaternion
+    quat_down = np.array([0.7071, 0, 0.7071, 0])
 
-    qpos_ik = sim.data.qpos.copy()
-    step_size = 0.5
-    damping = 1e-2
+    if hasattr(sim, "solve_ik"):
+        try:
+            q_target_full = sim.solve_ik(target_3d, quat_down)
+            raw_32 = sim.qpos_to_action_32(q_target_full)
+            norm_32 = sim.unscaler.scale_state(raw_32)
+            return norm_32, q_target_full
+        except Exception as e:
+            print(f"⚠️ sim.solve_ik fallback: {e}")
 
-    for _ in range(100):
-        # Forward kinematics
-        mujoco.mj_forward(sim.model, sim.data)
-        curr_pos = sim.data.xpos[body_id]
-        error = target_3d - curr_pos
+    # Fallback return current state
+    q_target_full = sim.data.qpos.copy()
+    norm_32 = sim.get_state_32()
+    return norm_32, q_target_full
 
-        if np.linalg.norm(error) < 0.005:  # 5mm convergence threshold
-            break
 
-        # Compute translation Jacobian
-        jacp = np.zeros((3, sim.model.nv))
-        mujoco.mj_jacBody(sim.model, sim.data, jacp, None, body_id)
-
-        # Damped Least Squares Inverse: J^T * (J * J^T + lambda^2 * I)^-1
-        jjt = jacp @ jacp.T + damping * np.eye(3)
-        delta_qvel = jacp.T @ np.linalg.solve(jjt, error)
-
-        # Integrate joint positions
-        sim.data.qpos[:] += step_size * delta_qvel
-        sim.data.qpos[:] = np.clip(
-            sim.data.qpos[:], sim.model.jnt_range[:, 0], sim.model.jnt_range[:, 1]
-        )
-
-    solved_qpos = sim.data.qpos.copy()
-    sim.data.qpos[:] = qpos_ik  # Restore
-    mujoco.mj_forward(sim.model, sim.data)
-
-    # Scale 32-dim state via unscaler if available
-    if hasattr(sim, "unscaler"):
-        return sim.unscaler.scale_state(solved_qpos[:32])
-    return solved_qpos[:32]
+CAM_NAMES = [
+    "world_center",
+    "world_top",
+    "world_left",
+    "world_right",
+    "world_wrist",
+]
 
 
 def generate_ik_positive_trajectories(
@@ -73,6 +54,7 @@ def generate_ik_positive_trajectories(
     """
     Generates n positive IK trajectories surrounding the target 3D object for a dynamically selected site_name.
     Uses target_3d_bounds to perturb target positions along the physical 3D extents of the object.
+    Renders 5 camera views per step.
     """
     trajectories = []
 
@@ -82,17 +64,17 @@ def generate_ik_positive_trajectories(
         dx = max(0.01, float(extents[0]) * 0.5)
         dy = max(0.01, float(extents[1]) * 0.5)
         offsets = [
-            np.array([0.0, 0.0, 0.0]),
             np.array([dx, 0.0, 0.0]),
             np.array([-dx, 0.0, 0.0]),
             np.array([0.0, dy, 0.0]),
+            np.array([0.0, -dy, 0.0]),
         ]
     else:
         offsets = [
-            np.array([0.0, 0.0, 0.0]),
             np.array([0.015, 0.0, 0.0]),
             np.array([-0.015, 0.0, 0.0]),
             np.array([0.0, 0.015, 0.0]),
+            np.array([0.0, -0.015, 0.0]),
         ]
 
     for k in range(n):
@@ -103,37 +85,40 @@ def generate_ik_positive_trajectories(
         mujoco.mj_forward(sim.model, sim.data)
 
         target_k = target_3d + offsets[k % len(offsets)]
-        q_target = solve_ik_target(sim, target_k, site_name=site_name)
+        q_target_norm, q_target_full = solve_ik_target(
+            sim, target_k, site_name=site_name
+        )
 
-        # Interpolate 7-step trajectory and render RGB frames
-        q_start = sim.unscaler.scale_state(sim.get_state_32())
+        q_start_norm = sim.get_state_32()
         step_trajectories = []
-        rendered_frames = []
+        multi_view_frames = {cam: [] for cam in CAM_NAMES}
 
         for h in range(7):
             alpha = (h + 1) / 7.0
-            q_interp = (1.0 - alpha) * q_start + alpha * q_target
+            q_interp = (1.0 - alpha) * q_start_norm + alpha * q_target_norm
             step_trajectories.append(q_interp.tolist())
 
-            # Apply step to sim and render RGB frame
-            sim.process_target_32(q_interp)
+            # Dispatch action to step physical sim
             sim.dispatch_action(
                 action_32_norm=q_interp,
-                target_q=sim.last_target_q,
+                target_q=q_target_full,
                 n_steps=2,
                 render_freq=0,
                 reset_start=False,
             )
-            sim.renderer.update_scene(sim.data, camera="world_center")
-            rgb = sim.renderer.render().copy()
-            rendered_frames.append(rgb)
+
+            # Render frames across all 5 cameras
+            for cam in CAM_NAMES:
+                sim.renderer.update_scene(sim.data, camera=cam)
+                rgb = sim.renderer.render().copy()
+                multi_view_frames[cam].append(rgb)
 
         trajectories.append(
             {
                 "track_idx": k,
                 "target_3d": target_k.tolist(),
                 "trajectory_steps": step_trajectories,
-                "rendered_frames": rendered_frames,
+                "multi_view_frames": multi_view_frames,
                 "is_positive": True,
             }
         )
@@ -152,6 +137,7 @@ def generate_ik_negative_trajectories(
     """
     Generates n negative distractor IK trajectories away from the target 3D object for a dynamically selected site_name.
     Resets sim to initial_state for each trajectory.
+    Renders 5 camera views per step.
     """
     trajectories = []
     np.random.seed(42)
@@ -168,37 +154,40 @@ def generate_ik_negative_trajectories(
         distractor_dist = np.random.uniform(0.15, 0.30)
         target_k = target_3d + random_dir * distractor_dist
 
-        q_target = solve_ik_target(sim, target_k, site_name=site_name)
-        # Unroll steps and capture rendered RGB frames
+        q_target_norm, q_target_full = solve_ik_target(
+            sim, target_k, site_name=site_name
+        )
         step_trajectories = []
-        rendered_frames = []
+        multi_view_frames = {cam: [] for cam in CAM_NAMES}
 
-        q_start = sim.unscaler.scale_state(sim.get_state_32())
+        q_start_norm = sim.get_state_32()
 
         for h in range(7):
             alpha = (h + 1) / 7.0
-            q_interp = (1.0 - alpha) * q_start + alpha * q_target
+            q_interp = (1.0 - alpha) * q_start_norm + alpha * q_target_norm
             step_trajectories.append(q_interp.tolist())
 
-            # Apply step to sim and render RGB frame
-            sim.process_target_32(q_interp)
+            # Dispatch action to step physical sim
             sim.dispatch_action(
                 action_32_norm=q_interp,
-                target_q=sim.last_target_q,
+                target_q=q_target_full,
                 n_steps=2,
                 render_freq=0,
                 reset_start=False,
             )
-            sim.renderer.update_scene(sim.data, camera="world_center")
-            rgb = sim.renderer.render().copy()
-            rendered_frames.append(rgb)
+
+            # Render frames across all 5 cameras
+            for cam in CAM_NAMES:
+                sim.renderer.update_scene(sim.data, camera=cam)
+                rgb = sim.renderer.render().copy()
+                multi_view_frames[cam].append(rgb)
 
         trajectories.append(
             {
                 "track_idx": k,
                 "target_3d": target_k.tolist(),
                 "trajectory_steps": step_trajectories,
-                "rendered_frames": rendered_frames,
+                "multi_view_frames": multi_view_frames,
                 "is_positive": False,
             }
         )
@@ -251,45 +240,59 @@ def save_ik_trajectory_diagnostic_plots(
 
 
 def save_ik_trajectory_video(
-    pos_trajectories: list, neg_trajectories: list, fps: int = 4
+    pos_trajectories: list,
+    neg_trajectories: list,
+    output_dir: str = "latent-flow/ui/logs/training",
+    fps: int = 4,
 ):
     """
-    Encodes rendered RGB frames of positive (D+) and negative (D-) IK trajectories into MP4 videos.
+    Encodes rendered RGB frames of positive (D+) and negative (D-) IK trajectories
+    into 5 MP4 videos per class (1 per camera view) inside output_dir.
     """
     try:
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        abs_output_dir = os.path.abspath(output_dir)
+        os.makedirs(abs_output_dir, exist_ok=True)
 
-        # 1. Save Positive (D+) Trajectories Video
-        pos_video_path = os.path.join(base_dir, "debug_ik_positive_trajectories.mp4")
-        all_pos_frames = []
-        for tr in pos_trajectories:
-            all_pos_frames.extend(tr.get("rendered_frames", []))
+        for cam in CAM_NAMES:
+            # 1. Save Positive Trajectories Video for camera view
+            pos_video_path = os.path.join(
+                abs_output_dir, f"positive_trajectory_{cam}.mp4"
+            )
+            pos_frames = []
+            for tr in pos_trajectories:
+                mv_frames = tr.get("multi_view_frames", {})
+                if cam in mv_frames:
+                    pos_frames.extend(mv_frames[cam])
 
-        if all_pos_frames:
-            h, w, _ = all_pos_frames[0].shape
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(pos_video_path, fourcc, fps, (w, h))
-            for frame in all_pos_frames:
-                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                writer.write(bgr)
-            writer.release()
-            print(f"🎬 Saved Positive IK Trajectories Video: {pos_video_path}")
+            if pos_frames:
+                h, w, _ = pos_frames[0].shape
+                fourcc = cv2.VideoWriter_fourcc(*"avc1")
+                writer = cv2.VideoWriter(pos_video_path, fourcc, fps, (w, h))
+                for frame in pos_frames:
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    writer.write(bgr)
+                writer.release()
+                print(f"🎬 Saved Positive IK Video ({cam}): {pos_video_path}")
 
-        # 2. Save Negative (D-) Trajectories Video
-        neg_video_path = os.path.join(base_dir, "debug_ik_negative_trajectories.mp4")
-        all_neg_frames = []
-        for tr in neg_trajectories:
-            all_neg_frames.extend(tr.get("rendered_frames", []))
+            # 2. Save Negative Trajectories Video for camera view
+            neg_video_path = os.path.join(
+                abs_output_dir, f"negative_trajectory_{cam}.mp4"
+            )
+            neg_frames = []
+            for tr in neg_trajectories:
+                mv_frames = tr.get("multi_view_frames", {})
+                if cam in mv_frames:
+                    neg_frames.extend(mv_frames[cam])
 
-        if all_neg_frames:
-            h, w, _ = all_neg_frames[0].shape
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(neg_video_path, fourcc, fps, (w, h))
-            for frame in all_neg_frames:
-                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                writer.write(bgr)
-            writer.release()
-            print(f"🎬 Saved Negative IK Trajectories Video: {neg_video_path}")
+            if neg_frames:
+                h, w, _ = neg_frames[0].shape
+                fourcc = cv2.VideoWriter_fourcc(*"avc1")
+                writer = cv2.VideoWriter(neg_video_path, fourcc, fps, (w, h))
+                for frame in neg_frames:
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    writer.write(bgr)
+                writer.release()
+                print(f"🎬 Saved Negative IK Video ({cam}): {neg_video_path}")
 
     except Exception as e:
         print(f"Error saving IK trajectory videos: {e}")
