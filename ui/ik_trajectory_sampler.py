@@ -17,20 +17,10 @@ def solve_ik_target(
         tuple[np.ndarray, np.ndarray]: (q_target_norm_32, q_target_full_qpos)
     """
     # Downward grasping orientation quaternion
-    quat_down = np.array([0.7071, 0, 0.7071, 0])
-
-    if hasattr(sim, "solve_ik"):
-        try:
-            q_target_full = sim.solve_ik(target_3d, quat_down)
-            raw_32 = sim.qpos_to_action_32(q_target_full)
-            norm_32 = sim.unscaler.scale_state(raw_32)
-            return norm_32, q_target_full
-        except Exception as e:
-            print(f"⚠️ sim.solve_ik fallback: {e}")
-
-    # Fallback return current state
-    q_target_full = sim.data.qpos.copy()
-    norm_32 = sim.get_state_32()
+    quat_down = np.array([0, 1, 0, 0])
+    q_target_full = sim.solve_ik(target_3d, quat_down)
+    raw_32 = sim.qpos_to_action_32(q_target_full)
+    norm_32 = sim.unscaler.scale_state(raw_32)
     return norm_32, q_target_full
 
 
@@ -85,13 +75,20 @@ def generate_ik_positive_trajectories(
         mujoco.mj_forward(sim.model, sim.data)
 
         target_k = target_3d + offsets[k % len(offsets)]
+        print(f"target_k: {target_k}")
         q_target_norm, q_target_full = solve_ik_target(
             sim, target_k, site_name=site_name
         )
 
         q_start_norm = sim.get_state_32()
-        step_trajectories = []
-        multi_view_frames = {cam: [] for cam in CAM_NAMES}
+        step_trajectories = [q_start_norm.tolist()]
+        multi_view_frames = dict()
+
+        # Render initial start frame (t=0) across all 5 cameras before stepping
+        for cam in CAM_NAMES:
+            sim.renderer.update_scene(sim.data, camera=cam)
+            rgb = sim.renderer.render().copy()
+            multi_view_frames[cam] = [rgb]
 
         for h in range(7):
             alpha = (h + 1) / 7.0
@@ -161,6 +158,14 @@ def generate_ik_negative_trajectories(
         multi_view_frames = {cam: [] for cam in CAM_NAMES}
 
         q_start_norm = sim.get_state_32()
+        step_trajectories = [q_start_norm.tolist()]
+        multi_view_frames = {cam: [] for cam in CAM_NAMES}
+
+        # Render initial start frame (t=0) across all 5 cameras before stepping
+        for cam in CAM_NAMES:
+            sim.renderer.update_scene(sim.data, camera=cam)
+            rgb = sim.renderer.render().copy()
+            multi_view_frames[cam].append(rgb)
 
         for h in range(7):
             alpha = (h + 1) / 7.0
@@ -251,9 +256,17 @@ def save_ik_trajectory_video(
     """
     try:
         abs_output_dir = os.path.abspath(output_dir)
-        os.makedirs(abs_output_dir, exist_ok=True)
+        pos_output_dir = os.path.join(abs_output_dir, "positive")
+        neg_output_dir = os.path.join(abs_output_dir, "negative")
+        os.makedirs(pos_output_dir, exist_ok=True)
+        os.makedirs(neg_output_dir, exist_ok=True)
 
         for cam in CAM_NAMES:
+            pos_cam_dir = os.path.join(pos_output_dir, cam)
+            neg_cam_dir = os.path.join(neg_output_dir, cam)
+            os.makedirs(pos_cam_dir, exist_ok=True)
+            os.makedirs(neg_cam_dir, exist_ok=True)
+
             # 1. Save individual Positive Trajectory Videos
             for tr in pos_trajectories:
                 track_idx = tr.get("track_idx", 0)
@@ -262,8 +275,8 @@ def save_ik_trajectory_video(
                     frames = mv_frames[cam]
                     h, w, _ = frames[0].shape
                     pos_video_path = os.path.join(
-                        abs_output_dir,
-                        f"positive_trajectory_{cam}_track_{track_idx}.mp4",
+                        pos_cam_dir,
+                        f"track_{track_idx}.mp4",
                     )
                     fourcc = cv2.VideoWriter_fourcc(*"avc1")
                     writer = cv2.VideoWriter(pos_video_path, fourcc, fps, (w, h))
@@ -283,8 +296,8 @@ def save_ik_trajectory_video(
                     frames = mv_frames[cam]
                     h, w, _ = frames[0].shape
                     neg_video_path = os.path.join(
-                        abs_output_dir,
-                        f"negative_trajectory_{cam}_track_{track_idx}.mp4",
+                        neg_cam_dir,
+                        f"track_{track_idx}.mp4",
                     )
                     fourcc = cv2.VideoWriter_fourcc(*"avc1")
                     writer = cv2.VideoWriter(neg_video_path, fourcc, fps, (w, h))

@@ -67,20 +67,26 @@ def unproject_pixel_to_world(
 
 
 def extract_region_2d_extremes(
-    mask_224: np.ndarray,
+    sim,
+    mask_224: list | np.ndarray,
     target_pt: tuple[float, float],
     other_pt: tuple[float, float] | None = None,
+    camera_name: str = "world_center",
 ) -> list[tuple[float, float]]:
     """
     Extracts the 4 2D extreme boundary pixels (x_min, x_max, y_min, y_max) from a SAM combined_mask_224
-    in 224x224 coordinate space for the object cluster closest to target_pt.
+    in 224x224 coordinate space for the object cluster closest to target_pt. Pre-filters mask pixels
+    against background depth BEFORE extracting extreme boundary points so boundary background pixels
+    never corrupt extreme boundaries.
     """
-    if mask_224 is None or not isinstance(mask_224, np.ndarray):
+    if mask_224 is None:
         raise ValueError(
-            "❌ [Annotation Error] combined_mask_224 in task_isolated_features must be a valid numpy array."
+            "❌ [Annotation Error] combined_mask_224 in task_isolated_features cannot be None."
         )
 
-    ys, xs = np.where(mask_224 > 0)
+    mask_arr = np.array(mask_224) if not isinstance(mask_224, np.ndarray) else mask_224
+
+    ys, xs = np.where(mask_arr > 0)
     if len(xs) == 0:
         raise ValueError(
             "❌ [Annotation Error] SAM combined_mask_224 is empty (no activated mask pixels)."
@@ -96,27 +102,44 @@ def extract_region_2d_extremes(
         d_other = (pts[:, 0] - ox) ** 2 + (pts[:, 1] - oy) ** 2
         pts = pts[d_target < d_other]
 
-    # 2. Filter mask pixels to object cluster near target_pt (within 50 pixels radius)
+    # 2. Filter mask pixels to object cluster near target_pt (within 60 pixels radius)
     if len(pts) > 0:
         dists = (pts[:, 0] - tx) ** 2 + (pts[:, 1] - ty) ** 2
-        close_mask = dists <= (50.0**2)
+        close_mask = dists <= (60.0**2)
         if np.any(close_mask):
             pts = pts[close_mask]
 
     if len(pts) == 0:
-        # Fallback to single point if no cluster pixels remain near target_pt
         return [(tx, ty), (tx, ty), (tx, ty), (tx, ty)]
 
-    x_min_idx = np.argmin(pts[:, 0])
-    x_max_idx = np.argmax(pts[:, 0])
-    y_min_idx = np.argmin(pts[:, 1])
-    y_max_idx = np.argmax(pts[:, 1])
+    # 3. Unproject 3D target centroid to test 3D workspace foreground depth
+    target_3d = unproject_pixel_to_world(sim, tx, ty, camera_name=camera_name)
+
+    # 4. PRE-FILTER MASK PIXELS: Filter out any mask pixel whose unprojected 3D distance
+    # from target_3d centroid exceeds workspace object radius (25cm) or hits background plane
+    valid_pts = []
+    for px, py in pts:
+        p3d = unproject_pixel_to_world(
+            sim, float(px), float(py), camera_name=camera_name
+        )
+        if np.linalg.norm(p3d - target_3d) <= 0.25:
+            valid_pts.append((float(px), float(py)))
+
+    if not valid_pts:
+        return [(tx, ty), (tx, ty), (tx, ty), (tx, ty)]
+
+    valid_pts_arr = np.array(valid_pts)  # [M, 2]
+
+    x_min_idx = np.argmin(valid_pts_arr[:, 0])
+    x_max_idx = np.argmax(valid_pts_arr[:, 0])
+    y_min_idx = np.argmin(valid_pts_arr[:, 1])
+    y_max_idx = np.argmax(valid_pts_arr[:, 1])
 
     return [
-        (float(pts[x_min_idx, 0]), float(pts[x_min_idx, 1])),
-        (float(pts[x_max_idx, 0]), float(pts[x_max_idx, 1])),
-        (float(pts[y_min_idx, 0]), float(pts[y_min_idx, 1])),
-        (float(pts[y_max_idx, 0]), float(pts[y_max_idx, 1])),
+        (float(valid_pts_arr[x_min_idx, 0]), float(valid_pts_arr[x_min_idx, 1])),
+        (float(valid_pts_arr[x_max_idx, 0]), float(valid_pts_arr[x_max_idx, 1])),
+        (float(valid_pts_arr[y_min_idx, 0]), float(valid_pts_arr[y_min_idx, 1])),
+        (float(valid_pts_arr[y_max_idx, 0]), float(valid_pts_arr[y_max_idx, 1])),
     ]
 
 
@@ -161,8 +184,8 @@ def unproject_ui_annotations_to_3d(
 ) -> tuple[np.ndarray, np.ndarray, dict, str]:
     """
     Strictly parses user 2D annotations (vectors) and SAM combined_mask_224 from task_isolated_features
-    by extracting 4 2D extreme boundary pixels, unprojecting them to 3D world space, resolving the
-    robot link, and returning 3D bounding extents. Strictly fails if features or vectors are missing.
+    by pre-filtering valid foreground mask pixels, extracting 4 2D extreme boundary pixels, unprojecting
+    them to 3D world space, resolving the robot link, and returning 3D bounding extents.
 
     Returns:
         tuple[np.ndarray, np.ndarray, dict, str]:
@@ -178,7 +201,6 @@ def unproject_ui_annotations_to_3d(
         raise ValueError(
             "❌ [Annotation Error] task_isolated_features['combined_mask_224'] is missing or invalid."
         )
-    combined_mask_224 = np.array(combined_mask_224)
 
     vectors = ui_annotations.get("vectors", [])
     if not vectors:
@@ -201,15 +223,23 @@ def unproject_ui_annotations_to_3d(
     )
     target_3d = unproject_pixel_to_world(sim, end_x, end_y, camera_name=camera_name)
 
-    # 2. Extract 2D extreme boundary pixels for effector and target object clusters
+    # 2. Extract 2D extreme boundary pixels PRE-FILTERED against background depth
     effector_2d_extremes = extract_region_2d_extremes(
-        combined_mask_224, target_pt=(start_x, start_y), other_pt=(end_x, end_y)
+        sim,
+        combined_mask_224,
+        target_pt=(start_x, start_y),
+        other_pt=(end_x, end_y),
+        camera_name=camera_name,
     )
     target_2d_extremes = extract_region_2d_extremes(
-        combined_mask_224, target_pt=(end_x, end_y), other_pt=(start_x, start_y)
+        sim,
+        combined_mask_224,
+        target_pt=(end_x, end_y),
+        other_pt=(start_x, start_y),
+        camera_name=camera_name,
     )
 
-    # 3. Unproject 2D extremes to 3D world space
+    # 3. Unproject pre-filtered 2D extremes to 3D world space
     effector_3d_extremes = [
         unproject_pixel_to_world(sim, px, py, camera_name=camera_name)
         for (px, py) in effector_2d_extremes
@@ -219,17 +249,7 @@ def unproject_ui_annotations_to_3d(
         for (px, py) in target_2d_extremes
     ]
 
-    # Filter out any unprojected extreme point that hit background/off-workspace depth
-    valid_target_pts = []
-    for p3d in target_3d_extremes:
-        # Distance from target_3d centroid should be within 25cm
-        if np.linalg.norm(p3d - target_3d) <= 0.25:
-            valid_target_pts.append(p3d)
-
-    if not valid_target_pts:
-        valid_target_pts = [target_3d]
-
-    target_3d_pts = np.array(valid_target_pts)  # [N, 3]
+    target_3d_pts = np.array(target_3d_extremes)  # [4, 3]
 
     extents_raw = target_3d_pts.max(axis=0) - target_3d_pts.min(axis=0)
 
