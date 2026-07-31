@@ -15,7 +15,7 @@ def solve_ik_target(
     Parameters:
         sim: Simulation object.
         target_3d: Target 3D coordinates [X_w, Y_w, Z_w].
-        site_name: End-effector link or body site name.
+        site_name: End-effector link or body site name dynamically passed from 3D unprojection.
 
     Returns:
         np.ndarray: Solved 32-dim joint target position array.
@@ -63,20 +63,37 @@ def solve_ik_target(
 
 
 def generate_ik_positive_trajectories(
-    sim, initial_state: dict, target_3d: np.ndarray, n: int = 4
+    sim,
+    initial_state: dict,
+    target_3d: np.ndarray,
+    target_3d_bounds: dict | None = None,
+    site_name: str = "R_wrist_roll_link",
+    n: int = 4,
 ) -> list[dict]:
     """
-    Generates n positive IK trajectories surrounding the target 3D object.
-    Resets sim to initial_state for each trajectory.
+    Generates n positive IK trajectories surrounding the target 3D object for a dynamically selected site_name.
+    Uses target_3d_bounds to perturb target positions along the physical 3D extents of the object.
     """
     trajectories = []
-    # Workspace perturbations: ±1.5cm around target_3d
-    offsets = [
-        np.array([0.0, 0.0, 0.0]),
-        np.array([0.015, 0.0, 0.0]),
-        np.array([-0.015, 0.0, 0.0]),
-        np.array([0.0, 0.015, 0.0]),
-    ]
+
+    # Calculate perturbation scale based on object 3D spatial extents
+    if target_3d_bounds and "extents_3d" in target_3d_bounds:
+        extents = np.array(target_3d_bounds["extents_3d"])
+        dx = max(0.01, float(extents[0]) * 0.5)
+        dy = max(0.01, float(extents[1]) * 0.5)
+        offsets = [
+            np.array([0.0, 0.0, 0.0]),
+            np.array([dx, 0.0, 0.0]),
+            np.array([-dx, 0.0, 0.0]),
+            np.array([0.0, dy, 0.0]),
+        ]
+    else:
+        offsets = [
+            np.array([0.0, 0.0, 0.0]),
+            np.array([0.015, 0.0, 0.0]),
+            np.array([-0.015, 0.0, 0.0]),
+            np.array([0.0, 0.015, 0.0]),
+        ]
 
     for k in range(n):
         # Reset sim to identical initial state
@@ -86,7 +103,7 @@ def generate_ik_positive_trajectories(
         mujoco.mj_forward(sim.model, sim.data)
 
         target_k = target_3d + offsets[k % len(offsets)]
-        q_target = solve_ik_target(sim, target_k)
+        q_target = solve_ik_target(sim, target_k, site_name=site_name)
 
         # Interpolate 7-step trajectory and render RGB frames
         q_start = sim.unscaler.scale_state(sim.get_state_32())
@@ -125,14 +142,18 @@ def generate_ik_positive_trajectories(
 
 
 def generate_ik_negative_trajectories(
-    sim, initial_state: dict, target_3d: np.ndarray, n: int = 10
+    sim,
+    initial_state: dict,
+    target_3d: np.ndarray,
+    target_3d_bounds: dict | None = None,
+    site_name: str = "R_wrist_roll_link",
+    n: int = 10,
 ) -> list[dict]:
     """
-    Generates n negative distractor IK trajectories away from the target 3D object.
+    Generates n negative distractor IK trajectories away from the target 3D object for a dynamically selected site_name.
     Resets sim to initial_state for each trajectory.
     """
     trajectories = []
-    # Distractor perturbations: ±15cm to ±30cm away from target_3d
     np.random.seed(42)
 
     for k in range(n):
@@ -147,7 +168,7 @@ def generate_ik_negative_trajectories(
         distractor_dist = np.random.uniform(0.15, 0.30)
         target_k = target_3d + random_dir * distractor_dist
 
-        q_target = solve_ik_target(sim, target_k)
+        q_target = solve_ik_target(sim, target_k, site_name=site_name)
         # Unroll steps and capture rendered RGB frames
         step_trajectories = []
         rendered_frames = []

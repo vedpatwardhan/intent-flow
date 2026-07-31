@@ -130,6 +130,23 @@ class GR1SimulationServer(GR1MuJoCoBase):
 sim = GR1SimulationServer()
 sim.reset_env(lock_posture=True)
 
+# Print initial 3D positions of cube and right wrist link upon server startup
+try:
+    cube_id = sim.model.body("cube").id
+    cube_pos_3d = sim.data.xpos[cube_id].copy()
+    print(f"\n📍 [Server Startup Ground Truth] Cube 3D World Position: {cube_pos_3d}")
+except Exception as e:
+    print(f"⚠️ [Server Startup] Could not query cube body: {e}")
+
+try:
+    wrist_id = sim.model.body("R_pinky_proximal_link").id
+    wrist_pos_3d = sim.data.xpos[wrist_id].copy()
+    print(
+        f"📍 [Server Startup Ground Truth] Right Wrist Link 3D World Position: {wrist_pos_3d}\n"
+    )
+except Exception as e:
+    print(f"⚠️ [Server Startup] Could not query right wrist link: {e}")
+
 # Dedicated evaluation simulator for offline candidate track unrolling
 eval_sim = GR1SimulationServer()
 eval_sim.reset_env(lock_posture=True)
@@ -421,26 +438,49 @@ async def run_stage3_training_loop(
     max_steps = 25
 
     # --- STAGE 3 IK TRAJECTORY GENERATION EVALUATION HOOK (INSERTED ABOVE LINE 414) ---
-    if ui_annotations and (
-        ui_annotations.get("vectors") or ui_annotations.get("crops")
-    ):
+    print(f"UI ANNOTATIONS: {ui_annotations}")
+    for view_name in ui_annotations:
         print(
             "\n🚀 [IK Evaluation Mode] Triggering 2D-to-3D Unprojection & Trajectory Generation..."
         )
         try:
             # 1. 2D-to-3D Depth Unprojection & 3D Coordinates Printing (Local UI Server)
-            start_3d, target_3d = unproject_ui_annotations_to_3d(
-                sim, ui_annotations, camera_name="world_center"
+            (
+                start_3d,
+                target_3d,
+                target_3d_bounds,
+                selected_body_name,
+            ) = unproject_ui_annotations_to_3d(
+                sim, ui_annotations[view_name], camera_name=view_name
+            )
+            print(
+                f"📍 [3D Unprojection Result] Selected Effector Body/Link: '{selected_body_name}'"
             )
             print(f"📍 [3D Unprojection Result] Effector Link 3D Start: {start_3d}")
             print(f"📍 [3D Unprojection Result] Target Object 3D Goal: {target_3d}")
+            print(
+                f"📍 [3D Unprojection Result] Target Object 3D Bounds: {target_3d_bounds}"
+            )
+
+            if selected_body_name is None:
+                raise ValueError("Could not find end effector")
 
             # 2. IK Trajectory Generation (Resetting to identical initial_state for each track)
             pos_trajectories = generate_ik_positive_trajectories(
-                sim, initial_state, target_3d, n=4
+                sim,
+                initial_state,
+                target_3d,
+                target_3d_bounds=target_3d_bounds,
+                site_name=selected_body_name,
+                n=4,
             )
             neg_trajectories = generate_ik_negative_trajectories(
-                sim, initial_state, target_3d, n=10
+                sim,
+                initial_state,
+                target_3d,
+                target_3d_bounds=target_3d_bounds,
+                site_name=selected_body_name,
+                n=10,
             )
             print(
                 f"✅ [IK Sampler] Generated {len(pos_trajectories)} Positive (D+) & "
@@ -455,12 +495,13 @@ async def run_stage3_training_loop(
             print(
                 "🛑 [IK Evaluation Mode] Halting execution via explicit return statement to allow trajectory inspection.\n"
             )
-            return
         except Exception as e:
             print(f"❌ [IK Evaluation Mode Error] Failed to generate trajectories: {e}")
             import traceback
 
             traceback.print_exc()
+
+    return
 
     for ep_idx in range(num_epochs):
         if ep_idx > 0:
@@ -531,7 +572,6 @@ async def run_stage3_training_loop(
                 "is_easy_task": False,
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
-                "oracle_goal_obs": cached_oracle_goal_obs,
             }
             print(
                 f"Frame History: {len(frame_history)}, "
