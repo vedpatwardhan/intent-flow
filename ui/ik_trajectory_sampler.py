@@ -100,7 +100,7 @@ def generate_ik_trajectories(
             sim.dispatch_action(
                 action_32_norm=q_interp,
                 target_q=q_target_full,
-                n_steps=10,
+                n_steps=20,
                 render_freq=0,
                 reset_start=False,
             )

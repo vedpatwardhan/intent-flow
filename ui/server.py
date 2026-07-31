@@ -24,6 +24,7 @@ from depth_unprojector import unproject_ui_annotations_to_3d
 from ik_trajectory_sampler import (
     generate_ik_trajectories,
     save_ik_trajectory_diagnostic_plots,
+    save_ik_trajectory_video,
 )
 
 
@@ -163,13 +164,6 @@ import re
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from depth_unprojector import unproject_ui_annotations_to_3d
-from ik_trajectory_sampler import (
-    generate_ik_positive_trajectories,
-    generate_ik_negative_trajectories,
-    save_ik_trajectory_diagnostic_plots,
-    save_ik_trajectory_video,
-)
 
 app = FastAPI()
 
