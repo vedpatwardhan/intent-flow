@@ -111,9 +111,12 @@ async def process_frame(payload: FramePayload):
     try:
         start = perf_counter()
 
+        history_frames = payload.history_frames
+        if len(history_frames) == 2:
+            history_frames = [*history_frames, *history_frames]
         features = extract_features_common(
             payload.frame,  # str
-            payload.history_frames,  # list[str]
+            history_frames,  # list[str]
             payload.text_prompt,  # str
             payload.ui_annotations,  # dict
             payload.view_name,  # str
