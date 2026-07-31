@@ -705,11 +705,9 @@ async def run_stage3_training_loop(
 
                 transitions.append(
                     {
-                        "current_obs": copy.deepcopy(
-                            current_obs
-                        ),  # contains zeroed history
+                        "current_obs": copy.deepcopy(current_obs),  # zeroed history
                         "action_taken": track_actions_flat_k,
-                        "next_obs": track_next_obs,  # contains history of 4 different frames
+                        "next_obs": track_next_obs,  # history of 4 different frames
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,

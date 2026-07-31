@@ -68,6 +68,35 @@ class LatentAlignmentAdapter(torch.nn.Module):
         return g + self.adapter(g)
 
 
+class SIGReg(torch.nn.Module):
+    """Sketch Isotropic Gaussian Regularizer (single-GPU!)"""
+
+    def __init__(self, knots=17, num_proj=1024):
+        super().__init__()
+        self.num_proj = num_proj
+        t = torch.linspace(0, 3, knots, dtype=torch.float32)
+        dt = 3 / (knots - 1)
+        weights = torch.full((knots,), 2 * dt, dtype=torch.float32)
+        weights[[0, -1]] = dt
+        window = torch.exp(-t.square() / 2.0)
+        self.register_buffer("t", t)
+        self.register_buffer("phi", window)
+        self.register_buffer("weights", weights * window)
+
+    def forward(self, proj):
+        """
+        proj: (T, B, D) -> Sequence length, Batch size, Latent dimension
+        """
+        # sample random projections dynamically
+        A = torch.randn(proj.size(-1), self.num_proj, device=proj.device)
+        A = A.div_(A.norm(p=2, dim=0))
+        # compute the epps-pulley statistic
+        x_t = (proj @ A).unsqueeze(-1) * self.t
+        err = (x_t.cos().mean(-3) - self.phi).square() + x_t.sin().mean(-3).square()
+        statistic = (err @ self.weights) * proj.size(-2)
+        return statistic.mean()  # average over projections and time steps
+
+
 from trainers.stage3.trainer import GNNSkillLibrary
 
 
@@ -200,6 +229,9 @@ def ensure_stage3_models():
         action_dim=16,
         hidden_dim=latent_dim,
     ).to(device)
+
+    # Instantiate the new Epps-Pulley statistical sketch regularizer
+    state.stage3_models["sigreg_module"] = SIGReg(knots=17, num_proj=1024).to(device)
 
     state.stage3_models["flow_matcher"] = ComboStocFlowMatcher(
         action_dim=action_dim, config=config
@@ -630,7 +662,6 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         print(
             f"[CALIBRATE JOB {job_id}] Processing {len(payload.transitions)} transitions..."
         )
-        s_t_first = None
         pbar = tqdm(
             payload.transitions, desc=f"📥 [Calibrate Ingest {job_id}]", unit="trans"
         )
@@ -660,9 +691,6 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     s_t = encode_obs_to_latent(combined_obs_t, state).detach()
                     s_next = encode_obs_to_latent(combined_obs_next, state).detach()
 
-            if s_t_first is None:
-                s_t_first = s_t
-
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
 
@@ -682,7 +710,8 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     trans.energy,
                     trans.tactile,
                     s_target,
-                    trans.is_positive_trajectory,
+                    trans.pos_trajectories,
+                    trans.neg_trajectories,
                 )
             )
 
@@ -732,25 +761,8 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
             loss_dynamics = F.mse_loss(s_next_pred, batch_s_next)
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
-            if s_next_pred.size(0) > 1:
-                random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
-                random_dirs = random_dirs / (
-                    random_dirs.norm(dim=0, keepdim=True) + 1e-8
-                )
-
-                projected = torch.matmul(s_next_pred, random_dirs)
-                mean_proj = projected.mean(dim=0, keepdim=True)
-
-                var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
-                std_proj = torch.sqrt(var_proj) + 1e-8
-
-                loss_sigreg = F.mse_loss(
-                    std_proj, torch.ones_like(std_proj)
-                ) + F.mse_loss(mean_proj, torch.zeros_like(mean_proj))
-                loss_total = loss_dynamics + 0.01 * loss_sigreg
-            else:
-                loss_sigreg = torch.tensor(0.0, device=device)
-                loss_total = loss_dynamics
+            loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
+            loss_total = loss_dynamics + 0.01 * loss_sigreg
 
             loss_total.backward()
 
@@ -986,16 +998,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
             # 5. Anti-collapse regularization (SIGReg) with Step Decay Schedule
-            random_dirs = torch.randn(s_next_pred.size(-1), 10, device=device)
-            random_dirs = random_dirs / random_dirs.norm(dim=0, keepdim=True)
-            projected = torch.matmul(s_next_pred, random_dirs)
-            mean_proj = projected.mean(dim=0, keepdim=True)
-            var_proj = torch.clamp(projected.var(dim=0, keepdim=True), min=0.0)
-            std_proj = torch.sqrt(var_proj) + 1e-8
-
-            sigreg_loss = F.mse_loss(std_proj, torch.ones_like(std_proj)) + F.mse_loss(
-                mean_proj, torch.zeros_like(mean_proj)
-            )
+            sigreg_loss = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
 
             # Persistent Global SIGReg Decay (smooth decay across global run steps, no epoch resets)
             if not hasattr(state, "global_distill_step_count"):
