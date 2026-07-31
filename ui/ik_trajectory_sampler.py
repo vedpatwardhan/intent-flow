@@ -1,9 +1,18 @@
-import copy
+import base64
 import numpy as np
 import mujoco
 import matplotlib.pyplot as plt
+from PIL import Image
 import cv2
+import io
 import os
+
+
+def frame_to_base64(rgb_array: np.ndarray) -> str:
+    img = Image.fromarray(rgb_array).resize((224, 224))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def solve_ik_target(
@@ -65,7 +74,7 @@ def generate_ik_trajectories(
             np.array([delta, delta, 0.0]),
             np.array([-delta, -delta, 0.0]),
             np.array([delta, -delta, 0.0]),
-            np.array([-delta, delta, 0.0])
+            np.array([-delta, delta, 0.0]),
         ]
 
     for k in range(n):
@@ -82,19 +91,19 @@ def generate_ik_trajectories(
         )
 
         q_start_norm = sim.get_state_32()
-        step_trajectories = [q_start_norm.tolist()]
-        multi_view_frames = dict()
+        actions = [q_start_norm.tolist()]
+        observations = dict()
 
         # Render initial start frame (t=0) across all 5 cameras before stepping
         for cam in CAM_NAMES:
             sim.renderer.update_scene(sim.data, camera=cam)
             rgb = sim.renderer.render().copy()
-            multi_view_frames[cam] = [rgb]
+            observations[cam] = [rgb]
 
         for h in range(7):
             alpha = (h + 1) / 7.0
             q_interp = (1.0 - alpha) * q_start_norm + alpha * q_target_norm
-            step_trajectories.append(q_interp.tolist())
+            actions.append(q_interp.tolist())
 
             # Dispatch action to step physical sim
             sim.dispatch_action(
@@ -109,14 +118,30 @@ def generate_ik_trajectories(
             for cam in CAM_NAMES:
                 sim.renderer.update_scene(sim.data, camera=cam)
                 rgb = sim.renderer.render().copy()
-                multi_view_frames[cam].append(rgb)
+                observations[cam].append(frame_to_base64(rgb))
 
+        # Constructed the final observations in right format
+        final_observations = []
+        for cam in observations:
+            final_obs = dict()
+            for frame in observations[cam]:
+                final_obs[cam] = frame
+            final_observations.append(final_obs)
+
+        # Pad actions [7, 32] to [7, 58]
+        actions = np.array(actions)
+        final_actions = np.concatenate(
+            [actions, np.zeros((actions.shape[0], 58 - actions.shape[1]))],
+            axis=1,
+        )
+
+        # ToDo: Include tactile information
         trajectories.append(
             {
                 "track_idx": k,
-                "target_3d": target_k.tolist(),
-                "trajectory_steps": step_trajectories,
-                "multi_view_frames": multi_view_frames,
+                "target_pos": target_k.tolist(),
+                "actions": final_actions.tolist(),
+                "observations": final_observations,
                 "is_positive": is_positive,
             }
         )

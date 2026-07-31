@@ -504,17 +504,17 @@ async def run_stage3_training_loop(
                 fps=4,
             )
 
-            # 4. EXPLICIT RETURN STATEMENT (Halts before training epochs begin)
+            # 4. Trajectory Generation Complete - Proceed to Epoch Loop
             print(
-                "🛑 [IK Evaluation Mode] Halting execution via explicit return statement to allow trajectory inspection.\n"
+                f"🚀 [IK Trajectory Sampler] Positives ({len(pos_trajectories)}) "
+                f"& Negatives ({len(neg_trajectories)}) ready. "
+                "Starting training epochs...\n"
             )
         except Exception as e:
             print(f"❌ [IK Evaluation Mode Error] Failed to generate trajectories: {e}")
             import traceback
 
             traceback.print_exc()
-
-    return
 
     for ep_idx in range(num_epochs):
         if ep_idx > 0:
@@ -585,6 +585,7 @@ async def run_stage3_training_loop(
                 "is_easy_task": False,
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
+                "pos_trajectories": pos_trajectories,
             }
             print(
                 f"Frame History: {len(frame_history)}, "
@@ -712,6 +713,8 @@ async def run_stage3_training_loop(
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,
+                        "pos_trajectories": pos_trajectories,
+                        "neg_trajectories": neg_trajectories,
                     }
                 )
 

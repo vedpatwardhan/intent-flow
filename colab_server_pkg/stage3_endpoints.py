@@ -1,9 +1,6 @@
-import asyncio
 import threading
 import uuid
 import pickle
-import io
-import base64
 import json
 import os
 import yaml
@@ -14,19 +11,13 @@ from pydantic import BaseModel
 EXEMPLAR_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "checkpoints", "exemplars")
 )
-from typing import List
 from fastapi import HTTPException
-from PIL import Image, ImageDraw, ImageFilter
-import cv2
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import traceback
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as transforms
 
 try:
     import wandb
@@ -46,20 +37,7 @@ def ensure_wandb_init(project_name="latent-flow-stage3"):
 
 
 from colab_server_pkg.config import device
-from colab_server_pkg.models_state import (
-    stage3_models,
-    stage3_trajectory_history,
-    models,
-)
-from colab_server_pkg.feature_extractor import (
-    extract_stage3_obs_features,
-    extract_single_view_stage3_obs_features,
-)
-from colab_server_pkg.image_utils import (
-    decode_base64_image,
-    save_stage3_debug_plots,
-    save_stage3_calibrate_plots,
-)
+from colab_server_pkg.feature_extractor import extract_stage3_obs_features
 
 from models.adapters import (
     VisualAdapter,
@@ -95,28 +73,31 @@ from trainers.stage3.trainer import GNNSkillLibrary
 
 class Stage3StepPayload(BaseModel):
     frames: dict[str, str]  # Multi-view frames: {camera_name: base64_image}
-    history_frames: List[dict[str, str]]
-    proprioception: List[float]
-    tactile: List[List[float]]
+    history_frames: list[dict[str, str]]
+    proprioception: list[float]
+    tactile: list[list[float]]
     text_prompt: str
     ui_annotations: dict
     is_easy_task: bool = False
     point_clouds: dict | None = None
     episode_idx: int = 0
     step_idx: int = 0
+    pos_trajectories: list[dict] | None = None
 
 
 class Stage3CalibrateTransition(BaseModel):
     current_obs: Stage3StepPayload
-    action_taken: List[float]
+    action_taken: list[float]
     next_obs: Stage3StepPayload
     energy: float
     tactile: float
-    s_target: List[List[float]] | None = None
+    s_target: list[list[float]] | None = None
+    pos_trajectories: list[dict] | None = None
+    neg_trajectories: list[dict] | None = None
 
 
 class Stage3CalibratePayload(BaseModel):
-    transitions: List[Stage3CalibrateTransition]
+    transitions: list[Stage3CalibrateTransition]
     eval_mean_physical_distance: float | None = None
     eval_energy_distance_correlation: float | None = None
 
@@ -242,16 +223,6 @@ def ensure_stage3_models():
 
     state.stage3_models["attacker"] = BadWorldAttacker(action_dim=action_dim)
 
-    # Add goal attention head for converting predicted latent to goal latent
-    state.stage3_models["goal_attention"] = torch.nn.MultiheadAttention(
-        embed_dim=latent_dim, num_heads=8, batch_first=True
-    ).to(device)
-
-    # Add latent adapter for mapping foveated/blurred goal representations to SFT space
-    state.stage3_models["latent_adapter"] = LatentAlignmentAdapter(
-        feature_dim=latent_dim
-    ).to(device)
-
     ckpt_dir_config = config["paths"]["checkpoint_dir"]
     if ckpt_dir_config.startswith("latent-flow/"):
         ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
@@ -336,9 +307,7 @@ def ensure_stage3_models():
         + list(state.stage3_models["discriminator"].parameters())
         + list(state.stage3_models["action_adapter"].parameters())
         + list(state.stage3_models["state_adapter"].parameters())
-        + list(state.stage3_models["action_down_proj"].parameters())
-        + list(state.stage3_models["goal_attention"].parameters())
-        + list(state.stage3_models["latent_adapter"].parameters()),
+        + list(state.stage3_models["action_down_proj"].parameters()),
         lr=stage3_lr,
     )
 
@@ -369,44 +338,54 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     goal_combined_obs = state.active_goal_combined_obs
 
         with torch.no_grad():
-            # Get clean live state latent [1, latent_dim]
+            # Get clean live state latent: Shape [1, 512]
             s_t = encode_obs_to_latent(combined_obs, state)
 
-            # Get clean transformed target goal state latent [1, latent_dim]
-            s_target = encode_obs_to_latent(goal_combined_obs, state)
+            # Encode positive IK trajectories into a target bank: Shape [M, 512]
+            s_target_bank_list = []
+            for tr in payload.pos_trajectories:
+                # Construct an observation payload from trajectory terminal step
+                observations = tr["observations"]
+
+                # Get target latent state [1, 512]
+                tr_obs = Stage3StepPayload(
+                    frames=observations[-1],
+                    history_frames=observations[:-1],
+                    proprioception=tr["actions"],
+                    tactile=payload.tactile,
+                    text_prompt=payload.text_prompt,
+                    ui_annotations=payload.ui_annotations,
+                )
+                _, tr_combined_obs = extract_stage3_obs_features(tr_obs)
+                s_tr_encoded = encode_obs_to_latent(tr_combined_obs, state)
+                s_target_bank_list.append(s_tr_encoded)
+
+            s_target_bank = torch.cat(s_target_bank_list, dim=0).detach()  # [5, 512]
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7
         joint_dim = 58
         total_gen_dim = horizon * joint_dim
 
-        # Create a master grid
-        # ToDo: temporarily setting it all to 0 for baseline exploration
-        # grid = torch.ones(1, horizon, joint_dim, device=device)
-        # grid[0, 0:3, :] = 0.0  # immediate steps get the full denoising path
-        # grid[0, 3:6, :] = 0.5  # intermediate steps get coarse denoising
-        # grid[0, 6:, :] = 0.8  # far steps initialized near convergence
-        grid = torch.zeros(1, horizon, joint_dim, device=device)
-        steering_timelines = grid.view(1, total_gen_dim)  # Shape: [1, Horizon * Joints]
+        grid = torch.zeros(1, horizon, joint_dim, device=device)  # Shape [1, 7, 58]
+        steering_timelines = grid.view(1, total_gen_dim)  # Shape [1, 406]
 
-        # Detach s_t and s_target to prevent graph leaks and runtime crashes
-        s_t = s_t.detach()
-        s_target = s_target.detach()
-        embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
+        s_t = s_t.detach()  # Shape [1, 512]
+        embodiment_id = torch.tensor([2], dtype=torch.long, device=device)  # Shape [1]
 
-        # --- 16-CANDIDATE STEPNFT STOCHASTIC NOISE GENERATION BLOCK ---
-        # Comment out observation-space visual perturbations (blurring/exposure/noise)
-        # and generate all 16 candidate trajectories directly using StepNFT stochastic noise.
         ensemble_size = 16
-        s_t_ensemble = s_t.expand(ensemble_size, -1)
-        s_target_expanded = s_target.expand(ensemble_size, -1)
-        embodiment_id_expanded = embodiment_id.expand(ensemble_size)
+        s_t_ensemble = s_t.expand(ensemble_size, -1)  # Shape [16, 512]
+        s_target_conditioned = torch.max(s_target_bank, dim=0)[0].unsqueeze(
+            0
+        )  # Shape [1, 512]
+
+        embodiment_id_expanded = embodiment_id.expand(ensemble_size)  # Shape [16]
 
         steering_timelines_expanded = (
             steering_timelines.expand(ensemble_size, -1)
             .view(ensemble_size, horizon, joint_dim)
             .clone()
-        )
+        )  # Shape [16, 7, 58]
 
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
@@ -414,13 +393,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     "flow_matcher"
                 ].sample_with_steering(
                     s_t_ensemble,
-                    s_target_expanded,
+                    s_target_conditioned.expand(ensemble_size, -1),  # [16, 512]
                     embodiment_id=embodiment_id_expanded,
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
                     step_nft_scale=0.2,
-                )
+                )  # a_candidates Shape [16, 7, 58]
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
         if HAS_WANDB and step_snrs:
@@ -442,11 +421,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         timeline_advance_rate = 0.05
 
         # Create embodiment-aware action mask (first 32 GR-1 active joints)
-        action_mask = torch.zeros(1, 1, joint_dim, device=device)
+        action_mask = torch.zeros(1, 1, joint_dim, device=device)  # Shape [1, 1, 58]
         action_mask[..., :32] = 1.0
 
         # Mask initial candidate actions to ensure padding channels start at zero
-        a_candidates = a_candidates * action_mask
+        a_candidates = a_candidates * action_mask  # Shape [16, 7, 58]
 
         steering_history = {
             "episode_idx": payload.episode_idx,
@@ -466,30 +445,40 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             )
 
             # Flatten step layouts to match ActionAdapter's footprint contract
-            a_flat = a_candidates.view(ensemble_size, -1)  # Shape: [16, 406]
+            a_flat = a_candidates.view(ensemble_size, -1)  # Shape [16, 406]
 
             # Get the action representation and next latent state
-            z_action = state.stage3_models["action_adapter"](a_flat)
-            z_action_16 = state.stage3_models["action_down_proj"](z_action)
+            z_action = state.stage3_models["action_adapter"](a_flat)  # Shape [16, 512]
+            z_action_16 = state.stage3_models["action_down_proj"](
+                z_action
+            )  # Shape [16, 16]
 
-            s_next_pred = state.stage3_models["predictor"](s_t_ensemble, z_action_16)
+            s_next_pred = state.stage3_models["predictor"](
+                s_t_ensemble, z_action_16
+            )  # Shape [16, 512]
 
-            # Direct energy computation between predicted next state and target goal anchor
-            energy = torch.mean((s_next_pred - s_target_expanded) ** 2)
-            grad_a = torch.autograd.grad(energy, a_candidates)[0]
+            # Multi-target energy computation: distance to closest goal in s_target_bank [M, 512]
+            # s_next_pred: Shape [16, 512] -> [16, 1, 512]
+            # s_target_bank: Shape [M, 512] -> [1, M, 512]
+            dists_to_bank = torch.mean(
+                (s_next_pred.unsqueeze(1) - s_target_bank.unsqueeze(0)) ** 2, dim=-1
+            )  # Shape [16, M]
+            min_bank_dists, _ = torch.min(dists_to_bank, dim=1)  # Shape [16]
+            energy = torch.mean(min_bank_dists)
+            grad_a = torch.autograd.grad(energy, a_candidates)[0]  # Shape [16, 7, 58]
 
             # Normalize gradients per ensemble instance and mask padding channels
-            # [16, 7, 58]
+            # Shape [16, 1, 1]
             grad_norm = grad_a.norm(dim=(1, 2), keepdim=True) + 1e-8
-            grad_a_normalized = (grad_a / grad_norm) * action_mask
+            grad_a_normalized = (grad_a / grad_norm) * action_mask  # Shape [16, 7, 58]
 
             # Masked Energy Guidance matching 3D coordinates
-            # Dynamically calculate the guidance mask (shape: [4, 7, 58])
+            # Dynamically calculate the guidance mask (shape: [16, 7, 58])
             t_j = 1.0 - steering_timelines_expanded
 
             # Sculpt action parameters along the tracking vector field
-            diff = eta * grad_a_normalized * t_j
-            a_candidates = (a_candidates - diff) * action_mask
+            diff = eta * grad_a_normalized * t_j  # Shape [16, 7, 58]
+            a_candidates = (a_candidates - diff) * action_mask  # Shape [16, 7, 58]
 
             # Raw gradient forces per joint: Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
             raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
@@ -499,17 +488,19 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 g_0_joint_errors = raw_joint_errors.clone().detach()
 
             # Isolate active structural dimensions (first 32 joints)
-            active_selector = action_mask.squeeze(0).squeeze(0) > 0
+            active_selector = action_mask.squeeze(0).squeeze(0) > 0  # Shape [58]
 
             # Relative Force Convergence Ratio:
             # Joint j is STABLE if its current gradient force has dropped to <= 40% of its initial force at iteration 0
             # (i.e. >= 60% force reduction / convergence across lookahead steering)
             alpha = 0.40
-            relative_ratio = raw_joint_errors / (g_0_joint_errors + 1e-8)
+            relative_ratio = raw_joint_errors / (g_0_joint_errors + 1e-8)  # Shape [58]
 
             # Stable and drifting masks scoped strictly to active joints
-            stable_joints_mask = (relative_ratio <= alpha) & active_selector
-            drifting_joints_mask = (~stable_joints_mask) & active_selector
+            stable_joints_mask = (
+                relative_ratio <= alpha
+            ) & active_selector  # Shape [58]
+            drifting_joints_mask = (~stable_joints_mask) & active_selector  # Shape [58]
 
             # Force padding channels to zero out entirely in the timeline grid
             padding_mask = ~active_selector
@@ -524,10 +515,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # Keep boundaries locked within standard flow matching bounds [0.0, 1.0]
             steering_timelines_expanded = torch.clamp(
                 steering_timelines_expanded, 0.0, 1.0
-            )
+            )  # Shape [16, 7, 58]
 
         # Detach the candidates after the loop
-        final_actions = a_candidates.clone().detach()
+        final_actions = a_candidates.clone().detach()  # Shape [16, 7, 58]
 
         # Record final steered candidate trajectories (iteration 5)
         steering_history["iterations"].append(
@@ -557,7 +548,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
         # Compute per-candidate final energy scores directly against target anchor
         with torch.no_grad():
-            final_energies = torch.mean((s_next_pred - s_target_expanded) ** 2, dim=-1)
+            final_energies = torch.mean(
+                (s_next_pred.unsqueeze(1) - s_target_bank.unsqueeze(0)) ** 2, dim=-1
+            )  # Shape [16, 5]
+            final_energies = torch.min(final_energies, dim=1)[0]  # [16]
 
         # Log real steering telemetry metrics to Weights & Biases
         if HAS_WANDB:
@@ -599,34 +593,24 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 try:
                     wandb.log(
                         {
-                            "steering/candidate_variance": candidate_var,
-                            "steering/mean_timeline": mean_timeline,
-                            "steering/stable_joints": stable_joints_cnt,
-                            "steering/drifting_joints": drifting_joints_cnt,
-                            "steering/mean_energy": mean_energy,
-                            "steering/min_energy": min_energy,
-                            "dino_diagnostics/spatial_entropy": dino_entropy,
-                            "dino_diagnostics/peak_to_average_ratio": dino_par,
+                            "telemetry/candidate_variance": candidate_var,
+                            "telemetry/mean_timeline_progress": mean_timeline,
+                            "telemetry/stable_joints_count": stable_joints_cnt,
+                            "telemetry/drifting_joints_count": drifting_joints_cnt,
+                            "telemetry/mean_candidate_energy": mean_energy,
+                            "telemetry/min_candidate_energy": min_energy,
+                            "telemetry/dino_attn_entropy": dino_entropy,
+                            "telemetry/dino_attn_par": dino_par,
                         }
                     )
                 except Exception:
                     pass
 
-        # Print step trajectories telemetry
-        print("--- Stage 3 Step Trajectories ---")
-        for i in range(ensemble_size):
-            energy_val = final_energies[i].item()
-            action_norm = final_actions[i].norm().item()
-            print(
-                f"  Track {i:02d}: Energy = {energy_val:.10f} | Action Norm = {action_norm:.4f}"
-            )
-        print("---------------------------------")
-
+        # Return action array [16, 7, 58] and energy vector [16] to client
         return {
-            "action": final_actions.cpu().numpy().tolist(),
-            "energy": final_energies.cpu().numpy().tolist(),
-            "s_target": s_target.cpu().numpy().tolist(),
-            "active_node_key": "skill_0",
+            "action": final_actions.cpu().tolist(),  # [16, 7, 58]
+            "energy": final_energies.cpu().tolist(),  # [16]
+            "s_target": s_target_conditioned.cpu().tolist(),  # [1, 512]
         }
     except Exception as e:
         traceback.print_exc()
@@ -643,43 +627,35 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
-        s_t_first = None
-        num_transitions = len(payload.transitions)
         print(
-            f"\n[CALIBRATE JOB {job_id}] Starting calibration on {num_transitions} transitions..."
+            f"[CALIBRATE JOB {job_id}] Processing {len(payload.transitions)} transitions..."
         )
+        s_t_first = None
+        pbar = tqdm(
+            payload.transitions, desc=f"📥 [Calibrate Ingest {job_id}]", unit="trans"
+        )
+        for trans in pbar:
+            obs_dict_t, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
+            obs_dict_next, combined_obs_next = extract_stage3_obs_features(
+                trans.next_obs
+            )
 
-        pbar = tqdm(payload.transitions, desc=f"[CALIBRATE {job_id}]", unit="trans")
-        for i, trans in enumerate(pbar):
-            with torch.no_grad():
-                with torch.amp.autocast("cuda"):
-                    # contains zeroed history
-                    _, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
-
-                    # contains proper 4-frame history
-                    _, combined_obs_next = extract_stage3_obs_features(trans.next_obs)
-
-                    if i == 0:
-                        save_stage3_calibrate_plots(
-                            trans,
-                            combined_obs_next,
-                            view_name="world_center",
-                            track_idx=0,
+            # Strict NaN / Inf Data Validation Audit Across Observations
+            for obs_name, combined in [
+                ("current_obs", combined_obs_t),
+                ("next_obs", combined_obs_next),
+            ]:
+                for k, v in combined.items():
+                    if torch.is_tensor(v) and (
+                        torch.isnan(v).any() or torch.isinf(v).any()
+                    ):
+                        print(
+                            f"⚠️ [NaN/Inf Warning] {obs_name} observation contains "
+                            f"NaN/Inf in feature: '{k}'!"
                         )
 
-                    for name, d_dict in [
-                        ("current", combined_obs_t),
-                        ("next", combined_obs_next),
-                    ]:
-                        for k, v in d_dict.items():
-                            if torch.is_tensor(v) and (
-                                torch.isnan(v).any() or torch.isinf(v).any()
-                            ):
-                                pbar.write(
-                                    f"⚠️ [NaN/Inf Warning] {name} observation contains "
-                                    f"NaN/Inf in feature: '{k}'!"
-                                )
-
+            with torch.no_grad():
+                with torch.amp.autocast("cuda"):
                     # s_t, s_next: Shape [1, 512] (shared state latent dimension)
                     s_t = encode_obs_to_latent(combined_obs_t, state).detach()
                     s_next = encode_obs_to_latent(combined_obs_next, state).detach()
@@ -689,21 +665,25 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
-            pbar.set_postfix(
-                {
-                    "s_t": f"[{s_t.min().item():.2f},{s_t.max().item():.2f}]",
-                    "s_next": f"[{s_next.min().item():.2f},{s_next.max().item():.2f}]",
-                    "act": f"[{action.min().item():.2f},{action.max().item():.2f}]",
-                }
+
+            # Retrieve real target goal anchor vector if present, or fall back to s_t: Shape [1, 512]
+            s_target = (
+                torch.tensor(trans.s_target, dtype=torch.float32, device=device)
+                if trans.s_target is not None
+                else s_t
             )
 
-            # Retrieve real target goal anchor vector if present, or fall back to s_t
-            s_target = torch.tensor(trans.s_target, dtype=torch.float32, device=device)
-
-            # Track the current state, action block, true next state, energy,
-            # tactile success, and the target goal anchor
+            # Track current state, action, next state, energy, tactile, s_target, and is_positive_trajectory label
             state.stage3_trajectory_history.append(
-                (s_t, action, s_next, trans.energy, trans.tactile, s_target)
+                (
+                    s_t,
+                    action,
+                    s_next,
+                    trans.energy,
+                    trans.tactile,
+                    s_target,
+                    trans.is_positive_trajectory,
+                )
             )
 
         while len(state.stage3_trajectory_history) > 2000:
@@ -899,123 +879,98 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             state.stage3_optimizer.zero_grad()
 
             indices = batches_pool[opsd_step]
+            # batch_s_t: Shape [B, 512]
             batch_s_t = torch.cat(
                 [state.stage3_trajectory_history[idx][0] for idx in indices], dim=0
             )
+            # batch_action: Shape [B, 406]
             batch_action = torch.cat(
                 [state.stage3_trajectory_history[idx][1] for idx in indices], dim=0
             )
+            # batch_s_next: Shape [B, 512]
             batch_s_next = torch.cat(
                 [state.stage3_trajectory_history[idx][2] for idx in indices], dim=0
             )
+            # batch_energy: Shape [B]
             batch_energy = torch.tensor(
                 [state.stage3_trajectory_history[idx][3] for idx in indices],
                 dtype=torch.float32,
                 device=device,
             )
+            # batch_tactile: Shape [B]
             batch_tactile = torch.tensor(
                 [state.stage3_trajectory_history[idx][4] for idx in indices],
                 dtype=torch.float32,
                 device=device,
             )
 
-            # Retrieve the true baseline step targets saved during the calibration trace
+            # Retrieve the true baseline step targets saved during the calibration trace: Shape [B, 512]
             s_target_batch = torch.cat(
                 [state.stage3_trajectory_history[idx][5] for idx in indices], dim=0
             )
 
-            # Generative Flow Matcher Loss (CFM) via Native Blended ComboStoc Method
-            B_size = batch_action.size(0)
-
-            # Unflatten back to the true 3D trajectory grid layout [B, 7, 58]
-            batch_action_3d = batch_action.view(B_size, 7, 58)
-
-            # RUN 102 FIX: Direct Manifold Target Routing (Bypassing goal_attention cross-attention head)
-            s_target_adapted = s_target_batch
-
-            # 2. CFM Flow Matching with True \pi-StepNFT Contrastive Push-Pull Loss
-            batch_size = batch_action_3d.size(0)
-            embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
-                batch_size
+            # Retrieve trajectory identity boolean (D+ vs D-): Shape [B]
+            batch_is_pos = torch.tensor(
+                [
+                    (
+                        state.stage3_trajectory_history[idx][6]
+                        if len(state.stage3_trajectory_history[idx]) > 6
+                        else True
+                    )
+                    for idx in indices
+                ],
+                dtype=torch.bool,
+                device=device,
             )
 
+            B_size = batch_action.size(0)
+            batch_action_3d = batch_action.view(B_size, 7, 58)  # Shape [B, 7, 58]
+            s_target_adapted = s_target_batch  # Shape [B, 512]
+
+            embodiment_id = torch.tensor([2], dtype=torch.long, device=device).expand(
+                B_size
+            )  # Shape [B]
+
+            x_0 = torch.randn_like(batch_action_3d)  # Shape [B, 7, 58]
+            target_velocity = batch_action_3d - x_0  # Shape [B, 7, 58]
             num_solver_steps = 10
             dt = 1.0 / num_solver_steps
-            x_0 = torch.randn_like(batch_action_3d)
-            target_velocity = batch_action_3d - x_0
 
-            all_denoise_step_losses = []
+            pos_mask = batch_is_pos  # Shape [B]
+            neg_mask = ~batch_is_pos  # Shape [B]
 
-            # Explicitly evaluate and supervise across ALL 10 discrete denoising solver timesteps
-            for k in range(num_solver_steps):
-                t_val = k * dt
-                t_sample_k = torch.full_like(
-                    batch_action_3d, fill_value=t_val, device=device
-                )
-
-                # Intermediate noise point x_t and target next solver checkpoint x_next_target at step k
-                x_t_k = t_sample_k * batch_action_3d + (1.0 - t_sample_k) * x_0
-                x_next_target_k = state.stage3_models[
-                    "flow_matcher"
-                ].compute_stepwise_denoising_deltas(
-                    x_t_k, target_velocity, t_sample_k, dt
-                )
-
-                # Query trainable and reference velocity fields at denoise step k
-                v_theta_k = state.stage3_models[
-                    "flow_matcher"
-                ].evaluate_step_transitions(
+            # If batch contains both positive and negative traces, compute contrastive DPO loss
+            if pos_mask.sum() > 0 and neg_mask.sum() > 0:
+                t_sample = torch.full_like(
+                    batch_action_3d, fill_value=0.5, device=device
+                )  # Shape [B, 7, 58]
+                v_theta = state.stage3_models["flow_matcher"].evaluate_step_transitions(
                     batch_action_3d,
-                    t_sample_k,
+                    t_sample,
+                    batch_s_t,
+                    s_target_adapted,
+                    embodiment_id,
+                )  # Shape [B, 7, 58]
+                err_all = torch.mean(
+                    (target_velocity - v_theta) ** 2, dim=(1, 2)
+                )  # Shape [B]
+                err_pos = err_all[pos_mask].mean()  # Scalar
+                err_neg = err_all[neg_mask].mean()  # Scalar
+                dpo_beta = 1.0
+                cfm_loss = F.softplus((err_pos - err_neg) * dpo_beta)  # Scalar
+            else:
+                # Standard flow matching MSE loss fallback
+                t_sample = torch.full_like(
+                    batch_action_3d, fill_value=0.5, device=device
+                )
+                v_theta = state.stage3_models["flow_matcher"].evaluate_step_transitions(
+                    batch_action_3d,
+                    t_sample,
                     batch_s_t,
                     s_target_adapted,
                     embodiment_id,
                 )
-                with torch.no_grad():
-                    v_old_k = state.stage3_models[
-                        "flow_matcher_ref"
-                    ].evaluate_step_transitions(
-                        batch_action_3d,
-                        t_sample_k,
-                        batch_s_t,
-                        s_target_adapted,
-                        embodiment_id,
-                    )
-
-                # Velocity drift delta (Δv) and clipped perturbations at denoise step k
-                delta_v_k = v_theta_k - v_old_k
-                delta_v_norm_k = delta_v_k.norm(dim=(1, 2), keepdim=True) + 1e-8
-                delta_v_clipped_k = delta_v_k * torch.clamp(
-                    1.0 / delta_v_norm_k, max=1.0
-                )
-
-                beta = 0.1
-                v_pos_k = v_old_k + beta * delta_v_clipped_k
-                v_neg_k = v_old_k - beta * delta_v_clipped_k
-
-                # Step projections at denoise step k
-                x_next_pos_k = x_t_k + v_pos_k * dt
-                x_next_neg_k = x_t_k + v_neg_k * dt
-
-                # Step reconstruction errors at denoise step k
-                err_pos_k = torch.mean(
-                    (x_next_target_k - x_next_pos_k) ** 2, dim=(1, 2)
-                )
-                err_neg_k = torch.mean(
-                    (x_next_target_k - x_next_neg_k) ** 2, dim=(1, 2)
-                )
-
-                # Softplus preference penalty at denoise step k
-                dpo_beta = 1.0
-                step_logit_k = (dpo_beta / 2.0) * (err_pos_k - err_neg_k)
-                all_denoise_step_losses.append(F.softplus(step_logit_k))
-
-            # Average softplus preference loss across ALL 10 DENOISING STEPS
-            mean_step_softplus = torch.stack(all_denoise_step_losses, dim=1).mean(dim=1)
-
-            # Scale across batch elements by continuous JEPA Predictor energy reward
-            energy_reward = torch.exp(-batch_energy)
-            cfm_loss = torch.mean(mean_step_softplus * energy_reward)
+                cfm_loss = F.mse_loss(v_theta, target_velocity)
 
             # 3. Predictor Loss (JEPA dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
