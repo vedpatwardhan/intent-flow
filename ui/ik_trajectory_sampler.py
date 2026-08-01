@@ -91,7 +91,7 @@ def generate_ik_trajectories(
         )
 
         q_start_norm = sim.get_state_32()
-        actions = [q_start_norm.tolist()]
+        actions = []
         observations = dict()
 
         # Render initial start frame (t=0) across all 5 cameras before stepping

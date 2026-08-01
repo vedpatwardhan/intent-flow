@@ -584,6 +584,9 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
+                "episode_idx": ep_idx,
+                "step_idx": env_step,
+                "pos_trajectories": [],
             }
             print(
                 f"Frame History: {len(frame_history)}, "
@@ -596,12 +599,7 @@ async def run_stage3_training_loop(
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
                         f"{colab_url}/stage3/step",
-                        json={
-                            **current_obs,
-                            "episode_idx": ep_idx,
-                            "step_idx": env_step,
-                            "pos_trajectories": pos_trajectories,
-                        },
+                        json={**current_obs, "pos_trajectories": pos_trajectories},
                         timeout=2000.0,
                     )
                     if r.status_code == 200:
@@ -699,6 +697,9 @@ async def run_stage3_training_loop(
                     "text_prompt": text_prompt or "grasp cube",
                     "ui_annotations": {},
                     "is_easy_task": False,
+                    "pos_trajectories": [],
+                    "episode_idx": 0,
+                    "step_idx": 0,
                 }
 
                 grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
@@ -826,7 +827,7 @@ async def run_stage3_training_loop(
                                     f"[Calibrate] Dispatched job {job_id}. Polling Colab for completion..."
                                 )
                                 while True:
-                                    await asyncio.sleep(3.0)
+                                    await asyncio.sleep(6.0)
                                     status_resp = await client.get(
                                         f"{colab_url}/stage3/calibrate/status/{job_id}",
                                         timeout=30.0,
