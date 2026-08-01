@@ -424,8 +424,12 @@ def extract_features_common(
         history_frames=[{view_name: s} for s in history_frames],
         text_prompt=text_prompt,
         ui_annotations=ui_annotations or {},
-        tactile=[0.0] * 16,
+        tactile=[[0.0] * 4 for _ in range(4)],
         proprioception=[0.0] * 58,
+        pos_trajectories=[],
+        episode_idx=0,
+        step_idx=0,
+        is_easy_task=True,
     )
     batch_obs_dicts, _ = extract_batch_stage3_obs_features([payload])
     return batch_obs_dicts[0][view_name]["features"]
