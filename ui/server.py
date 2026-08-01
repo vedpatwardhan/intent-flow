@@ -584,9 +584,6 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
-                "episode_idx": ep_idx,
-                "step_idx": env_step,
-                "pos_trajectories": pos_trajectories,
             }
             print(
                 f"Frame History: {len(frame_history)}, "
@@ -598,7 +595,14 @@ async def run_stage3_training_loop(
             try:
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
-                        f"{colab_url}/stage3/step", json=current_obs, timeout=2000.0
+                        f"{colab_url}/stage3/step",
+                        json={
+                            **current_obs,
+                            "episode_idx": ep_idx,
+                            "step_idx": env_step,
+                            "pos_trajectories": pos_trajectories,
+                        },
+                        timeout=2000.0,
                     )
                     if r.status_code == 200:
                         res = r.json()
@@ -845,6 +849,7 @@ async def run_stage3_training_loop(
                         f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                     )
                     import traceback
+
                     traceback.print_exc()
 
                 buffered_transitions = []

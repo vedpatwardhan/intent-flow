@@ -37,7 +37,10 @@ def ensure_wandb_init(project_name="latent-flow-stage3"):
 
 
 from colab_server_pkg.config import device
-from colab_server_pkg.feature_extractor import extract_stage3_obs_features
+from colab_server_pkg.feature_extractor import (
+    extract_stage3_obs_features,
+    extract_batch_stage3_obs_features,
+)
 from colab_server_pkg.image_utils import save_stage3_obs_feature_plots
 
 from models.adapters import (
@@ -108,11 +111,11 @@ class Stage3StepPayload(BaseModel):
     tactile: list[list[float]]
     text_prompt: str
     ui_annotations: dict
-    is_easy_task: bool = False
+    pos_trajectories: list[dict]
+    episode_idx: int
+    step_idx: int
+    is_easy_task: bool
     point_clouds: dict | None = None
-    episode_idx: int = 0
-    step_idx: int = 0
-    pos_trajectories: list[dict] | None = None
 
 
 class Stage3CalibrateTransition(BaseModel):
@@ -121,15 +124,15 @@ class Stage3CalibrateTransition(BaseModel):
     next_obs: Stage3StepPayload
     energy: float
     tactile: float
-    s_target: list[list[float]] | None = None
+    s_target: list[list[float]]
 
 
 class Stage3CalibratePayload(BaseModel):
     transitions: list[Stage3CalibrateTransition]
-    eval_mean_physical_distance: float | None = None
-    eval_energy_distance_correlation: float | None = None
-    episode_idx: int = 0
-    step_idx: int = 0
+    eval_mean_physical_distance: float
+    eval_energy_distance_correlation: float
+    episode_idx: int
+    step_idx: int
 
 
 class Stage3DistillPayload(BaseModel):
@@ -355,43 +358,42 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
-        # get all global and filtered features
+        # get all global and filtered features for current live observation
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
-                obs_dict, combined_obs = extract_stage3_obs_features(payload)
+                obs_dict, combined_obs = extract_batch_stage3_obs_features([payload])
+                # Get clean live state latent: Shape [1, 512]
+                s_t = encode_obs_to_latent(combined_obs, state)
 
-        with torch.no_grad():
-            # Get clean live state latent: Shape [1, 512]
-            s_t = encode_obs_to_latent(combined_obs, state)
-
-            # Encode positive IK trajectories into a target bank: Shape [M, 512]
-            s_target_bank_list = []
-            for tr_idx, tr in enumerate(payload.pos_trajectories):
-                # Get target latent state [1, 512]
-                tr_obs = Stage3StepPayload(
-                    frames=tr["frames"],
-                    history_frames=tr["history_frames"],
-                    proprioception=tr["proprioception"],
-                    tactile=payload.tactile,
-                    text_prompt=payload.text_prompt,
-                    ui_annotations=payload.ui_annotations,
+                # Encode positive IK trajectories into a target bank in 1 batched GPU call: Shape [M, 512]
+                tr_obs_payloads = [
+                    Stage3StepPayload(
+                        frames=tr["frames"],
+                        history_frames=tr["history_frames"],
+                        proprioception=tr["proprioception"],
+                        tactile=payload.tactile,
+                        text_prompt=payload.text_prompt,
+                        ui_annotations=payload.ui_annotations,
+                    )
+                    for tr in payload.pos_trajectories
+                ]
+                tr_obs_dicts_batch, tr_combined_obs_batch = (
+                    extract_batch_stage3_obs_features(tr_obs_payloads)
                 )
-                tr_obs_dict, tr_combined_obs = extract_stage3_obs_features(tr_obs)
 
-                # Save 4-panel diagnostic plot for target goal trajectory observation
+                # Save 4-panel diagnostic plot for first goal trajectory observation
                 if payload.episode_idx == 0 and payload.step_idx == 0:
                     save_stage3_obs_feature_plots(
-                        history_frames=tr_obs.history_frames,
-                        obs_features=tr_obs_dict,
-                        title_prefix=f"Goal Trajectory {tr_idx}",
-                        output_filename=f"debug_goal_tr_{tr_idx}_world_center.png",
+                        history_frames=tr_obs_payloads[0].history_frames,
+                        obs_features=tr_obs_dicts_batch[0],
+                        title_prefix="Goal Trajectory 0",
+                        output_filename="debug_goal_tr_0_world_center.png",
                         view_name="world_center",
                     )
 
-                s_tr_encoded = encode_obs_to_latent(tr_combined_obs, state)
-                s_target_bank_list.append(s_tr_encoded)
-
-            s_target_bank = torch.cat(s_target_bank_list, dim=0).detach()  # [5, 512]
+                s_target_bank = encode_obs_to_latent(
+                    tr_combined_obs_batch, state
+                ).detach()  # Shape [M, 512]
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7
@@ -658,47 +660,43 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
+        num_trans = len(payload.transitions)
         print(
-            f"[CALIBRATE JOB {job_id}] Processing {len(payload.transitions)} transitions..."
+            f"⚡ [CALIBRATE JOB {job_id}] Batched processing across {num_trans} transitions..."
         )
-        pbar = tqdm(
-            payload.transitions, desc=f"📥 [Calibrate Ingest {job_id}]", unit="trans"
+
+        current_obs_list = [trans.current_obs for trans in payload.transitions]
+        next_obs_list = [trans.next_obs for trans in payload.transitions]
+
+        # 1. Batched Feature Extraction across all transitions (1 single GPU forward pass for DINO/VGGT/CLIP/SAM)
+        _, combined_obs_t_batch = extract_batch_stage3_obs_features(current_obs_list)
+        obs_dict_next_batch, combined_obs_next_batch = (
+            extract_batch_stage3_obs_features(next_obs_list)
         )
-        for idx, trans in enumerate(pbar):
-            obs_dict_t, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
-            obs_dict_next, combined_obs_next = extract_stage3_obs_features(
-                trans.next_obs
+
+        # Save 4-panel diagnostic plot for first transition outcome features
+        if payload.episode_idx == 0 and payload.step_idx == 3:
+            save_stage3_obs_feature_plots(
+                history_frames=payload.transitions[0].next_obs.history_frames,
+                obs_features=obs_dict_next_batch[0],
+                title_prefix="Calibrate Track 0",
+                output_filename="debug_calibrate_track_0_world_center.png",
+                view_name="world_center",
             )
 
-            # Save 4-panel diagnostic plot for calibration transition outcome features
-            if idx == 0 and payload.episode_idx == 0 and payload.step_idx == 5:
-                save_stage3_obs_feature_plots(
-                    history_frames=trans.next_obs.history_frames,
-                    obs_features=obs_dict_next,
-                    title_prefix=f"Calibrate Track {idx}",
-                    output_filename=f"debug_calibrate_track_{idx}_world_center.png",
-                    view_name="world_center",
-                )
+        # 2. Batched MSAT GPU Latent Encoding across all transitions (2 batched GPU forward passes total)
+        with torch.no_grad():
+            with torch.amp.autocast("cuda"):
+                s_t_batch = encode_obs_to_latent(
+                    combined_obs_t_batch, state
+                ).detach()  # Shape [B, 512]
+                s_next_batch = encode_obs_to_latent(
+                    combined_obs_next_batch, state
+                ).detach()  # Shape [B, 512]
 
-            # Strict NaN / Inf Data Validation Audit Across Observations
-            for obs_name, combined in [
-                ("current_obs", combined_obs_t),
-                ("next_obs", combined_obs_next),
-            ]:
-                for k, v in combined.items():
-                    if torch.is_tensor(v) and (
-                        torch.isnan(v).any() or torch.isinf(v).any()
-                    ):
-                        print(
-                            f"⚠️ [NaN/Inf Warning] {obs_name} observation contains "
-                            f"NaN/Inf in feature: '{k}'!"
-                        )
-
-            with torch.no_grad():
-                with torch.amp.autocast("cuda"):
-                    # s_t, s_next: Shape [1, 512] (shared state latent dimension)
-                    s_t = encode_obs_to_latent(combined_obs_t, state).detach()
-                    s_next = encode_obs_to_latent(combined_obs_next, state).detach()
+        for idx, trans in enumerate(payload.transitions):
+            s_t = s_t_batch[idx : idx + 1]  # Shape [1, 512]
+            s_next = s_next_batch[idx : idx + 1]  # Shape [1, 512]
 
             # action: Shape [1, 406] (406 = 7 steps * 58 action_dim)
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
