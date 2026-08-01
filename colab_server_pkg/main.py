@@ -11,6 +11,7 @@ from typing import List, Optional
 # Pre-trained encoders loaders
 from colab_server_pkg.config import app, device
 from colab_server_pkg.models_state import models
+from colab_server_pkg.feature_extractor import extract_features_common
 from colab_server_pkg.stage3_endpoints import (
     Stage3StepPayload,
     Stage3CalibratePayload,
