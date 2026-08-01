@@ -802,6 +802,8 @@ async def run_stage3_training_loop(
                     "transitions": buffered_transitions,
                     "eval_mean_physical_distance": avg_phys_dist,
                     "eval_energy_distance_correlation": avg_corr,
+                    "episode_idx": ep_idx,
+                    "step_idx": env_step,
                 }
 
                 try:

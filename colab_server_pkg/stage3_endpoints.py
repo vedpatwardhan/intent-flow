@@ -128,6 +128,8 @@ class Stage3CalibratePayload(BaseModel):
     transitions: list[Stage3CalibrateTransition]
     eval_mean_physical_distance: float | None = None
     eval_energy_distance_correlation: float | None = None
+    episode_idx: int = 0
+    step_idx: int = 0
 
 
 class Stage3DistillPayload(BaseModel):
@@ -377,13 +379,14 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 tr_obs_dict, tr_combined_obs = extract_stage3_obs_features(tr_obs)
 
                 # Save 4-panel diagnostic plot for target goal trajectory observation
-                save_stage3_obs_feature_plots(
-                    history_frames=tr_obs.history_frames,
-                    obs_features=tr_obs_dict,
-                    title_prefix=f"Goal Trajectory {tr_idx}",
-                    output_filename=f"debug_goal_tr_{tr_idx}_world_center.png",
-                    view_name="world_center",
-                )
+                if payload.episode_idx == 0 and payload.step_idx == 0:
+                    save_stage3_obs_feature_plots(
+                        history_frames=tr_obs.history_frames,
+                        obs_features=tr_obs_dict,
+                        title_prefix=f"Goal Trajectory {tr_idx}",
+                        output_filename=f"debug_goal_tr_{tr_idx}_world_center.png",
+                        view_name="world_center",
+                    )
 
                 s_tr_encoded = encode_obs_to_latent(tr_combined_obs, state)
                 s_target_bank_list.append(s_tr_encoded)
@@ -668,7 +671,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
             )
 
             # Save 4-panel diagnostic plot for calibration transition outcome features
-            if idx == 0:
+            if idx == 0 and payload.episode_idx == 0 and payload.step_idx == 5:
                 save_stage3_obs_feature_plots(
                     history_frames=trans.next_obs.history_frames,
                     obs_features=obs_dict_next,
