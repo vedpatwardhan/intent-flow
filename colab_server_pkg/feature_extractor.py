@@ -289,18 +289,8 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 "motion_field": motion_field,
                 "pil_frame": pil_frame,
                 "task_isolated_features": {
-                    "dino_subspace": torch.tensor(
-                        pad_features(
-                            torch.tensor(
-                                dino_subspace.flatten()[:384], dtype=torch.float32
-                            ),
-                            384,
-                        ),
-                        device=device,
-                    ),
-                    "motion_field_subspace": torch.tensor(
-                        motion_field_subspace, dtype=torch.float32, device=device
-                    ),
+                    "dino_subspace": dino_subspace,
+                    "motion_field_subspace": motion_field_subspace,
                     "sam_mask": sam_mask,
                     "sam_mask_224": sam_mask_224,
                     "combined_mask_224": combined_mask_224,
