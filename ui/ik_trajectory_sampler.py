@@ -98,7 +98,7 @@ def generate_ik_trajectories(
         for cam in CAM_NAMES:
             sim.renderer.update_scene(sim.data, camera=cam)
             rgb = sim.renderer.render().copy()
-            observations[cam] = [rgb]
+            observations[cam] = [frame_to_base64(rgb)]
 
         for h in range(7):
             alpha = (h + 1) / 7.0

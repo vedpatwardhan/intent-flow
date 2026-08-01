@@ -484,7 +484,7 @@ async def run_stage3_training_loop(
                 target_3d,
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
-                n=10,
+                n=8,
                 scale_multiplier=0.9,
                 is_positive=False,
             )
