@@ -363,7 +363,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_batch_stage3_obs_features([payload])
                 # Get clean live state latent: Shape [1, 512]
+                print("processing s_t")
                 s_t = encode_obs_to_latent(combined_obs, state)
+                print(f"s_t shape: {s_t.shape}")
 
                 # Encode positive IK trajectories into a target bank in 1 batched GPU call: Shape [M, 512]
                 tr_obs_payloads = [
@@ -396,17 +398,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     )
 
                 # Shape [M, 512]
-                s_target_bank_list = [
-                    encode_obs_to_latent(
-                        {
-                            k: v[i].unsqueeze(0)
-                            for k, v in tr_combined_obs_batch.items()
-                        },
-                        state,
-                    )
-                    for i in range(len(tr_obs_payloads))
-                ]
-                s_target_bank = torch.cat(s_target_bank_list, dim=0).detach()
+                print("processing goal trajectories")
+                s_target_bank = encode_obs_to_latent(tr_combined_obs_batch, state)
+                print(f"s_target_bank shape: {s_target_bank.shape}")
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7

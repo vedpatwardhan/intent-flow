@@ -376,14 +376,18 @@ def extract_batch_stage3_obs_features(payload_list: list):
         "tactile": torch.stack(
             [b_dict[any_view_name]["tactile"].squeeze(0) for b_dict in batch_obs_dicts],
             dim=0,
-        ),  # Shape [B, 16]
+        ).unsqueeze(
+            1
+        ),  # Shape [B, 1, 16]
         "proprioception": torch.stack(
             [
                 b_dict[any_view_name]["proprioception"].squeeze(0)
                 for b_dict in batch_obs_dicts
             ],
             dim=0,
-        ),  # Shape [B, 58]
+        ).unsqueeze(
+            1
+        ),  # Shape [B, 1, 58]
     }
 
     return batch_obs_dicts, combined_obs_batch
