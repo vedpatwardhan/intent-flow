@@ -62,22 +62,15 @@ class MultiStreamActionTransformer(nn.Module):
             mod_indicator = self.modality_embeddings[key].expand(
                 batch_size, tokens.size(1), -1
             )
-            print(
-                f"Tokens shape: {tokens.shape}, "
-                f"modality_emb shape: {self.modality_embeddings[key].shape}, "
-                f"modality indicator shape: {mod_indicator.shape}"
-            )
             tokens = tokens + mod_indicator
             tokens_list.append(tokens)
 
         # Concatenate all streams along the sequence dimension
         # [Batch, TotalSeqLen, LatentDim]
         fused_sequence = torch.cat(tokens_list, dim=1)
-        print(f"fused_sequence shape: {fused_sequence.shape}")
 
         # Process through transformer
         transformed = self.transformer(fused_sequence)
-        print(f"transformed shape: {transformed.shape}")
 
         # --- NEW REGISTRATION BLOCK ---
         with torch.no_grad():

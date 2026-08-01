@@ -363,7 +363,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_batch_stage3_obs_features([payload])
                 # Get clean live state latent: Shape [1, 512]
-                print("processing s_t")
                 s_t = encode_obs_to_latent(combined_obs, state)
                 print(f"s_t shape: {s_t.shape}")
 
@@ -398,7 +397,6 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     )
 
                 # Shape [M, 512]
-                print("processing goal trajectories")
                 s_target_bank = encode_obs_to_latent(tr_combined_obs_batch, state)
                 print(f"s_target_bank shape: {s_target_bank.shape}")
 
