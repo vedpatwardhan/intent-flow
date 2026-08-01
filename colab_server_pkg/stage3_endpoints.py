@@ -395,9 +395,14 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         view_name="world_center",
                     )
 
-                s_target_bank = encode_obs_to_latent(
-                    tr_combined_obs_batch, state
-                ).detach()  # Shape [M, 512]
+                # Shape [M, 512]
+                s_target_bank_list = [
+                    encode_obs_to_latent(
+                        {k: v[i] for k, v in tr_combined_obs_batch.items()}, state
+                    )
+                    for i in range(len(tr_obs_payloads))
+                ]
+                s_target_bank = torch.cat(s_target_bank_list, dim=0).detach()
 
         # Initialize the 2D Space-Time Grid (Horizon=7, Joints=58)
         horizon = 7
