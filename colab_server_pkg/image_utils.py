@@ -392,15 +392,3 @@ def save_stage3_obs_feature_plots(
         )
     except Exception as e:
         print(f"⚠️ Error saving stage3 observation feature plot: {e}")
-
-
-def save_stage3_calibrate_plots(
-    trans_payload, obs_dict_next, view_name: str = "world_center", track_idx: int = 0
-):
-    save_stage3_obs_feature_plots(
-        history_frames=trans_payload.next_obs.history_frames,
-        obs_features=obs_dict_next,
-        title_prefix=f"Calibrate Track {track_idx}",
-        output_filename=f"debug_calibrate_track_{track_idx}_{view_name}.png",
-        view_name=view_name,
-    )

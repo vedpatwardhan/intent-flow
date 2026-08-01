@@ -38,11 +38,7 @@ def ensure_wandb_init(project_name="latent-flow-stage3"):
 
 from colab_server_pkg.config import device
 from colab_server_pkg.feature_extractor import extract_stage3_obs_features
-from colab_server_pkg.image_utils import (
-    decode_base64_image,
-    save_stage3_obs_feature_plots,
-    save_stage3_calibrate_plots,
-)
+from colab_server_pkg.image_utils import save_stage3_obs_feature_plots
 
 from models.adapters import (
     VisualAdapter,
@@ -676,11 +672,12 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Save 4-panel diagnostic plot for calibration transition outcome features
             if idx == 0:
-                save_stage3_calibrate_plots(
-                    trans_payload=trans,
-                    obs_dict_next=obs_dict_next,
+                save_stage3_obs_feature_plots(
+                    history_frames=trans.next_obs.history_frames,
+                    obs_features=obs_dict_next,
+                    title_prefix=f"Calibrate Track {idx}",
+                    output_filename=f"debug_calibrate_track_{idx}_world_center.png",
                     view_name="world_center",
-                    track_idx=idx,
                 )
 
             # Strict NaN / Inf Data Validation Audit Across Observations
