@@ -434,7 +434,8 @@ async def run_stage3_training_loop(
     }
 
     num_epochs = 10
-    max_steps = 25
+    max_steps = 16
+    calibrate_steps = 4
 
     # --- STAGE 3 IK TRAJECTORY GENERATION EVALUATION HOOK (INSERTED ABOVE LINE 414) ---
     print(f"UI ANNOTATIONS: {ui_annotations}")
@@ -786,7 +787,7 @@ async def run_stage3_training_loop(
                 accumulated_corrs.append(step_energy_dist_corr)
 
             # Report calibration payload to Colab once every 5 steps (or on final step)
-            if (env_step + 1) % 5 == 0 or env_step == max_steps - 1:
+            if (env_step + 1) % calibrate_steps == 0 or env_step == max_steps - 1:
                 avg_phys_dist = (
                     float(np.mean(accumulated_phys_dists))
                     if len(accumulated_phys_dists) > 0
@@ -843,6 +844,8 @@ async def run_stage3_training_loop(
                     print(
                         f"[Training Error] Episode {ep_idx + 1} Step {env_step} Colab calibrate failed: {e}"
                     )
+                    import traceback
+                    traceback.print_exc()
 
                 buffered_transitions = []
                 accumulated_phys_dists = []
