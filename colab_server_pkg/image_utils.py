@@ -294,8 +294,9 @@ def save_stage3_debug_plots(payload, obs_dict: dict, goal_images: dict):
             axes_goals[idx].axis("off")
         plt.tight_layout()
         goals_output_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(__file__),
             "..",
+            "visualizations",
             f"debug_goal_states_{view_name}.png",
         )
         plt.savefig(goals_output_path)
@@ -378,8 +379,6 @@ def save_stage3_obs_feature_plots(
             os.path.join(
                 os.path.dirname(__file__),
                 "..",
-                "logs",
-                "training",
                 "visualizations",
             )
         )
