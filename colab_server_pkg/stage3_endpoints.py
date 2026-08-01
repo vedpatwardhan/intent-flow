@@ -365,14 +365,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             # Encode positive IK trajectories into a target bank: Shape [M, 512]
             s_target_bank_list = []
             for tr_idx, tr in enumerate(payload.pos_trajectories):
-                # Construct an observation payload from trajectory terminal step
-                observations = tr["observations"]
-
                 # Get target latent state [1, 512]
                 tr_obs = Stage3StepPayload(
-                    frames=observations[-1],
-                    history_frames=observations[:-1],
-                    proprioception=tr["actions"],
+                    frames=tr["frames"],
+                    history_frames=tr["history_frames"],
+                    proprioception=tr["proprioception"],
                     tactile=payload.tactile,
                     text_prompt=payload.text_prompt,
                     ui_annotations=payload.ui_annotations,

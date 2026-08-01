@@ -140,8 +140,10 @@ def generate_ik_trajectories(
             {
                 "track_idx": k,
                 "target_pos": target_k.tolist(),
+                "frames": final_observations[-1],
+                "history_frames": final_observations,
+                "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
                 "actions": final_actions.tolist(),
-                "observations": final_observations,
                 "is_positive": is_positive,
             }
         )
