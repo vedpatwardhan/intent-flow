@@ -404,3 +404,28 @@ def extract_stage3_obs_features(payload):
     obs_dict_batch, combined_obs_batch = extract_batch_stage3_obs_features([payload])
     single_combined_obs = {k: v.squeeze(0) for k, v in combined_obs_batch.items()}
     return obs_dict_batch[0], single_combined_obs
+
+
+def extract_features_common(
+    frame_str: str,
+    history_frames: list[str],
+    text_prompt: str,
+    ui_annotations: dict[str, list],
+    view_name: str = "world_center",
+):
+    """
+    Restored single-frame feature extraction helper for the /process endpoint in main.py.
+    Wraps parameters into a Stage3StepPayload and delegates to extract_batch_stage3_obs_features.
+    """
+    from colab_server_pkg.stage3_endpoints import Stage3StepPayload
+
+    payload = Stage3StepPayload(
+        frames={view_name: frame_str},
+        history_frames=[{view_name: s} for s in history_frames],
+        text_prompt=text_prompt,
+        ui_annotations=ui_annotations or {},
+        tactile=[0.0] * 16,
+        proprioception=[0.0] * 58,
+    )
+    batch_obs_dicts, _ = extract_batch_stage3_obs_features([payload])
+    return batch_obs_dicts[0][view_name]["features"]
