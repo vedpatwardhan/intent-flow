@@ -398,7 +398,11 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 # Shape [M, 512]
                 s_target_bank_list = [
                     encode_obs_to_latent(
-                        {k: v[i] for k, v in tr_combined_obs_batch.items()}, state
+                        {
+                            k: v[i].unsqueeze(0)
+                            for k, v in tr_combined_obs_batch.items()
+                        },
+                        state,
                     )
                     for i in range(len(tr_obs_payloads))
                 ]
