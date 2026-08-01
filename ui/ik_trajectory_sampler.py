@@ -115,18 +115,20 @@ def generate_ik_trajectories(
             )
 
             # Render frames across all 5 cameras
-            for cam in CAM_NAMES:
-                sim.renderer.update_scene(sim.data, camera=cam)
-                rgb = sim.renderer.render().copy()
-                observations[cam].append(frame_to_base64(rgb))
+            if h in [1, 3, 6]:
+                for cam in CAM_NAMES:
+                    sim.renderer.update_scene(sim.data, camera=cam)
+                    rgb = sim.renderer.render().copy()
+                    observations[cam].append(frame_to_base64(rgb))
 
         # Constructed the final observations in right format
         final_observations = []
-        for cam in observations:
-            final_obs = dict()
-            for frame in observations[cam]:
-                final_obs[cam] = frame
-            final_observations.append(final_obs)
+        for cam_idx, cam in enumerate(CAM_NAMES):
+            for frame_idx, frame in enumerate(observations[cam]):
+                if cam_idx == 0:
+                    final_observations.append({cam: frame})
+                else:
+                    final_observations[frame_idx][cam] = frame
 
         # Pad actions [7, 32] to [7, 58]
         actions = np.array(actions)
@@ -163,7 +165,7 @@ def save_ik_trajectory_diagnostic_plots(
         # --- Panel 1: Positive Trajectories (D+) ---
         ax1 = fig.add_subplot(121, projection="3d")
         for tr in pos_trajectories:
-            t3d = tr["target_3d"]
+            t3d = tr["target_pos"]
             ax1.scatter(t3d[0], t3d[1], t3d[2], color="green", s=60, label="D+ Target")
         ax1.set_title("1. Positive IK Trajectories (D+)", fontsize=10)
         ax1.set_xlabel("X (m)")
@@ -173,7 +175,7 @@ def save_ik_trajectory_diagnostic_plots(
         # --- Panel 2: Negative Distractor Trajectories (D-) ---
         ax2 = fig.add_subplot(122, projection="3d")
         for tr in neg_trajectories:
-            t3d = tr["target_3d"]
+            t3d = tr["target_pos"]
             ax2.scatter(
                 t3d[0], t3d[1], t3d[2], color="red", s=40, label="D- Distractor"
             )
