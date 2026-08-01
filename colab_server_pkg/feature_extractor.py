@@ -40,9 +40,11 @@ def get_batch_dino_attn_maps(frames_list: list[np.ndarray]) -> torch.Tensor:
 
         # Apply vectorized 70th percentile thresholding per batch item and scale by 0.8
         attn_flat = attn_norm_batch.view(B, -1).float()
-        p70 = torch.quantile(attn_flat, 0.70, dim=-1, keepdim=True).unsqueeze(
-            -1
-        ).to(attn_norm_batch.dtype)  # Shape [B, 1, 1]
+        p70 = (
+            torch.quantile(attn_flat, 0.70, dim=-1, keepdim=True)
+            .unsqueeze(-1)
+            .to(attn_norm_batch.dtype)
+        )  # Shape [B, 1, 1]
         attn_norm_batch = (
             torch.where(
                 attn_norm_batch >= p70,

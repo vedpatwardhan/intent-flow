@@ -374,6 +374,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         tactile=payload.tactile,
                         text_prompt=payload.text_prompt,
                         ui_annotations=payload.ui_annotations,
+                        pos_trajectories=[],
+                        episode_idx=0,
+                        step_idx=0,
+                        is_easy_task=True,
                     )
                     for tr in payload.pos_trajectories
                 ]
