@@ -374,12 +374,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     text_prompt=payload.text_prompt,
                     ui_annotations=payload.ui_annotations,
                 )
-                _, tr_combined_obs = extract_stage3_obs_features(tr_obs)
+                tr_obs_dict, tr_combined_obs = extract_stage3_obs_features(tr_obs)
 
                 # Save 4-panel diagnostic plot for target goal trajectory observation
                 save_stage3_obs_feature_plots(
-                    history_frames=tr_obs.history_frames + [tr_obs.frames],
-                    obs_features=tr_combined_obs,
+                    history_frames=tr_obs.history_frames,
+                    obs_features=tr_obs_dict,
                     title_prefix=f"Goal Trajectory {tr_idx}",
                     output_filename=f"debug_goal_tr_{tr_idx}_world_center.png",
                     view_name="world_center",
