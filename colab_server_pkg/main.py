@@ -114,6 +114,8 @@ async def process_frame(payload: FramePayload):
         history_frames = payload.history_frames
         if len(history_frames) == 2:
             history_frames = [*history_frames, *history_frames]
+        if len(history_frames) < 4:
+            raise IndexError("Need atleast 2 frames in the history to operate")
         features = extract_features_common(
             payload.frame,  # str
             history_frames,  # list[str]
