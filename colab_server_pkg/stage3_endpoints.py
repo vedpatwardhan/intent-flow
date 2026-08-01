@@ -38,6 +38,11 @@ def ensure_wandb_init(project_name="latent-flow-stage3"):
 
 from colab_server_pkg.config import device
 from colab_server_pkg.feature_extractor import extract_stage3_obs_features
+from colab_server_pkg.image_utils import (
+    decode_base64_image,
+    save_stage3_obs_feature_plots,
+    save_stage3_calibrate_plots,
+)
 
 from models.adapters import (
     VisualAdapter,
@@ -357,25 +362,13 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             with torch.amp.autocast("cuda"):
                 obs_dict, combined_obs = extract_stage3_obs_features(payload)
 
-                # Cache target goal representation strictly at Episode 0 Step 0
-                is_start_of_training = (
-                    payload.episode_idx == 0 and payload.step_idx == 0
-                ) or not hasattr(state, "active_goal_combined_obs")
-
-                if is_start_of_training:
-                    oracle_payload = Stage3StepPayload(**payload.oracle_goal_obs)
-                    _, goal_combined_obs = extract_stage3_obs_features(oracle_payload)
-                    state.active_goal_combined_obs = goal_combined_obs
-                else:
-                    goal_combined_obs = state.active_goal_combined_obs
-
         with torch.no_grad():
             # Get clean live state latent: Shape [1, 512]
             s_t = encode_obs_to_latent(combined_obs, state)
 
             # Encode positive IK trajectories into a target bank: Shape [M, 512]
             s_target_bank_list = []
-            for tr in payload.pos_trajectories:
+            for tr_idx, tr in enumerate(payload.pos_trajectories):
                 # Construct an observation payload from trajectory terminal step
                 observations = tr["observations"]
 
@@ -389,6 +382,16 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     ui_annotations=payload.ui_annotations,
                 )
                 _, tr_combined_obs = extract_stage3_obs_features(tr_obs)
+
+                # Save 4-panel diagnostic plot for target goal trajectory observation
+                save_stage3_obs_feature_plots(
+                    history_frames=tr_obs.history_frames + [tr_obs.frames],
+                    obs_features=tr_combined_obs,
+                    title_prefix=f"Goal Trajectory {tr_idx}",
+                    output_filename=f"debug_goal_tr_{tr_idx}_world_center.png",
+                    view_name="world_center",
+                )
+
                 s_tr_encoded = encode_obs_to_latent(tr_combined_obs, state)
                 s_target_bank_list.append(s_tr_encoded)
 
@@ -665,11 +668,20 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         pbar = tqdm(
             payload.transitions, desc=f"📥 [Calibrate Ingest {job_id}]", unit="trans"
         )
-        for trans in pbar:
+        for idx, trans in enumerate(pbar):
             obs_dict_t, combined_obs_t = extract_stage3_obs_features(trans.current_obs)
             obs_dict_next, combined_obs_next = extract_stage3_obs_features(
                 trans.next_obs
             )
+
+            # Save 4-panel diagnostic plot for calibration transition outcome features
+            if idx == 0:
+                save_stage3_calibrate_plots(
+                    trans_payload=trans,
+                    obs_dict_next=obs_dict_next,
+                    view_name="world_center",
+                    track_idx=idx,
+                )
 
             # Strict NaN / Inf Data Validation Audit Across Observations
             for obs_name, combined in [

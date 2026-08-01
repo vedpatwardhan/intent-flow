@@ -302,43 +302,50 @@ def save_stage3_debug_plots(payload, obs_dict: dict, goal_images: dict):
         plt.close()
 
 
-def save_stage3_calibrate_plots(
-    trans_payload, obs_dict_next, view_name: str = "world_center", track_idx: int = 0
+def save_stage3_obs_feature_plots(
+    history_frames: list,
+    obs_features: dict,
+    title_prefix: str,
+    output_filename: str,
+    view_name: str = "world_center",
 ):
     """
-    Saves a 4-panel diagnostic PNG plot verifying calibration transition observation features:
-    1. Transition Start Frame (history_frames[0])
-    2. Transition Outcome Frame (history_frames[-1])
-    3. Outcome Frame DINOv3 Feature Map Overlay
-    4. 4-Frame Accumulated VGGT Motion Trajectory Field Overlay
+    Renders a unified 4-panel diagnostic PNG plot for any observation feature set:
+    1. Start Posture (history_frames[-4])
+    2. Outcome Posture (history_frames[-1])
+    3. DINOv3 Feature Map Overlay
+    4. 4-Frame VGGT Motion Vector Field Overlay
     """
     try:
-        history_frames = trans_payload.next_obs.history_frames
-        start_frame_str = history_frames[-4][view_name]
-        outcome_frame_str = history_frames[-1][view_name]
+        start_frame_str = (
+            history_frames[-4][view_name]
+            if isinstance(history_frames[-4], dict)
+            else history_frames[-4]
+        )
+        outcome_frame_str = (
+            history_frames[-1][view_name]
+            if isinstance(history_frames[-1], dict)
+            else history_frames[-1]
+        )
         start_np = decode_base64_image(start_frame_str)
         outcome_np = decode_base64_image(outcome_frame_str)
 
         fig, axes = plt.subplots(1, 4, figsize=(20, 5))
         img_h, img_w, _ = outcome_np.shape
 
-        # --- Panel 1: Transition Start Posture ---
+        # --- Panel 1: Start Posture ---
         axes[0].imshow(start_np)
-        axes[0].set_title(
-            f"1. Track {track_idx} Start Posture ({view_name})", fontsize=10
-        )
+        axes[0].set_title(f"1. {title_prefix} Start ({view_name})", fontsize=10)
         axes[0].axis("off")
 
-        # --- Panel 2: Transition Outcome Posture ---
+        # --- Panel 2: Outcome Posture ---
         axes[1].imshow(outcome_np)
-        axes[1].set_title(
-            f"2. Track {track_idx} Outcome Posture ({view_name})", fontsize=10
-        )
+        axes[1].set_title(f"2. {title_prefix} Outcome ({view_name})", fontsize=10)
         axes[1].axis("off")
 
-        # --- Panel 3: Outcome DINOv3 Feature Map Overlay ---
-        dino_map = obs_dict_next[view_name]["vision"].squeeze(0)[:196].view(14, 14)
-        dino_map = dino_map.detach().cpu().numpy()
+        # --- Panel 3: DINOv3 Feature Map Overlay ---
+        dino_tensor = obs_features[view_name]["vision"].squeeze(0)[:196].view(14, 14)
+        dino_map = dino_tensor.detach().cpu().numpy()
 
         axes[2].imshow(outcome_np)
         axes[2].imshow(
@@ -348,11 +355,11 @@ def save_stage3_calibrate_plots(
             extent=[0, img_w, img_h, 0],
             interpolation="bilinear",
         )
-        axes[2].set_title(f"3. Track {track_idx} DINOv3 Map", fontsize=10)
+        axes[2].set_title(f"3. {title_prefix} DINOv3 Map", fontsize=10)
         axes[2].axis("off")
 
         # --- Panel 4: 4-Frame Accumulated VGGT Motion Field Overlay ---
-        vggt_tensor = obs_dict_next[view_name]["vggt"].squeeze(0)
+        vggt_tensor = obs_features[view_name]["vggt"].squeeze(0)
         vggt_map = vggt_tensor.detach().cpu().numpy()
 
         axes[3].imshow(outcome_np)
@@ -363,17 +370,37 @@ def save_stage3_calibrate_plots(
             extent=[0, img_w, img_h, 0],
             interpolation="bilinear",
         )
-        axes[3].set_title(f"4. Track {track_idx} VGGT Motion Field", fontsize=10)
+        axes[3].set_title(f"4. {title_prefix} VGGT Motion Field", fontsize=10)
         axes[3].axis("off")
 
         plt.tight_layout(rect=[0, 0, 1, 0.93])
-        output_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            f"debug_calibrate_track_{track_idx}_{view_name}.png",
+        output_dir = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "logs",
+                "training",
+                "visualizations",
+            )
         )
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_filename)
         plt.savefig(output_path, dpi=150)
         plt.close()
-        print(f"📸 Saved 4-Panel Calibrate Track {track_idx} plot to: {output_path}")
+        print(
+            f"📸 Saved 4-Panel Observation Feature Plot ({title_prefix}) to: {output_path}"
+        )
     except Exception as e:
-        print(f"Error saving stage3 calibrate diagnostic plot: {e}")
+        print(f"⚠️ Error saving stage3 observation feature plot: {e}")
+
+
+def save_stage3_calibrate_plots(
+    trans_payload, obs_dict_next, view_name: str = "world_center", track_idx: int = 0
+):
+    save_stage3_obs_feature_plots(
+        history_frames=trans_payload.next_obs.history_frames,
+        obs_features=obs_dict_next,
+        title_prefix=f"Calibrate Track {track_idx}",
+        output_filename=f"debug_calibrate_track_{track_idx}_{view_name}.png",
+        view_name=view_name,
+    )
