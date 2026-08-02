@@ -306,8 +306,10 @@ def build_stage3_obs_payload(
         "proprioception": sim.unscaler.scale_state(sim.get_state_32()).tolist(),
         "tactile": tactile_grid,
         "text_prompt": text_prompt or "grasp cube",
-        "ui_annotations": ui_annotations
-        or {"crops": [], "vectors": [], "segments": []},
+        "ui_annotations": (
+            ui_annotations or {"crops": [], "vectors": [], "segments": []}
+        ),
+        "pos_trajectories": [],
         "is_easy_task": False,
         "episode_idx": ep_idx,
         "step_idx": env_step,
