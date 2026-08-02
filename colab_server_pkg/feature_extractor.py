@@ -455,6 +455,10 @@ def extract_features_common(
         episode_idx=0,
         step_idx=0,
         is_easy_task=True,
+        eval_mean_physical_distance=0,
+        eval_median_physical_distance=0,
+        eval_min_physical_distance=0,
+        eval_energy_distance_correlation=0
     )
     batch_obs_dicts, _ = extract_batch_stage3_obs_features([payload])
     return batch_obs_dicts[0][view_name]["features"]

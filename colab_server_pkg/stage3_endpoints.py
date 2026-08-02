@@ -376,6 +376,10 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         episode_idx=0,
                         step_idx=0,
                         is_easy_task=True,
+                        eval_mean_physical_distance=0,
+                        eval_median_physical_distance=0,
+                        eval_min_physical_distance=0,
+                        eval_energy_distance_correlation=0
                     )
                     for tr in payload.pos_trajectories
                 ]
@@ -1121,7 +1125,13 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                             curr_frames,
                             curr_frames,
                         ]
-                        eval_payloads[name] = Stage3StepPayload(**raw_payload)
+                        eval_payloads[name] = Stage3StepPayload(
+                            **raw_payload,
+                            eval_mean_physical_distance=0,
+                            eval_median_physical_distance=0,
+                            eval_min_physical_distance=0,
+                            eval_energy_distance_correlation=0
+                        )
             if eval_payloads:
                 run_exemplar_diagnostic_check(
                     batch_s_target[0].unsqueeze(0), state, eval_payloads
