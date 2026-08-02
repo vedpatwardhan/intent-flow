@@ -299,10 +299,6 @@ def ensure_stage3_models():
         state.stage3_models["gnn_library"].specialists.load_state_dict(
             checkpoint["gnn_specialists"]
         )
-        if "latent_adapter" in checkpoint:
-            state.stage3_models["latent_adapter"].load_state_dict(
-                checkpoint["latent_adapter"]
-            )
     elif os.path.exists(s2_ckpt_path):
         print(f"[Colab] Loading Stage 2 checkpoint from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
@@ -1165,8 +1161,6 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             "state_adapter": state.stage3_models["state_adapter"].state_dict(),
             "action_down_proj": state.stage3_models["action_down_proj"].state_dict(),
             "predictor": state.stage3_models["predictor"].state_dict(),
-            "goal_attention": state.stage3_models["goal_attention"].state_dict(),
-            "latent_adapter": state.stage3_models["latent_adapter"].state_dict(),
             "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
             "gnn_specialists": state.stage3_models[
                 "gnn_library"
