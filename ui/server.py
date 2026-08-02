@@ -758,51 +758,43 @@ async def run_stage3_training_loop(
             )
 
             # Compute correlation between latent energies and physical distances across ALL 16 candidate tracks
-            step_mean_phys_dist = None
-            step_median_phys_dist = None
-            step_min_phys_dist = None
-            step_energy_dist_corr = None
-            if (
-                hasattr(sim, "_step_physical_distances")
-                and len(sim._step_physical_distances) > 0
-            ):
-                phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
-                energies_np = np.array(energy_ensemble, dtype=np.float32)
-                step_mean_phys_dist = float(np.mean(phys_dists_np))
-                step_median_phys_dist = float(np.median(phys_dists_np))
-                step_min_phys_dist = float(np.min(phys_dists_np))
-
-                if len(phys_dists_np) <= 1 or len(phys_dists_np) != len(energies_np):
-                    raise RuntimeError(
-                        f"❌ [Telemetry Error] Shape mismatch: phys_dists ({len(phys_dists_np)}) vs candidate energies ({len(energies_np)})"
-                    )
-
-                std_dist = np.std(phys_dists_np)
-                std_energy = np.std(energies_np)
-
-                if std_dist == 0.0 or std_energy == 0.0:
-                    raise RuntimeError(
-                        f"❌ [Telemetry Error] Zero variance in candidate rollouts: std_dist={std_dist:.6f}, std_energy={std_energy:.6f}"
-                    )
-
-                corr_mat = np.corrcoef(phys_dists_np, energies_np)
-                val = corr_mat[0, 1]
-                if np.isnan(val):
-                    raise RuntimeError(
-                        "❌ [Telemetry Error] Energy-distance correlation computed as NaN!"
-                    )
-
-                sim._last_step_mean_phys_dist = step_mean_phys_dist
-                sim._last_step_median_phys_dist = step_median_phys_dist
-                sim._last_step_min_phys_dist = step_min_phys_dist
-                sim._last_step_energy_dist_corr = step_energy_dist_corr
-
-                step_energy_dist_corr = float(val)
-                print(
-                    f"📈 [Telemetry Summary] Step {env_step} -> Effector-Cube Dist (16 tracks) Mean: {step_mean_phys_dist:.4f}m | Median: {step_median_phys_dist:.4f}m | Min: {step_min_phys_dist:.4f}m | Energy-Dist Corr: {step_energy_dist_corr:.4f}"
+            phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
+            energies_np = np.array(energy_ensemble, dtype=np.float32)
+            step_mean_phys_dist = float(np.mean(phys_dists_np))
+            step_median_phys_dist = float(np.median(phys_dists_np))
+            step_min_phys_dist = float(np.min(phys_dists_np))
+            if len(phys_dists_np) <= 1 or len(phys_dists_np) != len(energies_np):
+                raise RuntimeError(
+                    f"❌ [Telemetry Error] Shape mismatch: phys_dists ({len(phys_dists_np)}) vs candidate energies ({len(energies_np)})"
                 )
 
-                sim._step_physical_distances = []
+            std_dist = np.std(phys_dists_np)
+            std_energy = np.std(energies_np)
+            if std_dist == 0.0 or std_energy == 0.0:
+                raise RuntimeError(
+                    f"❌ [Telemetry Error] Zero variance in candidate rollouts: std_dist={std_dist:.6f}, std_energy={std_energy:.6f}"
+                )
+
+            corr_mat = np.corrcoef(phys_dists_np, energies_np)
+            step_energy_dist_corr = corr_mat[0, 1]
+            if np.isnan(step_energy_dist_corr):
+                raise RuntimeError(
+                    "❌ [Telemetry Error] Energy-distance correlation computed as NaN!"
+                )
+
+            sim._last_step_mean_phys_dist = step_mean_phys_dist
+            sim._last_step_median_phys_dist = step_median_phys_dist
+            sim._last_step_min_phys_dist = step_min_phys_dist
+            sim._last_step_energy_dist_corr = step_energy_dist_corr
+            sim._step_physical_distances = []
+
+            print(
+                f"📈 [Telemetry Summary] Step {env_step} -> Effector-Cube Dist (16 tracks) "
+                f"Mean: {step_mean_phys_dist:.4f}m | "
+                f"Median: {step_median_phys_dist:.4f}m | "
+                f"Min: {step_min_phys_dist:.4f}m | "
+                f"Energy-Dist Corr: {step_energy_dist_corr:.4f}"
+            )
 
             # Rewind physics back to the committed path's final outcome to capture its state
             sim.data.qpos[:] = committed_qpos
@@ -811,7 +803,6 @@ async def run_stage3_training_loop(
             mujoco.mj_forward(sim.model, sim.data)
 
             # Map outer variables to the committed outcome
-            next_obs = committed_next_obs
             touch_index_next = committed_touch_index_next
             touch_thumb_next = committed_touch_thumb_next
 

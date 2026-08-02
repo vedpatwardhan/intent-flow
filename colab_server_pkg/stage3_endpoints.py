@@ -379,7 +379,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         eval_mean_physical_distance=0,
                         eval_median_physical_distance=0,
                         eval_min_physical_distance=0,
-                        eval_energy_distance_correlation=0
+                        eval_energy_distance_correlation=0,
                     )
                     for tr in payload.pos_trajectories
                 ]
@@ -1130,7 +1130,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                             eval_mean_physical_distance=0,
                             eval_median_physical_distance=0,
                             eval_min_physical_distance=0,
-                            eval_energy_distance_correlation=0
+                            eval_energy_distance_correlation=0,
                         )
             if eval_payloads:
                 run_exemplar_diagnostic_check(
