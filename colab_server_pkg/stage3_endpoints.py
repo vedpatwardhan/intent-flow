@@ -171,22 +171,20 @@ def encode_obs_to_latent(obs_dict, state):
 
 def run_exemplar_diagnostic_check(s_target, state, eval_payloads):
     """
-    Computes direct latent distance from a set of fixed environment states to the current target anchor.
-    eval_payloads: Dict containing your pre-captured Near-Goal, Mid-Phase, and OOD observation structures.
+    Computes direct latent distance from a set of fixed environment states to the current target anchor s_target [1, 512].
+    eval_payloads: Dict containing pre-captured Near-Goal, Mid-Phase, and OOD observation structures.
     """
-    import colab_server_pkg.models_state as model_state
-
     diagnostic_distances = {}
     with torch.no_grad():
         with torch.amp.autocast("cuda"):
-            for name, payload in eval_payloads.items():
-                # 1. Extract observation dictionaries natively
-                obs_dict, combined_obs = extract_stage3_obs_features(payload)
-                # 2. Encode to the shared latent state space
-                s_encoded = encode_obs_to_latent(combined_obs, model_state)
-                # 3. Calculate mean squared distance directly to your goal anchor
-                dist = torch.mean((s_encoded - s_target) ** 2).item()
-                diagnostic_distances[f"exemplar_distance/{name}"] = dist
+            payloads = list(eval_payloads.values())
+            obs_dict, combined_obs = extract_batch_stage3_obs_features(payloads)
+            s_encoded = encode_obs_to_latent(combined_obs, state)  # Shape [K, 512]
+
+            # Calculate mean squared distance directly to single target anchor [1, 512]
+            dist = torch.mean((s_encoded - s_target) ** 2, dim=1)  # Shape [K]
+            for idx, name in enumerate(eval_payloads):
+                diagnostic_distances[f"exemplar_distance/{name}"] = dist[idx].item()
 
     print(f"📊 Exemplar Goal Distances: {json.dumps(diagnostic_distances, indent=2)}")
     if HAS_WANDB and wandb.run is not None:
@@ -710,11 +708,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
             action = torch.tensor([trans.action_taken], dtype=torch.float32).to(device)
 
             # Retrieve real target goal anchor vector if present, or fall back to s_t: Shape [1, 512]
-            s_target = (
-                torch.tensor(trans.s_target, dtype=torch.float32, device=device)
-                if trans.s_target is not None
-                else s_t
-            )
+            s_target = torch.tensor(trans.s_target, dtype=torch.float32, device=device)
 
             # Track current state, action, next state, energy, tactile, s_target, and is_positive_trajectory label
             state.stage3_trajectory_history.append(
@@ -1139,7 +1133,9 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                         ]
                         eval_payloads[name] = Stage3StepPayload(**raw_payload)
             if eval_payloads:
-                run_exemplar_diagnostic_check(batch_s_target[0], state, eval_payloads)
+                run_exemplar_diagnostic_check(
+                    batch_s_target[0].unsqueeze(0), state, eval_payloads
+                )
 
         # Synchronize frozen reference snapshot model with newly learned weights
         state.stage3_models["flow_matcher_ref"].load_state_dict(
