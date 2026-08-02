@@ -15,6 +15,14 @@ def frame_to_base64(rgb_array: np.ndarray) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def base64_to_frame(base64_str: str) -> np.ndarray:
+    if "," in base64_str:
+        base64_str = base64_str.split(",")[1]
+    img_data = base64.b64decode(base64_str)
+    img = Image.open(io.BytesIO(img_data)).convert("RGB")
+    return np.array(img)
+
+
 def solve_ik_target(
     sim, target_3d: np.ndarray, site_name: str = "right_hand_roll_link"
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -197,6 +205,27 @@ def save_ik_trajectory_diagnostic_plots(
         print(f"Error saving IK diagnostic plot: {e}")
 
 
+def save_trajectory(trajectory, cam, output_dir, fps=4):
+    track_idx = trajectory["track_idx"]
+    history_frames = trajectory["history_frames"]
+    h, w, _ = base64_to_frame(trajectory["frames"][cam]).shape
+    pos_video_path = os.path.join(
+        output_dir,
+        f"track_{track_idx}.mp4",
+    )
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    writer = cv2.VideoWriter(pos_video_path, fourcc, fps, (w, h))
+    for frames in history_frames:
+        frame = base64_to_frame(frames[cam])
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        writer.write(bgr)
+    writer.release()
+    print(
+        f"🎬 Saved {('positive' if trajectory['is_positive'] else 'negative')} "
+        f"IK Video ({cam} track {track_idx}): {pos_video_path}"
+    )
+
+
 def save_ik_trajectory_video(
     pos_trajectories: list,
     neg_trajectories: list,
@@ -219,46 +248,12 @@ def save_ik_trajectory_video(
             os.makedirs(neg_cam_dir, exist_ok=True)
 
             # 1. Save individual Positive Trajectory Videos
-            for tr in pos_trajectories:
-                track_idx = tr.get("track_idx", 0)
-                mv_frames = tr.get("multi_view_frames", {})
-                if cam in mv_frames and mv_frames[cam]:
-                    frames = mv_frames[cam]
-                    h, w, _ = frames[0].shape
-                    pos_video_path = os.path.join(
-                        pos_cam_dir,
-                        f"track_{track_idx}.mp4",
-                    )
-                    fourcc = cv2.VideoWriter_fourcc(*"avc1")
-                    writer = cv2.VideoWriter(pos_video_path, fourcc, fps, (w, h))
-                    for frame in frames:
-                        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                        writer.write(bgr)
-                    writer.release()
-                    print(
-                        f"🎬 Saved Positive IK Video ({cam} track {track_idx}): {pos_video_path}"
-                    )
+            for trajectory in pos_trajectories:
+                save_trajectory(trajectory, cam, pos_cam_dir, fps)
 
             # 2. Save individual Negative Trajectory Videos
-            for tr in neg_trajectories:
-                track_idx = tr.get("track_idx", 0)
-                mv_frames = tr.get("multi_view_frames", {})
-                if cam in mv_frames and mv_frames[cam]:
-                    frames = mv_frames[cam]
-                    h, w, _ = frames[0].shape
-                    neg_video_path = os.path.join(
-                        neg_cam_dir,
-                        f"track_{track_idx}.mp4",
-                    )
-                    fourcc = cv2.VideoWriter_fourcc(*"avc1")
-                    writer = cv2.VideoWriter(neg_video_path, fourcc, fps, (w, h))
-                    for frame in frames:
-                        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                        writer.write(bgr)
-                    writer.release()
-                    print(
-                        f"🎬 Saved Negative IK Video ({cam} track {track_idx}): {neg_video_path}"
-                    )
+            for trajectory in neg_trajectories:
+                save_trajectory(trajectory, cam, neg_cam_dir, fps)
 
     except Exception as e:
         print(f"Error saving IK trajectory videos: {e}")
