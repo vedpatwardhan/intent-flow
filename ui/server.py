@@ -586,6 +586,7 @@ async def run_stage3_training_loop(
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
                 "is_easy_task": False,
+                "pos_trajectories": [],
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
                 "eval_mean_physical_distance": getattr(
@@ -718,6 +719,10 @@ async def run_stage3_training_loop(
                     "pos_trajectories": [],
                     "episode_idx": 0,
                     "step_idx": 0,
+                    "eval_mean_physical_distance": 0.0,
+                    "eval_median_physical_distance": 0.0,
+                    "eval_min_physical_distance": 0.0,
+                    "eval_energy_distance_correlation": 0.0,
                 }
 
                 grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
@@ -789,7 +794,7 @@ async def run_stage3_training_loop(
             sim._step_physical_distances = []
 
             print(
-                f"📈 [Telemetry Summary] Step {env_step} -> Effector-Cube Dist (16 tracks) "
+                f"📈 [Telemetry Summary] Step {env_step} -> Dist (16 tracks) "
                 f"Mean: {step_mean_phys_dist:.4f}m | "
                 f"Median: {step_median_phys_dist:.4f}m | "
                 f"Min: {step_min_phys_dist:.4f}m | "
