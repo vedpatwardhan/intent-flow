@@ -1139,13 +1139,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                                 base_frames,
                                 curr_frames,
                             ]
-                            raw_payload = Stage3StepPayload(
-                                **raw_payload,
-                                pos_trajectories=[],
-                                episode_idx=0,
-                                step_idx=0,
-                                is_easy_task=True,
-                            )
+                            raw_payload = Stage3StepPayload(**raw_payload)
                         else:
                             curr_frames = getattr(raw_payload, "frames", {})
                             base_frames = (
