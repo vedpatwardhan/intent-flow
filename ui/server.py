@@ -503,7 +503,7 @@ async def run_stage3_training_loop(
             save_ik_trajectory_video(
                 pos_trajectories,
                 neg_trajectories,
-                output_dir="latent-flow/ui/logs/training/goals",
+                output_dir="logs/training/latent-flow/goals",
                 fps=4,
             )
 

@@ -1116,10 +1116,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             if os.path.exists(phase_0_fp):
                 with open(phase_0_fp, "rb") as f:
                     raw_0 = pickle.load(f)
-                    if isinstance(raw_0, dict):
-                        phase_0_frames = raw_0.get("frames")
-                    else:
-                        phase_0_frames = getattr(raw_0, "frames", None)
+                    phase_0_frames = raw_0.get("frames")
 
             eval_payloads = {}
             for fn in sorted(os.listdir(EXEMPLAR_DIR)):
@@ -1128,27 +1125,19 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                     fp = os.path.join(EXEMPLAR_DIR, fn)
                     with open(fp, "rb") as f:
                         raw_payload = pickle.load(f)
-                        if isinstance(raw_payload, dict):
-                            curr_frames = raw_payload.get("frames", {})
-                            base_frames = (
-                                phase_0_frames
-                                if phase_0_frames is not None
-                                else curr_frames
-                            )
-                            raw_payload["history_frames"] = [
-                                base_frames,
-                                curr_frames,
-                            ]
-                            raw_payload = Stage3StepPayload(**raw_payload)
-                        else:
-                            curr_frames = getattr(raw_payload, "frames", {})
-                            base_frames = (
-                                phase_0_frames
-                                if phase_0_frames is not None
-                                else curr_frames
-                            )
-                            raw_payload.history_frames = [base_frames, curr_frames]
-                        eval_payloads[name] = raw_payload
+                        curr_frames = raw_payload.get("frames", {})
+                        base_frames = (
+                            phase_0_frames
+                            if phase_0_frames is not None
+                            else curr_frames
+                        )
+                        raw_payload["history_frames"] = [
+                            base_frames,
+                            base_frames,
+                            curr_frames,
+                            curr_frames,
+                        ]
+                        eval_payloads[name] = Stage3StepPayload(**raw_payload)
             if eval_payloads:
                 run_exemplar_diagnostic_check(batch_s_target[0], state, eval_payloads)
 
