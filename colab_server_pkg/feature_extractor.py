@@ -89,11 +89,15 @@ def get_batch_vggt_motion_fields(
             wp_next = world_points_batch[:, t_idx + 1]
             dx = wp_next[..., 0] - wp_curr[..., 0]
             dy = wp_next[..., 1] - wp_curr[..., 1]
-            motion_batch += torch.sqrt(dx**2 + dy**2)
+            dz = wp_next[..., 2] - wp_curr[..., 2]
+            motion_batch += torch.sqrt(dx**2 + dy**2 + dz**2)
 
-        m_mins = motion_batch.view(B, -1).min(dim=-1, keepdim=True)[0].view(B, 1, 1)
-        m_maxs = motion_batch.view(B, -1).max(dim=-1, keepdim=True)[0].view(B, 1, 1)
-        motion_norm_batch = (motion_batch - m_mins) / (m_maxs - m_mins + 1e-8)
+        # Zero out sub-3mm background noise floor
+        motion_batch = torch.where(
+            motion_batch < 0.003, torch.zeros_like(motion_batch), motion_batch
+        )
+        # Normalize relative to 15cm physical motion ceiling
+        motion_norm_batch = torch.clamp(motion_batch / 0.15, max=1.0)
 
     return motion_norm_batch
 
