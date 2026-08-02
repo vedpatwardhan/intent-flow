@@ -668,33 +668,39 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         current_obs_list = [trans.current_obs for trans in payload.transitions]
         next_obs_list = [trans.next_obs for trans in payload.transitions]
 
-        # 1. Batched Feature Extraction across all transitions (1 single GPU forward pass for DINO/VGGT/CLIP/SAM)
+        # 1. Batched Feature Extraction & Latent Encoding (No Gradient Tracking + Mixed Precision)
         start_time = perf_counter()
-        _, combined_obs_t_batch = extract_batch_stage3_obs_features(current_obs_list)
-        obs_dict_next_batch, combined_obs_next_batch = (
-            extract_batch_stage3_obs_features(next_obs_list)
-        )
-        print(f"time taken for feature extraction: {perf_counter() - start_time:.4f}s")
-
-        # Save 4-panel diagnostic plot for first transition outcome features
-        if payload.episode_idx == 0 and payload.step_idx == 3:
-            save_stage3_obs_feature_plots(
-                history_frames=payload.transitions[0].next_obs.history_frames,
-                obs_features=obs_dict_next_batch[0],
-                title_prefix="Calibrate Track 0",
-                output_filename="debug_calibrate_track_0_world_center.png",
-                view_name="world_center",
-            )
-
-        # 2. Batched MSAT GPU Latent Encoding across all transitions (2 batched GPU forward passes total)
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
+                _, combined_obs_t_batch = extract_batch_stage3_obs_features(
+                    current_obs_list
+                )
+                obs_dict_next_batch, combined_obs_next_batch = (
+                    extract_batch_stage3_obs_features(next_obs_list)
+                )
+
+                # Save 4-panel diagnostic plot for first transition outcome features
+                if payload.episode_idx == 0 and payload.step_idx == 3:
+                    save_stage3_obs_feature_plots(
+                        history_frames=payload.transitions[0].next_obs.history_frames,
+                        obs_features=obs_dict_next_batch[0],
+                        title_prefix="Calibrate Track 0",
+                        output_filename="debug_calibrate_track_0_world_center.png",
+                        view_name="world_center",
+                    )
+
+                # 2. Batched MSAT GPU Latent Encoding across all transitions
                 # Shape [B, 512]
                 s_t_batch = encode_obs_to_latent(combined_obs_t_batch, state).detach()
                 # Shape [B, 512]
                 s_next_batch = encode_obs_to_latent(
                     combined_obs_next_batch, state
                 ).detach()
+
+        print(
+            "time taken for feature extraction & latent encoding: "
+            f"{perf_counter() - start_time:.4f}s"
+        )
 
         for idx, trans in enumerate(payload.transitions):
             s_t = s_t_batch[idx : idx + 1]  # Shape [1, 512]
