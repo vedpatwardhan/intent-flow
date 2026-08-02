@@ -92,22 +92,12 @@ def get_batch_vggt_motion_fields(
             dz = wp_next[..., 2] - wp_curr[..., 2]
             motion_batch += torch.sqrt(dx**2 + dy**2 + dz**2)
 
-        # Union Void Masking: Mask out pixels that are black background across ALL 4 history frames
-        # vggt_tensors shape: [B, 4, 3, 224, 224]
-        # Mean across RGB (dim=2), min across time (dim=1) -> True only if black in EVERY frame
-        union_void_mask = (
-            vggt_tensors.mean(dim=2).min(dim=1)[0] < 0.04
-        )  # Shape [B, 224, 224]
-        motion_batch = torch.where(
-            union_void_mask, torch.zeros_like(motion_batch), motion_batch
-        )
-
-        # Zero out sub-3mm micro noise floor
+        # Zero out sub-3mm micro noise floor (environment-agnostic physical threshold)
         motion_batch = torch.where(
             motion_batch < 0.003, torch.zeros_like(motion_batch), motion_batch
         )
 
-        # Dynamic 95th Percentile Bounding per Payload
+        # Dynamic 95th Percentile Bounding per Payload (environment-agnostic)
         m_flat = motion_batch.view(B, -1)
         p95 = torch.quantile(m_flat.float(), 0.95, dim=-1, keepdim=True).to(device)
         # Avoid division by zero when entire motion is 0
