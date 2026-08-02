@@ -806,6 +806,9 @@ async def run_stage3_training_loop(
             touch_index_next = committed_touch_index_next
             touch_thumb_next = committed_touch_thumb_next
 
+            # Update transitions
+            buffered_transitions.extend(transitions)
+
             # Report calibration payload to Colab once every 5 steps (or on final step)
             if (env_step + 1) % calibrate_steps == 0 or env_step == max_steps - 1:
                 calibrate_payload = {
