@@ -208,12 +208,12 @@ def ensure_stage3_models():
     latent_dim = config["model"]["latent_dim"]
 
     state.stage3_models["vis_adapter"] = VisualAdapter(d_in=384).to(device)
-    state.stage3_models["txt_adapter"] = TextAdapter(d_in=384).to(device)
-    state.stage3_models["pt_adapter"] = PointNeXtAdapter(d_in=384).to(device)
+    # state.stage3_models["txt_adapter"] = TextAdapter(d_in=384).to(device)
+    # state.stage3_models["pt_adapter"] = PointNeXtAdapter(d_in=384).to(device)
     state.stage3_models["vggt_adapter"] = VGGTAdapter(
         d_in=config["model"]["vggt_dim"]
     ).to(device)
-    state.stage3_models["tactile_adapter"] = TactileAdapter().to(device)
+    # state.stage3_models["tactile_adapter"] = TactileAdapter().to(device)
     state.stage3_models["action_adapter"] = ActionAdapter(
         d_in=(horizon - 1) * action_dim, d_out=512
     ).to(device)
@@ -241,24 +241,24 @@ def ensure_stage3_models():
     state.stage3_models["flow_matcher"] = ComboStocFlowMatcher(
         action_dim=action_dim, config=config
     ).to(device)
-    if "flow_matcher_ref" not in state.stage3_models:
-        state.stage3_models["flow_matcher_ref"] = ComboStocFlowMatcher(
-            action_dim=action_dim, config=config
-        ).to(device)
-        state.stage3_models["flow_matcher_ref"].load_state_dict(
-            state.stage3_models["flow_matcher"].state_dict()
-        )
-        state.stage3_models["flow_matcher_ref"].eval()
+    # if "flow_matcher_ref" not in state.stage3_models:
+    #     state.stage3_models["flow_matcher_ref"] = ComboStocFlowMatcher(
+    #         action_dim=action_dim, config=config
+    #     ).to(device)
+    #     state.stage3_models["flow_matcher_ref"].load_state_dict(
+    #         state.stage3_models["flow_matcher"].state_dict()
+    #     )
+    #     state.stage3_models["flow_matcher_ref"].eval()
 
-    state.stage3_models["gnn_library"] = GNNSkillLibrary(
-        state.stage3_models["flow_matcher"], state_dim=latent_dim
-    ).to(device)
+    # state.stage3_models["gnn_library"] = GNNSkillLibrary(
+    #     state.stage3_models["flow_matcher"], state_dim=latent_dim
+    # ).to(device)
 
-    state.stage3_models["discriminator"] = TrajectoryDiscriminator(
-        action_dim=action_dim
-    ).to(device)
+    # state.stage3_models["discriminator"] = TrajectoryDiscriminator(
+    #     action_dim=action_dim
+    # ).to(device)
 
-    state.stage3_models["attacker"] = BadWorldAttacker(action_dim=action_dim)
+    # state.stage3_models["attacker"] = BadWorldAttacker(action_dim=action_dim)
 
     ckpt_dir_config = config["paths"]["checkpoint_dir"]
     if ckpt_dir_config.startswith("latent-flow/"):
@@ -275,12 +275,12 @@ def ensure_stage3_models():
         print(f"[Colab] Loading Stage 3 checkpoint from: {s3_ckpt_path}")
         checkpoint = torch.load(s3_ckpt_path, map_location=device)
         state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
-        state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
-        state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
+        # state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
+        # state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
         state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
-        state.stage3_models["tactile_adapter"].load_state_dict(
-            checkpoint["tactile_adapter"]
-        )
+        # state.stage3_models["tactile_adapter"].load_state_dict(
+        #     checkpoint["tactile_adapter"]
+        # )
         state.stage3_models["action_adapter"].load_state_dict(
             checkpoint["action_adapter"]
         )
@@ -312,7 +312,7 @@ def ensure_stage3_models():
             # "txt_adapter",
             "pt_adapter",
             # "vggt_adapter",
-            "tactile_adapter",
+            # "tactile_adapter",
             "action_adapter",
             "state_adapter",
             "action_down_proj",
@@ -335,9 +335,9 @@ def ensure_stage3_models():
     stage3_lr = max(config["stage3"]["lr"], 2e-4)
     state.stage3_optimizer = torch.optim.AdamW(
         list(state.stage3_models["flow_matcher"].parameters())
-        + list(state.stage3_models["gnn_library"].parameters())
+        # + list(state.stage3_models["gnn_library"].parameters())
         + list(state.stage3_models["predictor"].parameters())
-        + list(state.stage3_models["discriminator"].parameters())
+        # + list(state.stage3_models["discriminator"].parameters())
         + list(state.stage3_models["action_adapter"].parameters())
         + list(state.stage3_models["state_adapter"].parameters())
         + list(state.stage3_models["action_down_proj"].parameters()),
@@ -1134,9 +1134,10 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 )
 
         # Synchronize frozen reference snapshot model with newly learned weights
-        state.stage3_models["flow_matcher_ref"].load_state_dict(
-            state.stage3_models["flow_matcher"].state_dict()
-        )
+        # if "flow_matcher_ref" in state.stage3_models:
+        #     state.stage3_models["flow_matcher_ref"].load_state_dict(
+        #         state.stage3_models["flow_matcher"].state_dict()
+        #     )
 
         # Cleared the buffer
         state.stage3_trajectory_history.clear()
@@ -1152,19 +1153,19 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         checkpoint_payload = {
             "flow_matcher": state.stage3_models["flow_matcher"].state_dict(),
             "vis_adapter": state.stage3_models["vis_adapter"].state_dict(),
-            "txt_adapter": state.stage3_models["txt_adapter"].state_dict(),
-            "pt_adapter": state.stage3_models["pt_adapter"].state_dict(),
+            # "txt_adapter": state.stage3_models["txt_adapter"].state_dict(),
+            # "pt_adapter": state.stage3_models["pt_adapter"].state_dict(),
             "vggt_adapter": state.stage3_models["vggt_adapter"].state_dict(),
-            "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
+            # "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
             "msat": state.stage3_models["msat"].state_dict(),
             "action_adapter": state.stage3_models["action_adapter"].state_dict(),
             "state_adapter": state.stage3_models["state_adapter"].state_dict(),
             "action_down_proj": state.stage3_models["action_down_proj"].state_dict(),
             "predictor": state.stage3_models["predictor"].state_dict(),
-            "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
-            "gnn_specialists": state.stage3_models[
-                "gnn_library"
-            ].specialists.state_dict(),
+            # "gnn_nodes": state.stage3_models["gnn_library"].nodes.state_dict(),
+            # "gnn_specialists": state.stage3_models[
+            #     "gnn_library"
+            # ].specialists.state_dict(),
         }
 
         # 1. Save final rolling checkpoint
