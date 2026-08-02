@@ -589,16 +589,16 @@ async def run_stage3_training_loop(
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
                 "eval_mean_physical_distance": getattr(
-                    sim, "_last_step_mean_phys_dist", None
+                    sim, "_last_step_mean_phys_dist", 0.0
                 ),
                 "eval_median_physical_distance": getattr(
-                    sim, "_last_step_median_phys_dist", None
+                    sim, "_last_step_median_phys_dist", 0.0
                 ),
                 "eval_min_physical_distance": getattr(
-                    sim, "_last_step_min_phys_dist", None
+                    sim, "_last_step_min_phys_dist", 0.0
                 ),
                 "eval_energy_distance_correlation": getattr(
-                    sim, "_last_step_energy_dist_corr", None
+                    sim, "_last_step_energy_dist_corr", 0.0
                 ),
             }
             print(
