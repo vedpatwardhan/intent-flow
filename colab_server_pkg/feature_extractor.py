@@ -214,23 +214,22 @@ def pad_features(feature, target_dim):
     return feature
 
 
-def extract_batch_stage3_obs_features(payload_list: list, max_chunk_size: int = 32):
+def extract_batch_stage3_obs_features(payload_list: list):
     """
     Modular batched feature extractor that processes a list of B observation payloads in parallel.
     Executes batched GPU forward passes for DINO, VGGT, CLIP, and SAM, chunking in micro-batches
-    of max_chunk_size (default 32) to prevent GPU VRAM Out-Of-Memory errors.
+    of 32 to prevent GPU VRAM Out-Of-Memory errors.
     """
     if len(payload_list) == 0:
         raise ValueError("Payload list for batched feature extraction cannot be empty.")
 
+    max_chunk_size = 32
     if len(payload_list) > max_chunk_size:
         obs_dicts_accum = []
         combined_obs_chunks = []
         for i in range(0, len(payload_list), max_chunk_size):
             chunk = payload_list[i : i + max_chunk_size]
-            c_dicts, c_combined = extract_batch_stage3_obs_features(
-                chunk, max_chunk_size=max_chunk_size
-            )
+            c_dicts, c_combined = extract_batch_stage3_obs_features(chunk)
             obs_dicts_accum.extend(c_dicts)
             combined_obs_chunks.append(c_combined)
 

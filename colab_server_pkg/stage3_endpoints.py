@@ -116,6 +116,10 @@ class Stage3StepPayload(BaseModel):
     episode_idx: int
     step_idx: int
     is_easy_task: bool
+    eval_mean_physical_distance: float
+    eval_median_physical_distance: float
+    eval_min_physical_distance: float
+    eval_energy_distance_correlation: float
     point_clouds: dict | None = None
 
 
@@ -130,8 +134,6 @@ class Stage3CalibrateTransition(BaseModel):
 
 class Stage3CalibratePayload(BaseModel):
     transitions: list[Stage3CalibrateTransition]
-    eval_mean_physical_distance: float
-    eval_energy_distance_correlation: float
     episode_idx: int
     step_idx: int
 
@@ -429,9 +431,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     s_target_conditioned.expand(ensemble_size, -1),  # [16, 512]
                     embodiment_id=embodiment_id_expanded,
                     horizon=horizon,
-                    num_steps=10,
+                    num_steps=12,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.2,
+                    step_nft_scale=0.35,
                 )  # a_candidates Shape [16, 7, 58]
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
@@ -624,18 +626,26 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                         dino_par = float(dino_max / (dino_mean + 1e-8))
 
                 try:
-                    wandb.log(
-                        {
-                            "telemetry/candidate_variance": candidate_var,
-                            "telemetry/mean_timeline_progress": mean_timeline,
-                            "telemetry/stable_joints_count": stable_joints_cnt,
-                            "telemetry/drifting_joints_count": drifting_joints_cnt,
-                            "telemetry/mean_candidate_energy": mean_energy,
-                            "telemetry/min_candidate_energy": min_energy,
-                            "telemetry/dino_attn_entropy": dino_entropy,
-                            "telemetry/dino_attn_par": dino_par,
-                        }
-                    )
+                    log_payload = {
+                        "telemetry/candidate_variance": candidate_var,
+                        "telemetry/mean_timeline_progress": mean_timeline,
+                        "telemetry/stable_joints_count": stable_joints_cnt,
+                        "telemetry/drifting_joints_count": drifting_joints_cnt,
+                        "telemetry/mean_candidate_energy": mean_energy,
+                        "telemetry/min_candidate_energy": min_energy,
+                        "telemetry/dino_attn_entropy": dino_entropy,
+                        "telemetry/dino_attn_par": dino_par,
+                    }
+                    if payload.eval_mean_physical_distance is not None:
+                        log_payload.update(
+                            {
+                                "eval/mean_physical_distance": payload.eval_mean_physical_distance,
+                                "eval/median_physical_distance": payload.eval_median_physical_distance,
+                                "eval/min_physical_distance": payload.eval_min_physical_distance,
+                                "eval/energy_distance_correlation": payload.eval_energy_distance_correlation,
+                            }
+                        )
+                    wandb.log(log_payload)
                 except Exception:
                     pass
 
@@ -799,21 +809,6 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         print(
             f"[Calibrate] Ingested {num_transitions} transitions across {num_transitions} optimization steps. Avg Dynamics Loss: {avg_loss_dynamics:.6f} | Avg SIGReg: {avg_loss_sigreg:.6f} | Avg Total: {avg_loss_total:.6f}\n"
         )
-
-        # Log evaluation telemetry passed from simulation step payload
-        if HAS_WANDB and payload.eval_mean_physical_distance is not None:
-            ensure_wandb_init()
-            if wandb.run is not None:
-                try:
-                    wandb.log(
-                        {
-                            "eval/mean_physical_distance": payload.eval_mean_physical_distance,
-                            "eval/energy_distance_correlation": payload.eval_energy_distance_correlation
-                            or 0.0,
-                        }
-                    )
-                except Exception:
-                    pass
 
         calibration_jobs[job_id] = {
             "status": "completed",
@@ -992,13 +987,6 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             # 5. Anti-collapse regularization (SIGReg) with Step Decay Schedule
             sigreg_loss = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
 
-            # Persistent Global SIGReg Decay (smooth decay across global run steps, no epoch resets)
-            if not hasattr(state, "global_distill_step_count"):
-                state.global_distill_step_count = 0
-            state.global_distill_step_count += 1
-
-            beta_sig = max(0.001, 0.01 * (0.995**state.global_distill_step_count))
-
             # Penalty on action magnitude and jerk for overall smoothness
             reg_action_norm = torch.mean(batch_action**2)
 
@@ -1014,7 +1002,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 + contrastive_loss * 0.5
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
-                + sigreg_loss * beta_sig
+                + sigreg_loss * 0.05
                 + reg_action_norm * 0.0045
                 + loss_smoothness * 0.35
             )

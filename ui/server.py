@@ -420,8 +420,10 @@ async def run_stage3_training_loop(
         )
         return
 
-    index_id = sim.model.body("R_index_tip_link").id
-    thumb_id = sim.model.body("R_thumb_tip_link").id
+    r_index_id = sim.model.body("R_index_tip_link").id
+    r_thumb_id = sim.model.body("R_thumb_tip_link").id
+    l_index_id = sim.model.body("L_index_tip_link").id
+    l_thumb_id = sim.model.body("L_thumb_tip_link").id
     cube_id = sim.model.body("cube").id
     # Use eval_sim for offline IK trajectory sampling so main UI sim state remains completely unaffected
     eval_sim.data.qpos[:] = sim.data.qpos.copy()
@@ -537,8 +539,6 @@ async def run_stage3_training_loop(
         )
 
         buffered_transitions = []
-        accumulated_phys_dists = []
-        accumulated_corrs = []
 
         for env_step in range(max_steps):
             # 1. Randomize robot posture and cube position on all steps EXCEPT Episode 0 Step 0
@@ -563,8 +563,8 @@ async def run_stage3_training_loop(
             # Computes distance between fingers and cube
             # ToDo: Needs to be generalized for other tasks, where the user configures
             # which fingers matter, relative positions, etc. in the UI.
-            index_pos = sim.data.xpos[index_id]
-            thumb_pos = sim.data.xpos[thumb_id]
+            index_pos = sim.data.xpos[r_index_id]
+            thumb_pos = sim.data.xpos[r_thumb_id]
             cube_pos = sim.data.xpos[cube_id]
 
             d_index = float(np.linalg.norm(index_pos - cube_pos))
@@ -588,15 +588,28 @@ async def run_stage3_training_loop(
                 "is_easy_task": False,
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
-                "pos_trajectories": [],
+                "eval_mean_physical_distance": getattr(
+                    sim, "_last_step_mean_phys_dist", None
+                ),
+                "eval_median_physical_distance": getattr(
+                    sim, "_last_step_median_phys_dist", None
+                ),
+                "eval_min_physical_distance": getattr(
+                    sim, "_last_step_min_phys_dist", None
+                ),
+                "eval_energy_distance_correlation": getattr(
+                    sim, "_last_step_energy_dist_corr", None
+                ),
             }
             print(
                 f"Frame History: {len(frame_history)}, "
                 f"Views: {list(frame_all_views.keys())}"
             )
 
+            # 4. Step Colab Stage3 API
             action_taken_ensemble = None
             energy_ensemble = None
+            s_target = None
             try:
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
@@ -674,11 +687,14 @@ async def run_stage3_training_loop(
 
                 all_track_frames.append(track_frames_k)
 
-                index_pos = eval_sim.data.xpos[index_id]
-                thumb_pos = eval_sim.data.xpos[thumb_id]
+                r_index_pos = eval_sim.data.xpos[r_index_id]
+                r_thumb_pos = eval_sim.data.xpos[r_thumb_id]
+                l_index_pos = eval_sim.data.xpos[l_index_id]
+                l_thumb_pos = eval_sim.data.xpos[l_thumb_id]
                 cube_pos = eval_sim.data.xpos[cube_id]
-                d_index = float(np.linalg.norm(index_pos - cube_pos))
-                d_thumb = float(np.linalg.norm(thumb_pos - cube_pos))
+
+                d_index = float(np.linalg.norm(r_index_pos - cube_pos))
+                d_thumb = float(np.linalg.norm(r_thumb_pos - cube_pos))
                 touch_index_next = (
                     max(0.0, 1.0 - (d_index / 0.04)) if d_index < 0.04 else 0.0
                 )
@@ -705,8 +721,12 @@ async def run_stage3_training_loop(
                 }
 
                 grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
-                hand_center = (index_pos + thumb_pos) / 2.0
-                phys_dist = float(np.linalg.norm(hand_center - cube_pos))
+                r_hand_center = (r_index_pos + r_thumb_pos) / 2.0
+                l_hand_center = (l_index_pos + l_thumb_pos) / 2.0
+                r_phys_dist = float(np.linalg.norm(r_hand_center - cube_pos))
+                l_phys_dist = float(np.linalg.norm(l_hand_center - cube_pos))
+                phys_dist = min(r_phys_dist, l_phys_dist)
+
                 if not hasattr(sim, "_step_physical_distances"):
                     sim._step_physical_distances = []
                 sim._step_physical_distances.append(phys_dist)
@@ -739,6 +759,8 @@ async def run_stage3_training_loop(
 
             # Compute correlation between latent energies and physical distances across ALL 16 candidate tracks
             step_mean_phys_dist = None
+            step_median_phys_dist = None
+            step_min_phys_dist = None
             step_energy_dist_corr = None
             if (
                 hasattr(sim, "_step_physical_distances")
@@ -747,6 +769,8 @@ async def run_stage3_training_loop(
                 phys_dists_np = np.array(sim._step_physical_distances, dtype=np.float32)
                 energies_np = np.array(energy_ensemble, dtype=np.float32)
                 step_mean_phys_dist = float(np.mean(phys_dists_np))
+                step_median_phys_dist = float(np.median(phys_dists_np))
+                step_min_phys_dist = float(np.min(phys_dists_np))
 
                 if len(phys_dists_np) <= 1 or len(phys_dists_np) != len(energies_np):
                     raise RuntimeError(
@@ -768,9 +792,14 @@ async def run_stage3_training_loop(
                         "❌ [Telemetry Error] Energy-distance correlation computed as NaN!"
                     )
 
+                sim._last_step_mean_phys_dist = step_mean_phys_dist
+                sim._last_step_median_phys_dist = step_median_phys_dist
+                sim._last_step_min_phys_dist = step_min_phys_dist
+                sim._last_step_energy_dist_corr = step_energy_dist_corr
+
                 step_energy_dist_corr = float(val)
                 print(
-                    f"📈 [Telemetry Summary] Step {env_step} -> Avg Physical Effector-Cube Dist (16 tracks): {step_mean_phys_dist:.4f}m | Energy-Distance Correlation: {step_energy_dist_corr:.4f}"
+                    f"📈 [Telemetry Summary] Step {env_step} -> Effector-Cube Dist (16 tracks) Mean: {step_mean_phys_dist:.4f}m | Median: {step_median_phys_dist:.4f}m | Min: {step_min_phys_dist:.4f}m | Energy-Dist Corr: {step_energy_dist_corr:.4f}"
                 )
 
                 sim._step_physical_distances = []
@@ -786,30 +815,10 @@ async def run_stage3_training_loop(
             touch_index_next = committed_touch_index_next
             touch_thumb_next = committed_touch_thumb_next
 
-            # Accumulate transitions into 5-step buffer
-            buffered_transitions.extend(transitions)
-            if step_mean_phys_dist is not None:
-                accumulated_phys_dists.append(step_mean_phys_dist)
-            if step_energy_dist_corr is not None:
-                accumulated_corrs.append(step_energy_dist_corr)
-
             # Report calibration payload to Colab once every 5 steps (or on final step)
             if (env_step + 1) % calibrate_steps == 0 or env_step == max_steps - 1:
-                avg_phys_dist = (
-                    float(np.mean(accumulated_phys_dists))
-                    if len(accumulated_phys_dists) > 0
-                    else None
-                )
-                avg_corr = (
-                    float(np.mean(accumulated_corrs))
-                    if len(accumulated_corrs) > 0
-                    else None
-                )
-
                 calibrate_payload = {
                     "transitions": buffered_transitions,
-                    "eval_mean_physical_distance": avg_phys_dist,
-                    "eval_energy_distance_correlation": avg_corr,
                     "episode_idx": ep_idx,
                     "step_idx": env_step,
                 }
