@@ -99,12 +99,12 @@ def get_batch_vggt_motion_fields(
             void_mask, torch.zeros_like(motion_batch), motion_batch
         )
 
-        # Zero out sub-1cm micro noise floor
+        # Zero out sub-3mm micro noise floor
         motion_batch = torch.where(
-            motion_batch < 0.01, torch.zeros_like(motion_batch), motion_batch
+            motion_batch < 0.003, torch.zeros_like(motion_batch), motion_batch
         )
-        # Smoothly normalize relative to 40cm physical motion ceiling
-        motion_norm_batch = torch.clamp(motion_batch / 0.40, max=1.0)
+        # Smoothly normalize relative to 20cm physical motion ceiling
+        motion_norm_batch = torch.clamp(motion_batch / 0.20, max=1.0)
 
     return motion_norm_batch
 
