@@ -585,8 +585,16 @@ async def run_stage3_training_loop(
                 "text_prompt": text_prompt or "grasp cube",
                 "ui_annotations": ui_annotations
                 or {"crops": [], "vectors": [], "segments": []},
+            }
+            print(
+                f"Frame History: {len(frame_history)}, "
+                f"Views: {list(frame_all_views.keys())}"
+            )
+
+            step_payload = {
+                "obs": current_obs,
+                "pos_trajectories": pos_trajectories,
                 "is_easy_task": False,
-                "pos_trajectories": [],
                 "episode_idx": ep_idx,
                 "step_idx": env_step,
                 "eval_mean_physical_distance": getattr(
@@ -602,10 +610,6 @@ async def run_stage3_training_loop(
                     sim, "_last_step_energy_dist_corr", 0.0
                 ),
             }
-            print(
-                f"Frame History: {len(frame_history)}, "
-                f"Views: {list(frame_all_views.keys())}"
-            )
 
             # 4. Step Colab Stage3 API
             action_taken_ensemble = None
@@ -615,7 +619,7 @@ async def run_stage3_training_loop(
                 async with httpx.AsyncClient() as client:
                     r = await client.post(
                         f"{colab_url}/stage3/step",
-                        json={**current_obs, "pos_trajectories": pos_trajectories},
+                        json=step_payload,
                         timeout=2000.0,
                     )
                     if r.status_code == 200:
@@ -715,14 +719,6 @@ async def run_stage3_training_loop(
                     "tactile": tactile_grid_next,
                     "text_prompt": text_prompt or "grasp cube",
                     "ui_annotations": {},
-                    "is_easy_task": False,
-                    "pos_trajectories": [],
-                    "episode_idx": 0,
-                    "step_idx": 0,
-                    "eval_mean_physical_distance": 0.0,
-                    "eval_median_physical_distance": 0.0,
-                    "eval_min_physical_distance": 0.0,
-                    "eval_energy_distance_correlation": 0.0,
                 }
 
                 grasp_success = touch_index_next > 0.5 and touch_thumb_next > 0.5
@@ -738,9 +734,9 @@ async def run_stage3_training_loop(
 
                 transitions.append(
                     {
-                        "current_obs": copy.deepcopy(current_obs),  # zeroed history
+                        "current_obs": current_obs,
                         "action_taken": track_actions_flat_k,
-                        "next_obs": track_next_obs,  # history of 4 different frames
+                        "next_obs": track_next_obs,
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,
@@ -827,7 +823,7 @@ async def run_stage3_training_loop(
                         r = await client.post(
                             f"{colab_url}/stage3/calibrate",
                             json=calibrate_payload,
-                            timeout=30.0,
+                            timeout=120.0,
                         )
                         if r.status_code == 200:
                             job_data = r.json()

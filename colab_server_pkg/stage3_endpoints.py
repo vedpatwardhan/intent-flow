@@ -105,17 +105,21 @@ class SIGReg(torch.nn.Module):
 from trainers.stage3.trainer import GNNSkillLibrary
 
 
-class Stage3StepPayload(BaseModel):
+class ObservationPayload(BaseModel):
     frames: dict[str, str]  # Multi-view frames: {camera_name: base64_image}
     history_frames: list[dict[str, str]]
     proprioception: list[float]
     tactile: list[list[float]]
     text_prompt: str
     ui_annotations: dict
-    pos_trajectories: list[dict]
+
+
+class Stage3StepPayload(BaseModel):
+    obs: ObservationPayload
     episode_idx: int
     step_idx: int
     is_easy_task: bool
+    pos_trajectories: list[dict]
     eval_mean_physical_distance: float
     eval_median_physical_distance: float
     eval_min_physical_distance: float
@@ -124,9 +128,9 @@ class Stage3StepPayload(BaseModel):
 
 
 class Stage3CalibrateTransition(BaseModel):
-    current_obs: Stage3StepPayload
+    current_obs: ObservationPayload
     action_taken: list[float]
-    next_obs: Stage3StepPayload
+    next_obs: ObservationPayload
     energy: float
     tactile: float
     s_target: list[list[float]]
@@ -358,28 +362,22 @@ async def handle_stage3_step(payload: Stage3StepPayload):
         # get all global and filtered features for current live observation
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
-                obs_dict, combined_obs = extract_batch_stage3_obs_features([payload])
+                obs_dict, combined_obs = extract_batch_stage3_obs_features(
+                    [payload.obs]
+                )
                 # Get clean live state latent: Shape [1, 512]
                 s_t = encode_obs_to_latent(combined_obs, state)
                 print(f"s_t shape: {s_t.shape}")
 
                 # Encode positive IK trajectories into a target bank in 1 batched GPU call: Shape [M, 512]
                 tr_obs_payloads = [
-                    Stage3StepPayload(
+                    ObservationPayload(
                         frames=tr["frames"],
                         history_frames=tr["history_frames"],
                         proprioception=tr["proprioception"],
-                        tactile=payload.tactile,
-                        text_prompt=payload.text_prompt,
-                        ui_annotations=payload.ui_annotations,
-                        pos_trajectories=[],
-                        episode_idx=0,
-                        step_idx=0,
-                        is_easy_task=True,
-                        eval_mean_physical_distance=0,
-                        eval_median_physical_distance=0,
-                        eval_min_physical_distance=0,
-                        eval_energy_distance_correlation=0,
+                        tactile=payload.obs.tactile,
+                        text_prompt=payload.obs.text_prompt,
+                        ui_annotations=payload.obs.ui_annotations,
                     )
                     for tr in payload.pos_trajectories
                 ]
@@ -1125,12 +1123,13 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                             curr_frames,
                             curr_frames,
                         ]
-                        eval_payloads[name] = Stage3StepPayload(
-                            **raw_payload,
-                            eval_mean_physical_distance=0,
-                            eval_median_physical_distance=0,
-                            eval_min_physical_distance=0,
-                            eval_energy_distance_correlation=0,
+                        eval_payloads[name] = ObservationPayload(
+                            frames=raw_payload["frames"],
+                            history_frames=raw_payload["history_frames"],
+                            proprioception=raw_payload["proprioception"],
+                            tactile=raw_payload["tactile"],
+                            text_prompt=raw_payload["text_prompt"],
+                            ui_annotations=raw_payload["ui_annotations"],
                         )
             if eval_payloads:
                 run_exemplar_diagnostic_check(
