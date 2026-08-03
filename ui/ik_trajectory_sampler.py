@@ -57,7 +57,7 @@ def generate_ik_trajectories(
     target_3d_bounds: dict,
     site_name: str = "R_wrist_roll_link",
     n: int = 4,
-    scale_multiplier: float = 0.3,
+    scale_multiplier: float = 0.5,
     is_positive: bool = True,
 ) -> list[dict]:
     """
@@ -69,7 +69,7 @@ def generate_ik_trajectories(
 
     # Calculate perturbation scale based on object 3D spatial extents
     extents = np.array(target_3d_bounds["extents_3d"]).max()
-    delta = max(0.01, float(extents) * scale_multiplier)
+    delta = max(0.05, float(extents) * scale_multiplier)
     offsets = [
         np.array([0.0, 0.0, 0.0]),
         np.array([delta, 0.0, 0.0]),

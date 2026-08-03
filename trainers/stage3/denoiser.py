@@ -96,14 +96,15 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         action_mask[..., :32] = 1.0
 
         # [B, H, action_dim] initialized with 0.0s for padding channels
-        init_sigma = 0.75
+        init_sigma = 0.4
         x_t = (
             torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
             * init_sigma
         ) * action_mask
 
         print(
-            f"📊 [ODE Init] x_0 Standard Normal Bounds -> Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
+            "📊 [ODE Init] x_0 Standard Normal Bounds -> "
+            f"Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
         )
 
         # [B, H, action_dim]

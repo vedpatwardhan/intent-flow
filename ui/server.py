@@ -480,7 +480,7 @@ async def run_stage3_training_loop(
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
                 n=5,
-                scale_multiplier=0.3,
+                scale_multiplier=0.5,
                 is_positive=True,
             )
             neg_trajectories = generate_ik_trajectories(

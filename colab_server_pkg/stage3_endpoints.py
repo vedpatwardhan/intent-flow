@@ -435,9 +435,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     s_target_conditioned.expand(ensemble_size, -1),  # [16, 512]
                     embodiment_id=embodiment_id_expanded,
                     horizon=horizon,
-                    num_steps=12,
+                    num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.35,
+                    step_nft_scale=0.3,
                 )  # a_candidates Shape [16, 7, 58]
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
@@ -785,7 +785,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
             loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
-            loss_total = loss_dynamics + 0.01 * loss_sigreg
+            loss_total = loss_dynamics + 0.03 * loss_sigreg
 
             loss_total.backward()
 
@@ -1006,7 +1006,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 + contrastive_loss * 0.5
                 + casa_loss * 0.2
                 + predictor_loss * 0.5
-                + sigreg_loss * 0.05
+                + sigreg_loss * 0.03
                 + reg_action_norm * 0.0045
                 + loss_smoothness * 0.35
             )
