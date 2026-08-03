@@ -440,7 +440,7 @@ def extract_features_common(
 ):
     """
     Restored single-frame feature extraction helper for the /process endpoint in main.py.
-    Wraps parameters into a Stage3StepPayload and delegates to extract_batch_stage3_obs_features.
+    Wraps parameters into a ObservationPayload and delegates to extract_batch_stage3_obs_features.
     """
     from colab_server_pkg.stage3_endpoints import ObservationPayload
 
