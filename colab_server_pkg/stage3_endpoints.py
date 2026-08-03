@@ -815,9 +815,9 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     try:
                         wandb.log(
                             {
-                                "calibrate/dynamics_loss": loss_dynamics.item(),
-                                "calibrate/sigreg_loss": loss_sigreg.item(),
-                                "calibrate/total_loss": loss_total.item(),
+                                "loss/predictor_loss": loss_dynamics.item(),
+                                "loss/sigreg_loss": loss_sigreg.item(),
+                                "loss/calibrate_loss": loss_total.item(),
                             }
                         )
                     except Exception:
@@ -1085,10 +1085,10 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
 
             diagnostics = {
                 "epoch_step": opsd_step,
-                "distill/cfm_loss": cfm_loss.item(),
-                "distill/contrastive_loss": contrastive_loss.item(),
-                "distill/casa_loss": casa_loss.item(),
-                "distill/total_loss": loss_opsd.item(),
+                "loss/cfm_loss": cfm_loss.item(),
+                "loss/contrastive_loss": contrastive_loss.item(),
+                "loss/casa_loss": casa_loss.item(),
+                "loss/distill_loss": loss_opsd.item(),
                 "drift/state_magnitude": state_magnitude,
                 "drift/state_variance": state_variance,
                 "policy/action_magnitude": action_magnitude,
