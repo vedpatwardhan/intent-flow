@@ -554,8 +554,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                 steering_timelines_expanded, 0.0, 1.0
             )  # Shape [16, 7, 58]
 
-        # Detach the candidates after the loop
-        final_actions = a_candidates.clone().detach()  # Shape [16, 7, 58]
+        # Detach the candidates after the loop and clamp to strict joint limit boundaries
+        # Shape [16, 7, 58]
+        final_actions = torch.clamp(a_candidates.clone().detach(), -1.0, 1.0)
 
         # Record final steered candidate trajectories (iteration 5)
         steering_history["iterations"].append(
@@ -672,6 +673,12 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
         ensure_stage3_models()
         import colab_server_pkg.models_state as state
 
+        # --- RUN 110 CALIBRATION PLUMBING CONTRACT ---
+        # Re-enable predictor training mode and unfreeze parameters
+        state.stage3_models["predictor"].train()
+        for param in state.stage3_models["predictor"].parameters():
+            param.requires_grad = True
+
         num_trans = len(payload.transitions)
         print(
             f"⚡ [CALIBRATE JOB {job_id}] Batched processing across {num_trans} transitions..."
@@ -783,7 +790,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
             loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
-            loss_total = loss_dynamics + 0.03 * loss_sigreg
+            loss_total = loss_dynamics + 0.02 * loss_sigreg
 
             loss_total.backward()
 
@@ -865,6 +872,20 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         )
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
+
+        # --- RUN 110 DISTILLATION PLUMBING CONTRACT ---
+        # 1. Freeze dynamics model completely
+        state.stage3_models["predictor"].eval()
+        for param in state.stage3_models["predictor"].parameters():
+            param.requires_grad = False
+
+        # 2. Keep perception adapters, MSAT, and Flow Matcher active
+        state.stage3_models["vis_adapter"].train()
+        state.stage3_models["vggt_adapter"].train()
+        state.stage3_models["state_adapter"].train()
+        state.stage3_models["action_adapter"].train()
+        state.stage3_models["msat"].train()
+        state.stage3_models["flow_matcher"].train()
 
         # Deterministic Epoch Partitioning: Isolate fresh rollout transitions (up to 400)
         total_history_len = len(state.stage3_trajectory_history)
@@ -955,29 +976,45 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 device=device,
             ).view(-1, 7, 58)
 
-            # Get velocities for both trajectories
-            pos_vel = pos_actions.unsqueeze(0) - x_0.unsqueeze(1)  # Shape [B, 5, 7, 58]
-            neg_vel = neg_actions.unsqueeze(0) - x_0.unsqueeze(1)  # Shape [B, 8, 7, 58]
+            # ====================================================================
+            # 2. ACTION-SPACE REFACTORED PUSH-PULL REGULARIZER (RUN 110)
+            # ====================================================================
+            pos_actions = torch.tensor(
+                [tr["actions"] for tr in payload.pos_trajectories],
+                dtype=torch.float32,
+                device=device,
+            ).view(-1, 7, 58)
+            neg_actions = torch.tensor(
+                [tr["actions"] for tr in payload.neg_trajectories],
+                dtype=torch.float32,
+                device=device,
+            ).view(-1, 7, 58)
 
-            # Expand model prediction to [B, 1, 7, 58] to get errors
-            err_pos = torch.mean(
-                (v_theta.unsqueeze(1) - pos_vel) ** 2, dim=(-2, -1)
-            ).min(dim=1)[0]
-            err_neg = torch.mean(
-                (v_theta.unsqueeze(1) - neg_vel) ** 2, dim=(-2, -1)
-            ).min(dim=1)[0]
+            # Reconstruct model's implied clean actions (x_1 prediction) from v_theta at t=0.5
+            x_1_pred = 2.0 * v_theta + x_0  # Shape: [B, 7, 58]
 
-            # Hinge loss formulation: push away from distractor velocities by a margin of 1.0
-            margin = 1.0
+            # Compute tracking errors directly in action space via parallel broadcasting
+            action_err_pos = torch.mean(
+                (x_1_pred.unsqueeze(1) - pos_actions.unsqueeze(0)) ** 2, dim=(-2, -1)
+            )  # [B, N_pos]
+            action_err_neg = torch.mean(
+                (x_1_pred.unsqueeze(1) - neg_actions.unsqueeze(0)) ** 2, dim=(-2, -1)
+            )  # [B, N_neg]
+
+            min_action_err_pos = action_err_pos.min(dim=1)[0]  # Pull target [B]
+            min_action_err_neg = action_err_neg.min(dim=1)[0]  # Push target [B]
+
+            margin = 1.5
             contrastive_loss = torch.mean(
-                err_pos + torch.clamp(margin - err_neg, min=0.0)
+                min_action_err_pos + torch.clamp(margin - min_action_err_neg, min=0.0)
             )
 
-            # 3. Predictor Loss (JEPA dynamics)
+            # 3. Predictor Loss (computed for telemetry tracking only; frozen dynamics)
             z_action = state.stage3_models["action_adapter"](batch_action)
             z_action_16 = state.stage3_models["action_down_proj"](z_action)
-            s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
-            predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
+            with torch.no_grad():
+                s_next_pred = state.stage3_models["predictor"](batch_s_t, z_action_16)
+                predictor_loss = F.mse_loss(s_next_pred, batch_s_next)
 
             # 4. CASA (Contrastive Action-State Alignment) loss insulated to Positive (D+) trajectories
             z_s = batch_s_t / (batch_s_t.norm(dim=-1, keepdim=True) + 1e-8)
@@ -986,25 +1023,25 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             labels = torch.arange(sim_matrix.size(0), device=device)
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
-            # 5. Anti-collapse regularization (SIGReg) with Step Decay Schedule
-            sigreg_loss = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
+            # 5. Anti-collapse regularization (SIGReg)
+            sigreg_loss = state.stage3_models["sigreg_module"](
+                batch_s_next.unsqueeze(0)
+            )
 
-            # Penalty on action magnitude and jerk for overall smoothness
+            # Penalty on action magnitude for overall smoothness
             reg_action_norm = torch.mean(batch_action**2)
 
             # 6. Smoothness regularization loss penalty on output joint space deltas
-            # Multi-scale sliding window jerk regularization (1st and 2nd order deltas over H=7 horizon)
             deltas_1 = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 107
+            # Combined total optimization payload for Run 110 (Predictor Loss Omitted)
             loss_opsd = (
                 cfm_loss
-                + contrastive_loss * 0.5
+                + contrastive_loss * 0.4
                 + casa_loss * 0.2
-                + predictor_loss * 0.5
-                + sigreg_loss * 0.03
+                + sigreg_loss * 0.02
                 + reg_action_norm * 0.0045
                 + loss_smoothness * 0.35
             )

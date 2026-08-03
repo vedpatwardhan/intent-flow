@@ -52,7 +52,7 @@ class MultiStreamActionTransformer(nn.Module):
 
             if key == "proprioception":
                 p_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8
-                tokens = tokens * torch.clamp(0.65 / p_norm, min=1.0)
+                tokens = tokens * torch.clamp(1.20 / p_norm, min=1.0)
 
             if key == "vision":
                 d_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8

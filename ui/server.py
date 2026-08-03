@@ -791,10 +791,10 @@ async def run_stage3_training_loop(
 
             print(
                 f"📈 [Telemetry Summary] Step {env_step} -> Dist (16 tracks) "
-                f"Mean: {step_mean_phys_dist:.4f}m | "
-                f"Median: {step_median_phys_dist:.4f}m | "
-                f"Min: {step_min_phys_dist:.4f}m | "
-                f"Energy-Dist Corr: {step_energy_dist_corr:.4f}"
+                f"Mean: {step_mean_phys_dist:.3f}m | "
+                f"Median: {step_median_phys_dist:.3f}m | "
+                f"Min: {step_min_phys_dist:.3f}m ({phys_dists_np.argmin()}) | "
+                f"Energy-Dist Corr: {step_energy_dist_corr:.3f}"
             )
 
             # Rewind physics back to the committed path's final outcome to capture its state
