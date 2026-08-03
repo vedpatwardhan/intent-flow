@@ -442,23 +442,15 @@ def extract_features_common(
     Restored single-frame feature extraction helper for the /process endpoint in main.py.
     Wraps parameters into a Stage3StepPayload and delegates to extract_batch_stage3_obs_features.
     """
-    from colab_server_pkg.stage3_endpoints import Stage3StepPayload
+    from colab_server_pkg.stage3_endpoints import ObservationPayload
 
-    payload = Stage3StepPayload(
+    payload = ObservationPayload(
         frames={view_name: frame_str},
         history_frames=[{view_name: s} for s in history_frames],
+        proprioception=[0.0] * 58,
+        tactile=[[0.0] * 4 for _ in range(4)],
         text_prompt=text_prompt,
         ui_annotations=ui_annotations or {},
-        tactile=[[0.0] * 4 for _ in range(4)],
-        proprioception=[0.0] * 58,
-        pos_trajectories=[],
-        episode_idx=0,
-        step_idx=0,
-        is_easy_task=True,
-        eval_mean_physical_distance=0,
-        eval_median_physical_distance=0,
-        eval_min_physical_distance=0,
-        eval_energy_distance_correlation=0,
     )
     batch_obs_dicts, _ = extract_batch_stage3_obs_features([payload])
     return batch_obs_dicts[0][view_name]["features"]
