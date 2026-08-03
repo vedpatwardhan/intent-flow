@@ -490,7 +490,7 @@ async def run_stage3_training_loop(
                 target_3d_bounds=target_3d_bounds,
                 site_name=selected_body_name,
                 n=8,
-                scale_multiplier=0.9,
+                scale_multiplier=1,
                 is_positive=False,
             )
             print(
@@ -864,8 +864,6 @@ async def run_stage3_training_loop(
                     traceback.print_exc()
 
                 buffered_transitions = []
-                accumulated_phys_dists = []
-                accumulated_corrs = []
 
             # Step loop ends cleanly; next step starts with sim.reset_env(lock_posture=True, randomize_cube=True)
 
