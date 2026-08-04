@@ -340,7 +340,10 @@ def ensure_stage3_models():
                 if k.startswith(prefix):
                     m_state_dict[k[len(prefix) :]] = v
             if len(m_state_dict) > 0 and module_name in state.stage3_models:
-                state.stage3_models[module_name].load_state_dict(m_state_dict)
+                is_msat = module_name == "msat"
+                state.stage3_models[module_name].load_state_dict(
+                    m_state_dict, strict=not is_msat
+                )
     else:
         print(
             "[Colab] WARNING: Neither Stage 3 nor Stage 2 checkpoints were found. Models initialized with default random weights!"
