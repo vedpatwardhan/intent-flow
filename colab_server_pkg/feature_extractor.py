@@ -1,7 +1,8 @@
 import cv2
-import torch
 import numpy as np
 from PIL import Image
+import torch
+import torch.nn.functional as F
 from torchvision import transforms
 
 from colab_server_pkg.config import device
