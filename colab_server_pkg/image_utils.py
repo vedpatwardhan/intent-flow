@@ -311,11 +311,12 @@ def save_stage3_obs_feature_plots(
     view_name: str = "world_center",
 ):
     """
-    Renders a unified 4-panel diagnostic PNG plot for any observation feature set:
+    Renders a unified 5-panel diagnostic PNG plot for any observation feature set:
     1. Start Posture (history_frames[-4])
     2. Outcome Posture (history_frames[-1])
     3. DINOv3 Feature Map Overlay
     4. 4-Frame VGGT Motion Vector Field Overlay
+    5. Sobel Edge-Gradient Map Overlay
     """
     try:
         start_frame_str = (
@@ -331,7 +332,7 @@ def save_stage3_obs_feature_plots(
         start_np = decode_base64_image(start_frame_str)
         outcome_np = decode_base64_image(outcome_frame_str)
 
-        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
         img_h, img_w, _ = outcome_np.shape
 
         # --- Panel 1: Start Posture ---
@@ -374,6 +375,24 @@ def save_stage3_obs_feature_plots(
         axes[3].set_title(f"4. {title_prefix} VGGT Motion Field", fontsize=10)
         axes[3].axis("off")
 
+        # --- Panel 5: Sobel Edge-Gradient Map Overlay ---
+        if "edge" in obs_features[view_name]:
+            edge_tensor = obs_features[view_name]["edge"].squeeze()
+            edge_map = edge_tensor.detach().cpu().numpy()
+            axes[4].imshow(outcome_np)
+            axes[4].imshow(
+                edge_map,
+                cmap="plasma",
+                alpha=0.55,
+                extent=[0, img_w, img_h, 0],
+                interpolation="bilinear",
+            )
+            axes[4].set_title(f"5. {title_prefix} Edge Map", fontsize=10)
+        else:
+            axes[4].imshow(outcome_np)
+            axes[4].set_title(f"5. {title_prefix} Edge Map (N/A)", fontsize=10)
+        axes[4].axis("off")
+
         plt.tight_layout(rect=[0, 0, 1, 0.93])
         output_dir = os.path.abspath(
             os.path.join(
@@ -387,7 +406,7 @@ def save_stage3_obs_feature_plots(
         plt.savefig(output_path, dpi=150)
         plt.close()
         print(
-            f"📸 Saved 4-Panel Observation Feature Plot ({title_prefix}) to: {output_path}"
+            f"📸 Saved 5-Panel Observation Feature Plot ({title_prefix}) to: {output_path}"
         )
     except Exception as e:
         print(f"⚠️ Error saving stage3 observation feature plot: {e}")

@@ -152,15 +152,15 @@ class VGGTAdapter(nn.Module):
         return x
 
 
-class RGBAdapter(nn.Module):
+class EdgeAdapter(nn.Module):
     """
-    Projects raw RGB patch tokens (d_in=384) to shared latent dimension (d_out=512).
-    Uses a 16x16 patch convolution to convert 224x224 RGB into a 14x14 grid (196 tokens).
+    Projects 1-channel Sobel edge-gradient maps (d_in=384) to shared latent dimension (d_out=512).
+    Converts 224x224 edge maps into a 14x14 spatial patch grid (196 tokens per view).
     """
 
     def __init__(self, d_in=384, d_out=512):
         super().__init__()
-        self.patch_embed = nn.Conv2d(3, d_in, kernel_size=16, stride=16)
+        self.patch_embed = nn.Conv2d(1, d_in, kernel_size=16, stride=16)
         self.net = nn.Sequential(
             nn.Linear(d_in, d_out),
             nn.LayerNorm(d_out),
@@ -171,10 +171,10 @@ class RGBAdapter(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: Raw RGB tensor of shape [B, C, H, W], [B, V, C, H, W], or [C, H, W]
+            x: Raw edge-gradient tensor of shape [B, 1, H, W], [B, V, 1, H, W], or [1, H, W]
         """
         if x.dim() == 3:
-            x = x.unsqueeze(0)  # [1, C, H, W]
+            x = x.unsqueeze(0)  # [1, 1, H, W]
 
         is_multi_view = x.dim() == 5
         if is_multi_view:
@@ -184,7 +184,7 @@ class RGBAdapter(nn.Module):
             B, C, H, W = x.shape
             V = 1
 
-        # 1. Patchify: [B*V, 3, 224, 224] -> [B*V, 384, 14, 14]
+        # 1. Patchify: [B*V, 1, 224, 224] -> [B*V, 384, 14, 14]
         x = self.patch_embed(x)
         # 2. Flatten spatial dimensions: [B*V, 384, 196] -> [B*V, 196, 384]
         x = x.flatten(2).transpose(1, 2)

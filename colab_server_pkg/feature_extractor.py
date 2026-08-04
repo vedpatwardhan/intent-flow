@@ -359,15 +359,38 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 0
             )  # Shape [1, 58]
 
-            # Convert PIL image to normalized Float32 PyTorch tensor [3, 224, 224]
-            rgb_tensor = transforms.ToTensor()(pil_frame).to(device)
+            # Compute normalized Sobel edge gradient map [1, 1, 224, 224]
+            gray = transforms.Grayscale()(pil_frame)
+            gray_tensor = transforms.ToTensor()(gray).unsqueeze(0).to(device)
+            sobel_x = (
+                torch.tensor(
+                    [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            sobel_y = (
+                torch.tensor(
+                    [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            grad_x = F.conv2d(gray_tensor, sobel_x, padding=1)
+            grad_y = F.conv2d(gray_tensor, sobel_y, padding=1)
+            edge_map = torch.sqrt(grad_x**2 + grad_y**2)
+            edge_map = edge_map / (edge_map.max() + 1e-8)
 
             batch_obs_dicts[b_idx][cam] = {
                 "features": features_dict,
                 "vision": vision_feat,
                 "pointnext": pt_feat,
                 "vggt": vggt_feat,
-                "rgb": rgb_tensor.unsqueeze(0),
+                "edge": edge_map,
                 "tactile": tactile_feat,
                 "proprioception": proprio_feat,
                 "text": clip_feat,
@@ -399,13 +422,13 @@ def extract_batch_stage3_obs_features(payload_list: list):
             ],
             dim=0,
         ),  # Shape [B, N_cam, 224, 224]
-        "rgb": torch.stack(
+        "edge": torch.stack(
             [
-                torch.cat([b_dict[cam]["rgb"] for cam in b_dict], dim=0)
+                torch.cat([b_dict[cam]["edge"] for cam in b_dict], dim=0)
                 for b_dict in batch_obs_dicts
             ],
             dim=0,
-        ),  # Shape [B, N_cam, 3, 224, 224]
+        ),  # Shape [B, N_cam, 1, 224, 224]
         "text": torch.stack(
             [
                 torch.cat([b_dict[cam]["text"] for cam in b_dict], dim=0)

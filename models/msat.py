@@ -16,7 +16,7 @@ class MultiStreamActionTransformer(nn.Module):
                 "vision": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "pointnext": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "vggt": nn.Parameter(torch.randn(1, 1, latent_dim)),
-                "rgb": nn.Parameter(torch.randn(1, 1, latent_dim)),
+                "edge": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "tactile": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "proprioception": nn.Parameter(torch.randn(1, 1, latent_dim)),
             }
@@ -39,17 +39,12 @@ class MultiStreamActionTransformer(nn.Module):
         """
         batch_size = next(iter(modality_dict.values())).size(0)
         tokens_list = []
-        active_keys = ["vision", "vggt", "rgb", "proprioception"]
+        active_keys = ["vision", "vggt", "edge", "proprioception"]
 
         for key in active_keys:
             if key not in modality_dict or modality_dict[key] is None:
                 continue
             tokens = modality_dict[key]  # [Batch, Len, Dim]
-
-            # 40% Stochastic RGB Dropout during training
-            if key == "rgb" and self.training:
-                if torch.rand(1).item() < 0.40:
-                    tokens = torch.zeros_like(tokens)
 
             # Add modality specific indicator bias
             mod_indicator = self.modality_embeddings[key].expand(
