@@ -159,6 +159,7 @@ def encode_obs_to_latent(obs_dict, state):
         # txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
         # pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
         vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
+        rgb_tok = state.stage3_models["rgb_adapter"](obs_dict["rgb"])
         # tactile_tok = state.stage3_models["tactile_adapter"](obs_dict["tactile"])
         proprio_tok = state.stage3_models["state_adapter"](obs_dict["proprioception"])
 
@@ -168,6 +169,7 @@ def encode_obs_to_latent(obs_dict, state):
             # "text": txt_tok,
             # "pointnext": pt_tok,
             "vggt": vggt_tok,
+            "rgb": rgb_tok,
             # "tactile": tactile_tok,
             "proprioception": proprio_tok,
         }
@@ -219,6 +221,7 @@ def ensure_stage3_models():
     state.stage3_models["vggt_adapter"] = VGGTAdapter(
         d_in=config["model"]["vggt_dim"]
     ).to(device)
+    state.stage3_models["rgb_adapter"] = RGBAdapter(d_in=384, d_out=512).to(device)
     # state.stage3_models["tactile_adapter"] = TactileAdapter().to(device)
     state.stage3_models["action_adapter"] = ActionAdapter(
         d_in=(horizon - 1) * action_dim, d_out=512
@@ -284,6 +287,10 @@ def ensure_stage3_models():
         # state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
         # state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
         state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
+        if "rgb_adapter" in checkpoint:
+            state.stage3_models["rgb_adapter"].load_state_dict(
+                checkpoint["rgb_adapter"]
+            )
         # state.stage3_models["tactile_adapter"].load_state_dict(
         #     checkpoint["tactile_adapter"]
         # )
@@ -346,6 +353,7 @@ def ensure_stage3_models():
         # + list(state.stage3_models["discriminator"].parameters())
         + list(state.stage3_models["action_adapter"].parameters())
         + list(state.stage3_models["state_adapter"].parameters())
+        + list(state.stage3_models["rgb_adapter"].parameters())
         + list(state.stage3_models["action_down_proj"].parameters()),
         lr=stage3_lr,
     )
@@ -899,6 +907,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         # 2. Keep perception adapters, MSAT, and Flow Matcher active
         state.stage3_models["vis_adapter"].train()
         state.stage3_models["vggt_adapter"].train()
+        state.stage3_models["rgb_adapter"].train()
         state.stage3_models["state_adapter"].train()
         state.stage3_models["action_adapter"].train()
         state.stage3_models["msat"].train()
@@ -1213,6 +1222,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             # "txt_adapter": state.stage3_models["txt_adapter"].state_dict(),
             # "pt_adapter": state.stage3_models["pt_adapter"].state_dict(),
             "vggt_adapter": state.stage3_models["vggt_adapter"].state_dict(),
+            "rgb_adapter": state.stage3_models["rgb_adapter"].state_dict(),
             # "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
             "msat": state.stage3_models["msat"].state_dict(),
             "action_adapter": state.stage3_models["action_adapter"].state_dict(),

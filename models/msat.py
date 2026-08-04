@@ -16,6 +16,7 @@ class MultiStreamActionTransformer(nn.Module):
                 "vision": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "pointnext": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "vggt": nn.Parameter(torch.randn(1, 1, latent_dim)),
+                "rgb": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "tactile": nn.Parameter(torch.randn(1, 1, latent_dim)),
                 "proprioception": nn.Parameter(torch.randn(1, 1, latent_dim)),
             }
@@ -38,25 +39,17 @@ class MultiStreamActionTransformer(nn.Module):
         """
         batch_size = next(iter(modality_dict.values())).size(0)
         tokens_list = []
-        active_keys = ["vision", "vggt", "proprioception"]
+        active_keys = ["vision", "vggt", "rgb", "proprioception"]
 
         for key in active_keys:
             if key not in modality_dict or modality_dict[key] is None:
                 continue
             tokens = modality_dict[key]  # [Batch, Len, Dim]
 
-            # Unified Modality Bounding System
-            if key == "vggt":
-                v_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8
-                tokens = tokens * torch.clamp(0.85 / v_norm, min=1.0)
-
-            if key == "proprioception":
-                p_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8
-                tokens = tokens * torch.clamp(1.20 / p_norm, min=1.0)
-
-            if key == "vision":
-                d_norm = tokens.abs().mean(dim=-1, keepdim=True) + 1e-8
-                tokens = tokens * torch.clamp(0.60 / d_norm, max=1.0)
+            # 40% Stochastic RGB Dropout during training
+            if key == "rgb" and self.training:
+                if torch.rand(1).item() < 0.40:
+                    tokens = torch.zeros_like(tokens)
 
             # Add modality specific indicator bias
             mod_indicator = self.modality_embeddings[key].expand(

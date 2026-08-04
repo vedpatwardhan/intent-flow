@@ -359,11 +359,15 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 0
             )  # Shape [1, 58]
 
+            # Convert PIL image to normalized Float32 PyTorch tensor [3, 224, 224]
+            rgb_tensor = transforms.ToTensor()(pil_frame).to(device)
+
             batch_obs_dicts[b_idx][cam] = {
                 "features": features_dict,
                 "vision": vision_feat,
                 "pointnext": pt_feat,
                 "vggt": vggt_feat,
+                "rgb": rgb_tensor.unsqueeze(0),
                 "tactile": tactile_feat,
                 "proprioception": proprio_feat,
                 "text": clip_feat,
@@ -395,6 +399,13 @@ def extract_batch_stage3_obs_features(payload_list: list):
             ],
             dim=0,
         ),  # Shape [B, N_cam, 224, 224]
+        "rgb": torch.stack(
+            [
+                torch.cat([b_dict[cam]["rgb"] for cam in b_dict], dim=0)
+                for b_dict in batch_obs_dicts
+            ],
+            dim=0,
+        ),  # Shape [B, N_cam, 3, 224, 224]
         "text": torch.stack(
             [
                 torch.cat([b_dict[cam]["text"] for cam in b_dict], dim=0)

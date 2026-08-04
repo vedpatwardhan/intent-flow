@@ -150,3 +150,49 @@ class VGGTAdapter(nn.Module):
             x = x.view(B, V, -1)
 
         return x
+
+
+class RGBAdapter(nn.Module):
+    """
+    Projects raw RGB patch tokens (d_in=384) to shared latent dimension (d_out=512).
+    Uses a 16x16 patch convolution to convert 224x224 RGB into a 14x14 grid (196 tokens).
+    """
+
+    def __init__(self, d_in=384, d_out=512):
+        super().__init__()
+        self.patch_embed = nn.Conv2d(3, d_in, kernel_size=16, stride=16)
+        self.net = nn.Sequential(
+            nn.Linear(d_in, d_out),
+            nn.LayerNorm(d_out),
+            nn.GELU(),
+            nn.Linear(d_out, d_out),
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: Raw RGB tensor of shape [B, C, H, W], [B, V, C, H, W], or [C, H, W]
+        """
+        if x.dim() == 3:
+            x = x.unsqueeze(0)  # [1, C, H, W]
+
+        is_multi_view = x.dim() == 5
+        if is_multi_view:
+            B, V, C, H, W = x.shape
+            x = x.view(B * V, C, H, W)
+        else:
+            B, C, H, W = x.shape
+            V = 1
+
+        # 1. Patchify: [B*V, 3, 224, 224] -> [B*V, 384, 14, 14]
+        x = self.patch_embed(x)
+        # 2. Flatten spatial dimensions: [B*V, 384, 196] -> [B*V, 196, 384]
+        x = x.flatten(2).transpose(1, 2)
+        # 3. Adapt: [B*V, 196, 512]
+        x = self.net(x)
+
+        if is_multi_view:
+            # Reshape back to [B, V * 196, 512]
+            x = x.view(B, V * 196, -1)
+
+        return x
