@@ -51,6 +51,7 @@ from models.adapters import (
     TactileAdapter,
     ActionAdapter,
     VGGTAdapter,
+    RGBAdapter,
 )
 from models.msat import MultiStreamActionTransformer
 from models.jepa_predictor import JepaPredictor
