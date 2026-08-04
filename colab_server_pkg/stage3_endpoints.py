@@ -646,6 +646,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                                 "eval/median_physical_distance": payload.eval_median_physical_distance,
                                 "eval/min_physical_distance": payload.eval_min_physical_distance,
                                 "eval/energy_distance_correlation": payload.eval_energy_distance_correlation,
+                                "eval/tactile_contact_triggered": float(
+                                    np.any(np.array(payload.obs.tactile) > 0.5)
+                                ),
                             }
                         )
                     wandb.log(log_payload)
@@ -1050,14 +1053,14 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             deltas_2 = batch_action_3d[:, 2:, :] - batch_action_3d[:, :-2, :]
             loss_smoothness = torch.mean(deltas_1**2) + 0.5 * torch.mean(deltas_2**2)
 
-            # Combined total optimization payload for Run 110 (Predictor Loss Omitted)
+            # Combined total optimization payload for Run 111 (Joint Headroom Unlocked)
             loss_opsd = (
                 cfm_loss
-                + contrastive_loss * 0.4
+                + contrastive_loss * 0.55
                 + casa_loss * 0.2
                 + sigreg_loss * 0.02
-                + reg_action_norm * 0.0045
-                + loss_smoothness * 0.35
+                + reg_action_norm * 0.0015
+                + loss_smoothness * 0.18
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
