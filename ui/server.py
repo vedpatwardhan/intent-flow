@@ -860,6 +860,7 @@ async def run_stage3_training_loop(
                         "energy": energy_ensemble[track_k],
                         "tactile": float(grasp_success),
                         "s_target": s_target,
+                        "candidate_idx": track_k,
                     }
                 )
 
