@@ -250,16 +250,7 @@ def compute_energy_landscape_analytics(payload, state):
 
             # Collect trajectory metadata for interactive hover labels
             trajectory_metadata = [
-                (
-                    state.stage3_trajectory_history[j][7]
-                    if len(state.stage3_trajectory_history[j]) > 7
-                    else {
-                        "step_idx": 0,
-                        "candidate_idx": j,
-                        "episode_idx": getattr(state, "epoch_counter", 0),
-                    }
-                )
-                for j in range(num_transitions)
+                state.stage3_trajectory_history[j][7] for j in range(num_transitions)
             ]
 
             for i in range(0, num_transitions, chunk_size):
@@ -849,11 +840,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Track current state, action, next state, energy, tactile, s_target, and is_positive_trajectory label
             # Extract single-sample feature dictionary for next state from combined batch
-            sample_next_obs = {
-                k: v[idx : idx + 1]
-                for k, v in combined_obs_next_batch.items()
-                if v is not None
-            }
+            next_obs = {k: v[idx : idx + 1] for k, v in combined_obs_next_batch.items()}
 
             meta_info = {
                 "candidate_idx": trans.candidate_idx,
@@ -869,7 +856,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     trans.energy,
                     trans.tactile,
                     s_target,
-                    sample_next_obs,  # Feature dict for post-distill re-encoding
+                    next_obs,
                     meta_info,
                 )
             )
