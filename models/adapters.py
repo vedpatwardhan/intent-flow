@@ -18,11 +18,16 @@ class VisualAdapter(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: [B, 196, 384] or [B, Views, 196, 384]
-        x = self.net(x)
-        return x.mean(
-            dim=-2
-        )  # Mean pool across 196 spatial patch tokens -> [B, 512] or [B, Views, 512]
+        # x shape can be 3D [B, 196, 384] / [N_cam, 196, 384] or 4D [B, N_cam, 196, 384]
+        x = self.net(x)  # Projects 384 -> 512
+        if x.ndim == 4:
+            # 4D Input: Average across 196 spatial patches FIRST -> [B, N_cam, 512],
+            # then average across camera views -> [B, 512]
+            return x.mean(dim=-2).mean(dim=-2)
+        elif x.ndim == 3:
+            # 3D Input: Average across 196 spatial patches -> [B/N_cam, 512]
+            return x.mean(dim=-2)
+        return x
 
 
 class TextAdapter(nn.Module):

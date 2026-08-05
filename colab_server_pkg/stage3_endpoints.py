@@ -158,6 +158,10 @@ def encode_obs_to_latent(obs_dict, state):
     with torch.amp.autocast("cuda"):
         # Adapters
         vis_tok = state.stage3_models["vis_adapter"](obs_dict["vision"])
+        if vis_tok.ndim == 2:
+            vis_tok = vis_tok.unsqueeze(
+                1
+            )  # [B, 1, 512] for MSAT sequence concatenation
         # txt_tok = state.stage3_models["txt_adapter"](obs_dict["text"])
         # pt_tok = state.stage3_models["pt_adapter"](obs_dict["pointnext"])
         vggt_tok = state.stage3_models["vggt_adapter"](obs_dict["vggt"])
