@@ -215,9 +215,9 @@ def compute_energy_landscape_analytics(payload, state):
                     frames=tr["frames"],
                     history_frames=tr["history_frames"],
                     proprioception=tr["proprioception"],
-                    tactile=payload.reward > 0.5,
-                    text_prompt="grasp cube",
-                    ui_annotations={},
+                    tactile=payload.obs.tactile,
+                    text_prompt=payload.obs.text_prompt,
+                    ui_annotations=payload.obs.ui_annotations,
                 )
                 for tr in payload.pos_trajectories
             ]
@@ -226,9 +226,9 @@ def compute_energy_landscape_analytics(payload, state):
                     frames=tr["frames"],
                     history_frames=tr["history_frames"],
                     proprioception=tr["proprioception"],
-                    tactile=False,
-                    text_prompt="grasp cube",
-                    ui_annotations={},
+                    tactile=payload.obs.tactile,
+                    text_prompt=payload.obs.text_prompt,
+                    ui_annotations=payload.obs.ui_annotations,
                 )
                 for tr in payload.neg_trajectories
             ]
