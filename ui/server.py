@@ -26,6 +26,126 @@ from ik_trajectory_sampler import (
     save_ik_trajectory_diagnostic_plots,
     save_ik_trajectory_video,
 )
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+
+def plot_energy_landscape(landscape_data: dict, epoch: int, output_dir: str):
+    """
+    Renders an interactive HTML Energy Landscape plot (Plotly).
+    Hovering on any data point displays step_idx, candidate_idx, episode_idx, and distance values.
+    """
+    if (
+        "mean_pos_dist_per_track" not in landscape_data
+        or "mean_neg_dist_per_track" not in landscape_data
+    ):
+        return
+
+    mean_pos = np.array(landscape_data["mean_pos_dist_per_track"])
+    mean_neg = np.array(landscape_data["mean_neg_dist_per_track"])
+    ratios = np.array(landscape_data["pos_neg_ratio"])
+    metadata = landscape_data.get("trajectory_metadata", [])
+
+    # Extract metadata labels for interactive hover tooltips
+    hover_texts = []
+    for idx in range(len(mean_pos)):
+        meta = metadata[idx] if idx < len(metadata) else {}
+        ep = meta.get("episode_idx", epoch)
+        st = meta.get("step_idx", 0)
+        cand = meta.get("candidate_idx", idx)
+        text = (
+            f"<b>Trajectory #{idx + 1}</b><br>"
+            f"Episode: {ep} | Step: {st} | Candidate: {cand}<br>"
+            f"D+ (Pos Dist): {mean_pos[idx]:.4f}<br>"
+            f"D- (Neg Dist): {mean_neg[idx]:.4f}<br>"
+            f"Pull Ratio (D+/D-): {ratios[idx]:.4f}"
+        )
+        hover_texts.append(text)
+
+    # Render interactive Plotly HTML plot
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(
+            f"Epoch {epoch}: Latent Energy Landscape (D+ vs D-)",
+            f"Epoch {epoch}: Trajectory Pull Distribution",
+        ),
+    )
+
+    # Subplot 1: Scatter plot
+    fig.add_trace(
+        go.Scatter(
+            x=mean_pos,
+            y=mean_neg,
+            mode="markers",
+            marker=dict(
+                size=10,
+                color=ratios,
+                colorscale="rdylbu",
+                showscale=True,
+                colorbar=dict(title="Pull Ratio (D+/D-)", x=0.45),
+                line=dict(width=1, color="black"),
+            ),
+            text=hover_texts,
+            hoverinfo="text",
+            name="Rollouts",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Parity Line (D+ = D-)
+    max_val = max(float(mean_pos.max()), float(mean_neg.max()), 1.0)
+    fig.add_trace(
+        go.Scatter(
+            x=[0, max_val],
+            y=[0, max_val],
+            mode="lines",
+            line=dict(color="red", dash="dash", width=2),
+            name="Parity Line (D+ = D-)",
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.update_xaxes(
+        title_text="Mean Normalized Cosine Distance to Positive Anchors (D+)",
+        row=1,
+        col=1,
+    )
+    fig.update_yaxes(
+        title_text="Mean Normalized Cosine Distance to Negative Anchors (D-)",
+        row=1,
+        col=1,
+    )
+
+    # Subplot 2: Histogram
+    fig.add_trace(
+        go.Histogram(
+            x=ratios,
+            nbinsx=20,
+            marker=dict(color="teal", line=dict(color="black", width=1)),
+            name="Pull Ratios",
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Parity Threshold line
+    fig.add_vline(x=1.0, line_width=2, line_dash="dash", line_color="red", row=1, col=2)
+    fig.update_xaxes(title_text="Pull Ratio (D+ / D-)", row=1, col=2)
+    fig.update_yaxes(title_text="Trajectory Count", row=1, col=2)
+
+    fig.update_layout(
+        title_text=f"Stage 3 Epoch {epoch} Latent Energy Landscape Diagnostics",
+        width=1400,
+        height=600,
+        template="plotly_white",
+    )
+
+    html_path = os.path.join(output_dir, f"energy_landscape_epoch_{epoch:02d}.html")
+    fig.write_html(html_path)
+    print(f"📊 [Landscape Analytics] Saved interactive HTML plot to: {html_path}")
 
 
 class GR1SimulationServer(GR1MuJoCoBase):
@@ -900,9 +1020,34 @@ async def run_stage3_training_loop(
                                 s_data = status_resp.json()
                                 st = s_data.get("status")
                                 if st == "completed":
+                                    opsd_loss = s_data.get("opsd_loss")
+                                    landscape_data = s_data.get("energy_landscape")
+
                                     print(
-                                        f"✅ [Distill] Job {job_id} completed for Episode {ep_idx + 1}. OPSD Loss: {s_data.get('opsd_loss')}"
+                                        f"✅ [Distill] Job {job_id} completed for Episode {ep_idx + 1}. OPSD Loss: {opsd_loss}"
                                     )
+
+                                    if landscape_data:
+                                        landscape_dir = os.path.abspath(
+                                            os.path.join(
+                                                os.path.dirname(__file__),
+                                                "..",
+                                                "logs",
+                                                "analytics",
+                                                f"epoch_{ep_idx + 1:02d}",
+                                            )
+                                        )
+                                        os.makedirs(landscape_dir, exist_ok=True)
+                                        json_path = os.path.join(
+                                            landscape_dir, "energy_landscape.json"
+                                        )
+                                        with open(json_path, "w") as f:
+                                            json.dump(landscape_data, f, indent=2)
+
+                                        plot_energy_landscape(
+                                            landscape_data, ep_idx + 1, landscape_dir
+                                        )
+
                                     break
                                 elif st == "failed":
                                     print(

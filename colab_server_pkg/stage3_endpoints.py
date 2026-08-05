@@ -135,6 +135,7 @@ class Stage3CalibrateTransition(BaseModel):
     energy: float
     tactile: float
     s_target: list[list[float]]
+    candidate_idx: int = 0
 
 
 class Stage3CalibratePayload(BaseModel):
@@ -198,6 +199,106 @@ def run_exemplar_diagnostic_check(s_target, state, eval_payloads):
     print(f"📊 Exemplar Goal Distances: {json.dumps(diagnostic_distances, indent=2)}")
     if HAS_WANDB and wandb.run is not None:
         wandb.log(diagnostic_distances)
+
+
+def compute_energy_landscape_analytics(payload, state):
+    """
+    Re-encodes the 5 positive and 8 negative anchor trajectories alongside all rollout target states
+    stored in history using the updated model parameters, computing pairwise Normalized Cosine Distances.
+    """
+    energy_landscape_data = {}
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            # 1. Re-encode 5 Positive and 8 Negative Anchors with UPDATED adapters & MSAT weights
+            pos_payloads = [
+                ObservationPayload(
+                    frames=tr["frames"],
+                    history_frames=tr["history_frames"],
+                    proprioception=tr["proprioception"],
+                    tactile=payload.reward > 0.5,
+                    text_prompt="grasp cube",
+                    ui_annotations={},
+                )
+                for tr in payload.pos_trajectories
+            ]
+            neg_payloads = [
+                ObservationPayload(
+                    frames=tr["frames"],
+                    history_frames=tr["history_frames"],
+                    proprioception=tr["proprioception"],
+                    tactile=False,
+                    text_prompt="grasp cube",
+                    ui_annotations={},
+                )
+                for tr in payload.neg_trajectories
+            ]
+
+            _, pos_batch_obs = extract_batch_stage3_obs_features(pos_payloads)
+            _, neg_batch_obs = extract_batch_stage3_obs_features(neg_payloads)
+
+            z_pos_anchors = encode_obs_to_latent(pos_batch_obs, state)  # [5, 512]
+            z_neg_anchors = encode_obs_to_latent(neg_batch_obs, state)  # [8, 512]
+
+            # Normalize anchor vectors for Cosine Distance
+            z_pos_norm = F.normalize(z_pos_anchors, p=2, dim=-1)
+            z_neg_norm = F.normalize(z_neg_anchors, p=2, dim=-1)
+
+            # 2. Re-encode target states of rollout transitions stored in history
+            num_transitions = len(state.stage3_trajectory_history)
+            chunk_size = 32
+            z_final_states_list = []
+
+            # Collect trajectory metadata for interactive hover labels
+            trajectory_metadata = [
+                (
+                    state.stage3_trajectory_history[j][7]
+                    if len(state.stage3_trajectory_history[j]) > 7
+                    else {
+                        "step_idx": 0,
+                        "candidate_idx": j,
+                        "episode_idx": getattr(state, "epoch_counter", 0),
+                    }
+                )
+                for j in range(num_transitions)
+            ]
+
+            for i in range(0, num_transitions, chunk_size):
+                chunk_obs_list = [
+                    state.stage3_trajectory_history[j][6]
+                    for j in range(i, min(i + chunk_size, num_transitions))
+                ]
+                chunk_obs_dict = {
+                    k: torch.cat([obs[k] for obs in chunk_obs_list], dim=0)
+                    for k in chunk_obs_list[0].keys()
+                }
+                chunk_z = encode_obs_to_latent(chunk_obs_dict, state)
+                z_final_states_list.append(chunk_z)
+
+            if z_final_states_list:
+                z_final_states = torch.cat(z_final_states_list, dim=0)
+                z_final_norm = F.normalize(z_final_states, p=2, dim=-1)
+
+                # 3. Compute Cosine Distance Matrices: D = 1.0 - CosineSimilarity
+                pos_sim = torch.matmul(z_final_norm, z_pos_norm.T)  # [N, 5]
+                neg_sim = torch.matmul(z_final_norm, z_neg_norm.T)  # [N, 8]
+
+                d_pos = (1.0 - pos_sim).cpu().numpy()
+                d_neg = (1.0 - neg_sim).cpu().numpy()
+
+                energy_landscape_data = {
+                    "epoch_idx": getattr(state, "epoch_counter", 0),
+                    "num_trajectories": num_transitions,
+                    "trajectory_metadata": trajectory_metadata,
+                    "distances_to_positive": d_pos.tolist(),
+                    "distances_to_negative": d_neg.tolist(),
+                    "mean_pos_dist_per_track": d_pos.mean(axis=1).tolist(),
+                    "mean_neg_dist_per_track": d_neg.mean(axis=1).tolist(),
+                    "pos_neg_ratio": (
+                        d_pos.mean(axis=1) / (d_neg.mean(axis=1) + 1e-8)
+                    ).tolist(),
+                }
+
+    return energy_landscape_data
 
 
 def ensure_stage3_models():
@@ -505,13 +606,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             s_next_pred = state.stage3_models["predictor"](
                 s_t_ensemble, z_action_16
             )  # Shape [16, 512]
-
             # Multi-target energy computation: distance to closest goal in s_target_bank [M, 512]
-            # s_next_pred: Shape [16, 512] -> [16, 1, 512]
-            # s_target_bank: Shape [M, 512] -> [1, M, 512]
-            dists_to_bank = torch.mean(
-                (s_next_pred.unsqueeze(1) - s_target_bank.unsqueeze(0)) ** 2, dim=-1
-            )  # Shape [16, M]
+            # s_next_pred: [16, 512], s_target_bank: [M, 512]
+            s_next_norm = F.normalize(s_next_pred, p=2, dim=-1)  # [16, 512]
+            s_target_norm = F.normalize(s_target_bank, p=2, dim=-1)  # [M, 512]
+            cosine_sim = torch.matmul(s_next_norm, s_target_norm.T)  # [16, M]
+            dists_to_bank = 1.0 - cosine_sim  # [16, M]
             min_bank_dists, _ = torch.min(dists_to_bank, dim=1)  # Shape [16]
             energy = torch.mean(min_bank_dists)
             grad_a = torch.autograd.grad(energy, a_candidates)[0]  # Shape [16, 7, 58]
@@ -596,11 +696,12 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             json.dump(steering_history, f, indent=2)
         print(f"📊 [Telemetry] Saved steering trajectory JSON: {steering_json_path}")
 
-        # Compute per-candidate final energy scores directly against target anchor
+        # Compute per-candidate final energy scores directly against target anchor using Normalized Cosine Distance
         with torch.no_grad():
-            final_energies = torch.mean(
-                (s_next_pred.unsqueeze(1) - s_target_bank.unsqueeze(0)) ** 2, dim=-1
-            )  # Shape [16, 5]
+            s_next_norm = F.normalize(s_next_pred, p=2, dim=-1)  # [16, 512]
+            s_target_norm = F.normalize(s_target_bank, p=2, dim=-1)  # [M, 512]
+            cosine_sim = torch.matmul(s_next_norm, s_target_norm.T)  # [16, M]
+            final_energies = 1.0 - cosine_sim  # [16, M]
             final_energies = torch.min(final_energies, dim=1)[0]  # [16]
 
         # Log real steering telemetry metrics to Weights & Biases
@@ -747,6 +848,19 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
             s_target = torch.tensor(trans.s_target, dtype=torch.float32, device=device)
 
             # Track current state, action, next state, energy, tactile, s_target, and is_positive_trajectory label
+            # Extract single-sample feature dictionary for next state from combined batch
+            sample_next_obs = {
+                k: v[idx : idx + 1]
+                for k, v in combined_obs_next_batch.items()
+                if v is not None
+            }
+
+            meta_info = {
+                "candidate_idx": trans.candidate_idx,
+                "step_idx": payload.step_idx,
+                "episode_idx": payload.episode_idx,
+            }
+
             state.stage3_trajectory_history.append(
                 (
                     s_t,
@@ -755,6 +869,8 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     trans.energy,
                     trans.tactile,
                     s_target,
+                    sample_next_obs,  # Feature dict for post-distill re-encoding
+                    meta_info,
                 )
             )
 
@@ -1209,6 +1325,9 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         #         state.stage3_models["flow_matcher"].state_dict()
         #     )
 
+        # Post-Distillation Energy Landscape Analytics
+        energy_landscape_data = compute_energy_landscape_analytics(payload, state)
+
         # Cleared the buffer
         state.stage3_trajectory_history.clear()
 
@@ -1258,6 +1377,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         distill_jobs[job_id] = {
             "status": "completed",
             "opsd_loss": float(avg_loss),
+            "energy_landscape": energy_landscape_data,
             "checkpoint": final_path,
             "error": None,
         }
