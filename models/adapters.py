@@ -4,10 +4,11 @@ import torch.nn as nn
 
 class VisualAdapter(nn.Module):
     """
-    Projects dense DINOv3 visual tokens (d_in=1024) to the shared latent dimension (d_out=512).
+    Projects dense DINOv3 visual patch tokens [B, 196, 384] or [B, Views, 196, 384]
+    to the shared latent dimension (d_out=512).
     """
 
-    def __init__(self, d_in=1024, d_out=512):
+    def __init__(self, d_in=384, d_out=512):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(d_in, d_out),
@@ -17,7 +18,11 @@ class VisualAdapter(nn.Module):
         )
 
     def forward(self, x):
-        return self.net(x)
+        # x shape: [B, 196, 384] or [B, Views, 196, 384]
+        x = self.net(x)
+        return x.mean(
+            dim=-2
+        )  # Mean pool across 196 spatial patch tokens -> [B, 512] or [B, Views, 512]
 
 
 class TextAdapter(nn.Module):

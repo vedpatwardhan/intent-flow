@@ -911,7 +911,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
             loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
-            loss_total = loss_dynamics + 0.06 * loss_sigreg
+            loss_total = loss_dynamics + 0.12 * loss_sigreg
 
             loss_total.backward()
 

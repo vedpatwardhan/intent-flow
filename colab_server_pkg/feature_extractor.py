@@ -10,10 +10,14 @@ from colab_server_pkg.models_state import models
 from colab_server_pkg.image_utils import decode_base64_image
 
 
-def get_batch_dino_attn_maps(frames_list: list[np.ndarray]) -> torch.Tensor:
+def get_batch_dino_features(
+    frames_list: list[np.ndarray],
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Batched DINO feature map extractor: Converts B frames to [B, 3, 224, 224] tensor,
-    executes 1 batched forward pass through DINO, and returns normalized attention maps [B, 14, 14].
+    Batched DINO feature extractor: Converts B frames to [B, 3, 224, 224] tensor,
+    executes 1 batched forward pass through DINO, and returns:
+    1. Raw patch sequence tokens [B, 196, 384] for model training (VisualAdapter).
+    2. Normalized scalar 2D attention maps [B, 14, 14] strictly for UI/debug plotting.
     """
     B = len(frames_list)
     transform = transforms.Compose(
@@ -29,17 +33,20 @@ def get_batch_dino_attn_maps(frames_list: list[np.ndarray]) -> torch.Tensor:
         dino_feats = models["dino"].forward_features(
             dino_tensors
         )  # Shape [B, 197, 384]
+
+        # 1. RAW PATCH TOKENS (Keep all 384 un-collapsed feature channels for VisualAdapter)
+        raw_patches = dino_feats[:, -196:]  # Shape [B, 196, 384]
+
+        # 2. UI ATTENTION MAP (Keep 14x14 scalar map strictly for UI/debug visual heatmaps)
         cls_tokens = dino_feats[:, 0]  # Shape [B, 384]
         cls_tokens = cls_tokens / (cls_tokens.norm(dim=-1, keepdim=True) + 1e-8)
-        patches = dino_feats[:, -196:]  # Shape [B, 196, 384]
-        patches = patches / (patches.norm(dim=-1, keepdim=True) + 1e-8)
+        patches_norm = raw_patches / (raw_patches.norm(dim=-1, keepdim=True) + 1e-8)
 
-        attn_batch = torch.bmm(patches, cls_tokens.unsqueeze(-1)).view(B, 14, 14)
+        attn_batch = torch.bmm(patches_norm, cls_tokens.unsqueeze(-1)).view(B, 14, 14)
         attn_mins = attn_batch.view(B, -1).min(dim=-1, keepdim=True)[0].view(B, 1, 1)
         attn_maxs = attn_batch.view(B, -1).max(dim=-1, keepdim=True)[0].view(B, 1, 1)
         attn_norm_batch = (attn_batch - attn_mins) / (attn_maxs - attn_mins + 1e-8)
 
-        # Apply vectorized 70th percentile thresholding per batch item and scale by 0.8
         attn_flat = attn_norm_batch.view(B, -1).float()
         p70 = (
             torch.quantile(attn_flat, 0.70, dim=-1, keepdim=True)
@@ -55,7 +62,7 @@ def get_batch_dino_attn_maps(frames_list: list[np.ndarray]) -> torch.Tensor:
             * 0.8
         )
 
-    return attn_norm_batch
+    return raw_patches, attn_norm_batch
 
 
 def get_batch_vggt_motion_fields(
@@ -257,7 +264,9 @@ def extract_batch_stage3_obs_features(payload_list: list):
 
     for cam, frames_list in all_frames_dict.items():
         # Call modular batched helpers
-        attn_norm_batch = get_batch_dino_attn_maps(frames_list)  # Shape [B, 14, 14]
+        raw_dino_patches, attn_norm_batch = get_batch_dino_features(
+            frames_list
+        )  # raw: [B, 196, 384], attn: [B, 14, 14]
         motion_norm_batch = get_batch_vggt_motion_fields(
             all_histories_dict[cam]
         )  # Shape [B, 224, 224]
@@ -327,10 +336,8 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 },
             }
 
-            dino_flat = torch.tensor(
-                dino_attn.flatten()[:384], dtype=torch.float32, device=device
-            )
-            vision_feat = pad_features(dino_flat, 384).unsqueeze(0)  # Shape [1, 384]
+            # Dense un-collapsed DINO patch sequence tokens for model training: [1, 196, 384]
+            vision_feat = raw_dino_patches[b_idx].unsqueeze(0)  # Shape [1, 196, 384]
 
             vggt_feat = torch.tensor(
                 motion_field, dtype=torch.float32, device=device
@@ -408,7 +415,7 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 for b_dict in batch_obs_dicts
             ],
             dim=0,
-        ),  # Shape [B, N_cam, 384]
+        ),  # Shape [B, N_cam, 196, 384]
         "pointnext": torch.stack(
             [
                 torch.cat([b_dict[cam]["pointnext"] for cam in b_dict], dim=0)
