@@ -528,6 +528,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             .clone()
         )  # Shape [16, 7, 58]
 
+        step_seed = payload.episode_idx * 1000 + payload.step_idx
+
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
                 a_candidates, step_snrs = state.stage3_models[
@@ -539,7 +541,8 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.3,
+                    step_nft_scale=0.08,
+                    seed=step_seed,
                 )  # a_candidates Shape [16, 7, 58]
 
         # Log ODE step SNR telemetry to W&B on remote Colab server
@@ -856,7 +859,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
                     trans.energy,
                     trans.tactile,
                     s_target,
-                    next_obs,
+                    next_obs,  # Feature dict for post-distill re-encoding
                     meta_info,
                 )
             )

@@ -88,17 +88,24 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         num_steps=10,
         steering_timelines=None,  # [B, H * action_dim]
         step_nft_scale=0.0,
+        seed=42,
     ):
+        generator = torch.Generator(device=s_t.device).manual_seed(seed)
         batch_size = s_t.size(0)
 
-        # Create embodiment-aware action mask (first 32 GR-1 active joints)
+        # Force padding channels (joints 32..57) to zero out entirely in action space
         action_mask = torch.zeros(1, 1, self.action_dim, device=s_t.device)
         action_mask[..., :32] = 1.0
 
-        # [B, H, action_dim] initialized with 0.0s for padding channels
         init_sigma = 0.4
         x_t = (
-            torch.randn(batch_size, horizon, self.action_dim, device=s_t.device)
+            torch.randn(
+                batch_size,
+                horizon,
+                self.action_dim,
+                device=s_t.device,
+                generator=generator,
+            )
             * init_sigma
         ) * action_mask
 
@@ -135,7 +142,9 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
             # 3. Inspect Stochastic Noise Injection
             noise_min, noise_max = 0.0, 0.0
             if step_nft_scale > 0.0 and i < num_steps - 1:
-                raw_noise = torch.randn_like(x_t)
+                raw_noise = torch.randn(
+                    x_t.shape, device=x_t.device, generator=generator
+                )
                 steerable_mask = (t_vals < 1.0).float()  # contains 1s if grid is 0s
                 noise_step = (raw_noise * step_nft_scale * steerable_mask) * action_mask
                 noise_min, noise_max = noise_step.min().item(), noise_step.max().item()
@@ -147,10 +156,10 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
             # Compute step-level SNR for remote endpoint telemetry logging
             with torch.no_grad():
-                v_mag = v_step.abs().mean().item()
                 if step_nft_scale > 0.0 and i < num_steps - 1:
-                    noise_mag = noise_step.abs().mean().item()
-                    step_snr = v_mag / (noise_mag + 1e-8)
+                    raw_v_mag = v_t.abs().mean().item()
+                    raw_noise_mag = (raw_noise * step_nft_scale).abs().mean().item()
+                    step_snr = raw_v_mag / (raw_noise_mag + 1e-8)
                 else:
                     step_snr = None  # Deterministic step (no noise injected)
                 step_snrs.append(step_snr)
