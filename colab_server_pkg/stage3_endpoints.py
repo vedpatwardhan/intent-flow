@@ -1165,7 +1165,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             )
 
             # Penalty on action magnitude for overall smoothness
-            reg_action_norm = torch.mean(batch_action**2)
+            # reg_action_norm = torch.mean(batch_action**2)
 
             # 6. Smoothness regularization loss penalty on output joint space deltas
             deltas_1 = batch_action_3d[:, 1:, :] - batch_action_3d[:, :-1, :]
@@ -1178,8 +1178,8 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 + contrastive_loss * 0.55
                 + casa_loss * 0.2
                 + sigreg_loss * 0.02
-                + reg_action_norm * 0.0015
-                + loss_smoothness * 0.18
+                # + reg_action_norm * 0.0015
+                + loss_smoothness * 0.05
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
