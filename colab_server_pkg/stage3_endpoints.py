@@ -911,7 +911,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
             loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
-            loss_total = loss_dynamics + 0.02 * loss_sigreg
+            loss_total = loss_dynamics + 0.06 * loss_sigreg
 
             loss_total.backward()
 
@@ -1160,9 +1160,9 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             casa_loss = F.cross_entropy(sim_matrix, labels)
 
             # 5. Anti-collapse regularization (SIGReg)
-            sigreg_loss = state.stage3_models["sigreg_module"](
-                batch_s_next.unsqueeze(0)
-            )
+            # sigreg_loss = state.stage3_models["sigreg_module"](
+            #     batch_s_next.unsqueeze(0)
+            # )
 
             # Penalty on action magnitude for overall smoothness
             # reg_action_norm = torch.mean(batch_action**2)
@@ -1177,9 +1177,9 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
                 cfm_loss
                 + contrastive_loss * 0.55
                 + casa_loss * 0.2
-                + sigreg_loss * 0.02
+                # + sigreg_loss * 0.06
                 # + reg_action_norm * 0.0015
-                + loss_smoothness * 0.05
+                + loss_smoothness * 0.1
             )
 
             # --- EXTENDED STAGE 1 & 2 PARITY DIAGNOSTIC TELEMETRY ---
