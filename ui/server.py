@@ -143,7 +143,7 @@ def plot_energy_landscape(landscape_data: dict, epoch: int, output_dir: str):
         template="plotly_white",
     )
 
-    html_path = os.path.join(output_dir, f"energy_landscape_epoch_{epoch:02d}.html")
+    html_path = os.path.join(output_dir, f"epoch_{epoch:02d}_energy_landscape.html")
     fig.write_html(html_path)
     print(f"📊 [Landscape Analytics] Saved interactive HTML plot to: {html_path}")
 
@@ -1028,18 +1028,13 @@ async def run_stage3_training_loop(
                                     )
 
                                     if landscape_data:
-                                        landscape_dir = os.path.abspath(
-                                            os.path.join(
-                                                os.path.dirname(__file__),
-                                                "..",
-                                                "logs",
-                                                "analytics",
-                                                f"epoch_{ep_idx + 1:02d}",
-                                            )
+                                        landscape_dir = (
+                                            "logs/training/latent-flow/analytics"
                                         )
                                         os.makedirs(landscape_dir, exist_ok=True)
                                         json_path = os.path.join(
-                                            landscape_dir, "energy_landscape.json"
+                                            landscape_dir,
+                                            f"epoch_{ep_idx + 1:02d}_energy_landscape.json",
                                         )
                                         with open(json_path, "w") as f:
                                             json.dump(landscape_data, f, indent=2)
