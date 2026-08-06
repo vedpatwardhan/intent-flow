@@ -635,7 +635,7 @@ async def run_stage3_training_loop(
 
     num_epochs = 10
     max_steps = 16
-    calibrate_steps = 8
+    calibrate_steps = 4
 
     # --- STAGE 3 IK TRAJECTORY GENERATION EVALUATION HOOK (INSERTED ABOVE LINE 414) ---
     print(f"UI ANNOTATIONS: {ui_annotations}")
