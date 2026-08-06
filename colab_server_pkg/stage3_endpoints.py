@@ -1341,6 +1341,61 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         # Post-Distillation Energy Landscape Analytics
         energy_landscape_data = compute_energy_landscape_analytics(payload, state)
 
+        # ====================================================================
+        # RUN 120: POST-DISTILLATION DYNAMIC ANCHOR CURATION
+        # Curate anchors using updated post-optimization representations
+        # ====================================================================
+        history_items = list(state.stage3_trajectory_history)
+        if len(history_items) >= 16:
+            # 1. TACTILE INCLUSION: Sparse high-precision success (contact > 0.5)
+            tactile_pos_rollouts = [
+                {
+                    "actions": item[1].squeeze(0).cpu().tolist(),
+                    "frames": item[6]["frames"],
+                    "history_frames": item[6].get("history_frames", []),
+                    "proprioception": item[6].get("proprioception", [0.0] * 58),
+                }
+                for item in history_items
+                if item[4] > 0.5  # Index 4 is tactile scalar
+            ]
+
+            # 2. LATENT ENERGY CURATION: Dense continuous guidance
+            history_items.sort(key=lambda x: x[3])  # Index 3 is model energy
+
+            top_pos_rollouts = [
+                {
+                    "actions": item[1].squeeze(0).cpu().tolist(),
+                    "frames": item[6]["frames"],
+                    "history_frames": item[6].get("history_frames", []),
+                    "proprioception": item[6].get("proprioception", [0.0] * 58),
+                }
+                for item in history_items[:2]  # Top 2 lowest energy
+            ]
+
+            bottom_neg_rollouts = [
+                {
+                    "actions": item[1].squeeze(0).cpu().tolist(),
+                    "frames": item[6]["frames"],
+                    "history_frames": item[6].get("history_frames", []),
+                    "proprioception": item[6].get("proprioception", [0.0] * 58),
+                }
+                for item in history_items[-2:]  # Bottom 2 highest energy
+            ]
+
+            # Combine tactile-triggered positives and low-energy positives (deduplicated)
+            unique_pos = tactile_pos_rollouts + [
+                r for r in top_pos_rollouts if r not in tactile_pos_rollouts
+            ]
+
+            # Merge into active anchor payload for subsequent epoch guidance
+            payload.pos_trajectories = payload.pos_trajectories + unique_pos
+            payload.neg_trajectories = payload.neg_trajectories + bottom_neg_rollouts
+
+            print(
+                f"🧬 [Post-Distill Curation] Curated for next epoch: {len(tactile_pos_rollouts)} tactile D+, "
+                f"{len(top_pos_rollouts)} low-energy D+, and {len(bottom_neg_rollouts)} high-energy D- anchors."
+            )
+
         # Cleared the buffer
         state.stage3_trajectory_history.clear()
 
