@@ -276,6 +276,8 @@ def compute_energy_landscape_analytics(payload, state):
                 # 3. Compute Cosine Distance Matrices: D = 1.0 - CosineSimilarity
                 pos_sim = torch.matmul(z_final_norm, z_pos_norm.T)  # [N, 5]
                 neg_sim = torch.matmul(z_final_norm, z_neg_norm.T)  # [N, 8]
+                d_pos = (1.0 - pos_sim).cpu().numpy()
+                d_neg = (1.0 - neg_sim).cpu().numpy()
 
                 # 4. Compute PCA 2D Coordinate Space for expansive visual separation
                 from sklearn.decomposition import PCA
