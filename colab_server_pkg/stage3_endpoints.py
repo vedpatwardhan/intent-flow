@@ -397,6 +397,7 @@ def ensure_stage3_models():
     if os.path.exists(s3_ckpt_path):
         print(f"[Colab] Loading Stage 3 checkpoint from: {s3_ckpt_path}")
         checkpoint = torch.load(s3_ckpt_path, map_location=device)
+        state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
         state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
         # state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
         # state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
