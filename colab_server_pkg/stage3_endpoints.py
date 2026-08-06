@@ -418,9 +418,9 @@ def ensure_stage3_models():
         )
         print("[Colab] Loading PyTorch Lightning SFT weights layout...")
         for module_name in [
-            "vis_adapter",
+            # "vis_adapter",
             # "txt_adapter",
-            "pt_adapter",
+            # "pt_adapter",
             # "vggt_adapter",
             # "tactile_adapter",
             "action_adapter",

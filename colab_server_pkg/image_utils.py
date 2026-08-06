@@ -410,3 +410,6 @@ def save_stage3_obs_feature_plots(
         )
     except Exception as e:
         print(f"⚠️ Error saving stage3 observation feature plot: {e}")
+        import traceback
+
+        traceback.print_exc()
