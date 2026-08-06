@@ -346,8 +346,7 @@ def save_stage3_obs_feature_plots(
         axes[1].axis("off")
 
         # --- Panel 3: DINOv3 Feature Map Overlay ---
-        dino_tensor = obs_features[view_name]["features"]["dino_attn"]
-        dino_map = dino_tensor.detach().cpu().numpy()
+        dino_map = obs_features[view_name]["features"]["dino_attn"]
 
         axes[2].imshow(outcome_np)
         axes[2].imshow(
