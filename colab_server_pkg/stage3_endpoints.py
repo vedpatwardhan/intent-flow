@@ -277,8 +277,19 @@ def compute_energy_landscape_analytics(payload, state):
                 pos_sim = torch.matmul(z_final_norm, z_pos_norm.T)  # [N, 5]
                 neg_sim = torch.matmul(z_final_norm, z_neg_norm.T)  # [N, 8]
 
-                d_pos = (1.0 - pos_sim).cpu().numpy()
-                d_neg = (1.0 - neg_sim).cpu().numpy()
+                # 4. Compute PCA 2D Coordinate Space for expansive visual separation
+                from sklearn.decomposition import PCA
+
+                all_latents = (
+                    torch.cat([z_final_norm, z_pos_norm, z_neg_norm], dim=0)
+                    .cpu()
+                    .numpy()
+                )
+                pca = PCA(n_components=2)
+                coords_2d = pca.fit_transform(all_latents)
+
+                n_final = z_final_norm.size(0)
+                n_pos = z_pos_norm.size(0)
 
                 energy_landscape_data = {
                     "epoch_idx": getattr(state, "epoch_counter", 0),
@@ -291,6 +302,10 @@ def compute_energy_landscape_analytics(payload, state):
                     "pos_neg_ratio": (
                         d_pos.mean(axis=1) / (d_neg.mean(axis=1) + 1e-8)
                     ).tolist(),
+                    "pca_rollout_coords": coords_2d[:n_final].tolist(),
+                    "pca_pos_coords": coords_2d[n_final : n_final + n_pos].tolist(),
+                    "pca_neg_coords": coords_2d[n_final + n_pos :].tolist(),
+                    "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
                 }
 
     return energy_landscape_data
@@ -625,7 +640,9 @@ async def handle_stage3_step(payload: Stage3StepPayload):
 
             # Sculpt action parameters along the tracking vector field
             diff = eta * grad_a_normalized * t_j  # Shape [16, 7, 58]
-            a_candidates = (a_candidates - diff) * action_mask  # Shape [16, 7, 58]
+            a_candidates = (
+                a_candidates.detach() - diff
+            ) * action_mask  # Shape [16, 7, 58]
 
             # Raw gradient forces per joint: Mean over ensemble (dim 0) and horizon (dim 1) -> Shape: [58]
             raw_joint_errors = grad_a.abs().mean(dim=(0, 1))
@@ -915,7 +932,7 @@ def run_calibration_worker(job_id: str, payload: Stage3CalibratePayload):
 
             # Anti-Collapse Regularization: Enforce diversity on predicted future states
             loss_sigreg = state.stage3_models["sigreg_module"](s_next_pred.unsqueeze(0))
-            loss_total = loss_dynamics + 0.12 * loss_sigreg
+            loss_total = loss_dynamics + 0.30 * loss_sigreg
 
             loss_total.backward()
 
