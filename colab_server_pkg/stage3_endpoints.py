@@ -401,31 +401,21 @@ def ensure_stage3_models():
         # state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
         # state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
         state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
-        if "edge_adapter" in checkpoint:
-            state.stage3_models["edge_adapter"].load_state_dict(
-                checkpoint["edge_adapter"]
-            )
+        state.stage3_models["edge_adapter"].load_state_dict(checkpoint["edge_adapter"])
         # state.stage3_models["tactile_adapter"].load_state_dict(
         #     checkpoint["tactile_adapter"]
         # )
         state.stage3_models["action_adapter"].load_state_dict(
             checkpoint["action_adapter"]
         )
-        if "state_adapter" in checkpoint:
-            state.stage3_models["state_adapter"].load_state_dict(
-                checkpoint["state_adapter"]
-            )
+        state.stage3_models["state_adapter"].load_state_dict(
+            checkpoint["state_adapter"]
+        )
         state.stage3_models["action_down_proj"].load_state_dict(
             checkpoint["action_down_proj"]
         )
         state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
         state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
-        state.stage3_models["gnn_library"].nodes.load_state_dict(
-            checkpoint["gnn_nodes"]
-        )
-        state.stage3_models["gnn_library"].specialists.load_state_dict(
-            checkpoint["gnn_specialists"]
-        )
     elif os.path.exists(s2_ckpt_path):
         print(f"[Colab] Loading Stage 2 checkpoint from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
