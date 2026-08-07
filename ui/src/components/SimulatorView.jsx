@@ -25,13 +25,37 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
     frame_sequences: null
   }));
 
-  // 5fps animation loop cycling through horizon steps 0..6
+  const [animFrameCount, setAnimFrameCount] = useState(0);
+
+  // 3 full iterations limit (21 steps total: 3 loops * 7 steps)
+  const maxAnimSteps = 21;
+  const seq = candidateResults?.top_candidates?.[0]?.frame_sequences?.[activeCam];
+  const hasSequences = seq && seq.length > 0;
+
+  // Reset animation step count whenever new candidate evaluation results arrive
   useEffect(() => {
+    setAnimFrameCount(0);
+    setStepIdx(0);
+  }, [candidateResults]);
+
+  // Run 5fps animation loop up to 3 full iterations (maxAnimSteps)
+  useEffect(() => {
+    if (!hasSequences) return;
+
     const timer = setInterval(() => {
-      setStepIdx(prev => (prev + 1) % 7);
-    }, 200); // 200ms per frame = 5fps
+      setAnimFrameCount(prev => {
+        if (prev + 1 >= maxAnimSteps) {
+          clearInterval(timer);
+          return maxAnimSteps;
+        }
+        const nextCount = prev + 1;
+        setStepIdx(nextCount % 7);
+        return nextCount;
+      });
+    }, 200);
+
     return () => clearInterval(timer);
-  }, []);
+  }, [candidateResults, activeCam, hasSequences]);
 
   return (
     <div className="panel" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

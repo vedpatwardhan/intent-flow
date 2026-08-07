@@ -29,7 +29,7 @@ def render_camera_views(eval_sim):
         eval_sim.renderer.update_scene(eval_sim.data, camera=cam_name)
         rgb_cam = eval_sim.renderer.render().copy()
         raw_frames[cam_name] = rgb_cam.copy()
-        img_cam = Image.fromarray(rgb_cam).resize((224, 224))
+        img_cam = Image.fromarray(rgb_cam).resize((480, 480))
         buf = io.BytesIO()
         img_cam.save(buf, format="JPEG", quality=75)
         base64_frames[cam_name] = "data:image/jpeg;base64," + base64.b64encode(

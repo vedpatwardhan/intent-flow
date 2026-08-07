@@ -229,6 +229,9 @@ export default function App() {
   };
 
   const handleInteraction = (interaction) => {
+    if (interaction?.type === 'reset' || interaction?.type === 'wild_randomize') {
+      setCandidateResults(null);
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(interaction));
     }

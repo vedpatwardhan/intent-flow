@@ -82,8 +82,8 @@ export default function ControlPanel({
     onUserCommand({ type: 'reset' });
   };
 
-  const triggerWildRandomize = () => {
-    onUserCommand({ type: 'wild_randomize' });
+  const triggerRandomize = () => {
+    onUserCommand({ type: 'randomize' });
   };
 
   const triggerExecuteCheckpoint = () => {
@@ -136,13 +136,13 @@ export default function ControlPanel({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Denoising Noise Scale (step_nft_scale):</span>
-            <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>{noiseScale.toFixed(2)}</span>
+            <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>{noiseScale.toFixed(3)}</span>
           </div>
           <input
             type="range"
             min="0.00"
-            max="0.50"
-            step="0.01"
+            max="0.30"
+            step="5e-3"
             value={noiseScale}
             onChange={(e) => setNoiseScale(parseFloat(e.target.value))}
             className="slider-input"
@@ -259,7 +259,7 @@ export default function ControlPanel({
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
           <button
-            onClick={triggerWildRandomize}
+            onClick={triggerRandomize}
             className="btn-phase btn-phase-action"
             disabled={isTraining}
             style={{ padding: '6px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', color: 'var(--accent-amber)' }}
