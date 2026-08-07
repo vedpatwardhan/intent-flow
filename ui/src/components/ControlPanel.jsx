@@ -18,32 +18,36 @@ export default function ControlPanel({
   trainingProgress,
   trainingStatus,
 }) {
-  const [checkpoints, setCheckpoints] = useState([
-    'run_119/stage3_epoch_10.pt',
-    'run_119/stage3_epoch_08.pt',
-    'run_118/stage3_rl_final.pt',
-    'stage2_sft.pt'
-  ]);
-  const [selectedCheckpoint, setSelectedCheckpoint] = useState('run_119/stage3_epoch_10.pt');
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [noiseScale, setNoiseScale] = useState(0.08);
 
-  // Fetch live checkpoints from Colab backend whenever local UI server connects
+  // Poll /api/checkpoints from local server until checkpoints are retrieved from Colab
   useEffect(() => {
+    let isMounted = true;
+
     const fetchCheckpoints = async () => {
       try {
         const res = await fetch('http://localhost:8000/api/checkpoints');
         if (res.ok) {
           const list = await res.json();
-          if (Array.isArray(list) && list.length > 0) {
+          if (isMounted && Array.isArray(list) && list.length > 0) {
             setCheckpoints(list);
-            setSelectedCheckpoint(list[0]);
+            setSelectedCheckpoint(prev => (prev && list.includes(prev) ? prev : list[0]));
           }
         }
       } catch (e) {
-        console.warn('Could not fetch checkpoints from backend:', e);
+        console.warn('Polling checkpoints...', e);
       }
     };
+
     fetchCheckpoints();
+    const interval = setInterval(fetchCheckpoints, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // right_shoulder_pitch_joint
@@ -102,7 +106,7 @@ export default function ControlPanel({
           <select
             value={selectedCheckpoint}
             onChange={(e) => setSelectedCheckpoint(e.target.value)}
-            disabled={isTraining}
+            disabled={isTraining || checkpoints.length === 0}
             style={{
               width: '100%',
               background: '#09090d',
@@ -115,9 +119,13 @@ export default function ControlPanel({
               outline: 'none'
             }}
           >
-            {checkpoints.map(ckpt => (
-              <option key={ckpt} value={ckpt}>{ckpt}</option>
-            ))}
+            {checkpoints.length === 0 ? (
+              <option value="">Connecting to Colab for checkpoints...</option>
+            ) : (
+              checkpoints.map(ckpt => (
+                <option key={ckpt} value={ckpt}>{ckpt}</option>
+              ))
+            )}
           </select>
         </div>
 
