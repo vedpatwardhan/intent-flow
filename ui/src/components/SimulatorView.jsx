@@ -3,6 +3,7 @@ import { Focus, Navigation, Camera } from 'lucide-react';
 
 export default function SimulatorView({ frames, candidateResults, onInteraction, connectionStatus }) {
   const [activeCam, setActiveCam] = useState('world_center');
+  const [stepIdx, setStepIdx] = useState(0);
 
   const cameras = [
     { id: 'world_center', name: 'Center' },
@@ -20,8 +21,17 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
     rank: i + 1,
     candidate_idx: i,
     mean_phys_dist: 0.0,
-    frames: null
+    frames: null,
+    frame_sequences: null
   }));
+
+  // 5fps animation loop cycling through horizon steps 0..6
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setStepIdx(prev => (prev + 1) % 7);
+    }, 200); // 200ms per frame = 5fps
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <div className="panel" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -94,7 +104,10 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
           }}
         >
           {topCandidates.map((cand, idx) => {
-            const frameSrc = cand.frames && cand.frames[activeCam] ? cand.frames[activeCam] : (frames && frames[activeCam] ? frames[activeCam] : null);
+            const seq = cand.frame_sequences && cand.frame_sequences[activeCam];
+            const frameSrc = seq && seq.length > 0
+              ? seq[stepIdx % seq.length]
+              : (cand.frames && cand.frames[activeCam] ? cand.frames[activeCam] : (frames && frames[activeCam] ? frames[activeCam] : null));
             const isRankOne = idx === 0;
 
             return (

@@ -35,7 +35,7 @@ def build_stage3_obs_payload(sim, text_prompt, ui_annotations, ep_idx, env_step)
     }
 
 
-async def websocket_endpoint_handler(websocket, sim):
+async def websocket_endpoint_handler(websocket, sim, eval_sim):
     await websocket.accept()
     print("UI Connected via WebSocket")
 
@@ -157,7 +157,6 @@ async def websocket_endpoint_handler(websocket, sim):
                                     evaluated_candidates = []
 
                                     for candidate_idx in range(16):
-                                        eval_sim = copy.deepcopy(sim)
                                         eval_sim.data.qpos[:] = initial_qpos
                                         eval_sim.data.qvel[:] = initial_qvel
                                         eval_sim.data.ctrl[:] = initial_ctrl
@@ -230,6 +229,11 @@ async def websocket_endpoint_handler(websocket, sim):
                                                     for cam in track_frames_per_cam
                                                     if track_frames_per_cam[cam]
                                                 },
+                                                "frame_sequences": {
+                                                    cam: track_frames_per_cam[cam]
+                                                    for cam in track_frames_per_cam
+                                                    if track_frames_per_cam[cam]
+                                                },
                                                 "actions": action_np[
                                                     candidate_idx
                                                 ].tolist(),
@@ -265,6 +269,9 @@ async def websocket_endpoint_handler(websocket, sim):
                                                             c["mean_phys_dist"], 4
                                                         ),
                                                         "frames": c["final_frames"],
+                                                        "frame_sequences": c[
+                                                            "frame_sequences"
+                                                        ],
                                                     }
                                                     for c in top_8_candidates
                                                 ],
@@ -291,6 +298,9 @@ async def websocket_endpoint_handler(websocket, sim):
                                         await asyncio.sleep(0.02)
                     except Exception as e:
                         print(f"❌ [Execute Checkpoint Error] {e}")
+                        import traceback
+
+                        traceback.print_exc()
 
             except asyncio.TimeoutError:
                 pass

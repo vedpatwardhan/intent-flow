@@ -10,7 +10,7 @@ def get_body_ids(sim):
     r_thumb_id = sim.model.body("R_thumb_tip_link").id
     l_index_id = sim.model.body("L_index_tip_link").id
     l_thumb_id = sim.model.body("L_thumb_tip_link").id
-    cube_id = sim.model.body("red_cube").id
+    cube_id = sim.model.body("cube").id
 
     return {
         "r_index_id": r_index_id,

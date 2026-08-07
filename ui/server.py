@@ -63,6 +63,9 @@ class GR1SimulationServer(GR1MuJoCoBase):
 sim = GR1SimulationServer()
 sim.reset_env(lock_posture=True)
 
+eval_sim = GR1SimulationServer()
+eval_sim.reset_env(lock_posture=True)
+
 
 @app.on_event("startup")
 async def fetch_checkpoints_on_startup():
@@ -87,4 +90,4 @@ async def fetch_checkpoints_on_startup():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket_endpoint_handler(websocket, sim)
+    await websocket_endpoint_handler(websocket, sim, eval_sim)
