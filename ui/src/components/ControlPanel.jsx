@@ -19,8 +19,13 @@ export default function ControlPanel({
   trainingStatus,
 }) {
   const [inputText, setInputText] = useState('pinch the red block and lift it');
-  const [checkpoints, setCheckpoints] = useState(['stage3_rl_final.pt', 'stage3_epoch_10.pt', 'stage2_sft.pt']);
-  const [selectedCheckpoint, setSelectedCheckpoint] = useState('stage3_rl_final.pt');
+  const [checkpoints, setCheckpoints] = useState([
+    'run_119/stage3_epoch_10.pt',
+    'run_119/stage3_epoch_08.pt',
+    'run_118/stage3_rl_final.pt',
+    'stage2_sft.pt'
+  ]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState('run_119/stage3_epoch_10.pt');
   const [noiseScale, setNoiseScale] = useState(0.08);
 
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // right_shoulder_pitch_joint

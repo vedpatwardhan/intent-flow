@@ -480,7 +480,8 @@ def ensure_stage3_models():
 
 def get_available_checkpoints():
     """
-    Returns list of available .pt checkpoint files stored in checkpoints directory.
+    Returns list of available checkpoint identifiers (e.g. 'run_119/stage3_epoch_10.pt')
+    stored in run subfolders within the checkpoints directory.
     """
     config_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "config", "default_config.yaml")
@@ -495,23 +496,35 @@ def get_available_checkpoints():
     )
     if not os.path.exists(checkpoint_dir):
         return []
-    files = [
-        f
-        for f in os.listdir(checkpoint_dir)
-        if f.endswith(".pt") or f.endswith(".ckpt")
-    ]
-    files.sort()
-    return files
+
+    # 1. Scan root checkpoints directory
+    checkpoints = []
+    for item in os.listdir(checkpoint_dir):
+        item_path = os.path.join(checkpoint_dir, item)
+        if os.path.isfile(item_path) and (
+            item.endswith(".pt") or item.endswith(".ckpt")
+        ):
+            checkpoints.append(item)
+        elif os.path.isdir(item_path):
+            # 2. Scan run subdirectories (e.g., run_118, run_119)
+            run_name = item
+            for subitem in os.listdir(item_path):
+                if subitem.endswith(".pt") or subitem.endswith(".ckpt"):
+                    rel_id = f"{run_name}/{subitem}"
+                    checkpoints.append(rel_id)
+    checkpoints.sort()
+    return checkpoints
 
 
-def load_specific_checkpoint(checkpoint_name: str):
+def load_specific_checkpoint(checkpoint_identifier: str):
     """
     Loads specific checkpoint weights into active stage3_models in GPU memory.
+    `checkpoint_identifier` can be 'stage3_rl_final.pt' or 'run_119/stage3_epoch_10.pt'.
     """
     import colab_server_pkg.models_state as state
 
     ensure_stage3_models()
-    if getattr(state, "active_checkpoint", None) == checkpoint_name:
+    if getattr(state, "active_checkpoint", None) == checkpoint_identifier:
         return
 
     config_path = os.path.abspath(
@@ -525,12 +538,14 @@ def load_specific_checkpoint(checkpoint_name: str):
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
     )
-    ckpt_path = os.path.join(checkpoint_dir, checkpoint_name)
+    ckpt_path = os.path.join(checkpoint_dir, checkpoint_identifier)
     if not os.path.exists(ckpt_path):
-        print(f"[Colab Warning] Checkpoint {checkpoint_name} not found at {ckpt_path}")
+        print(
+            f"[Colab Warning] Checkpoint {checkpoint_identifier} not found at {ckpt_path}"
+        )
         return
 
-    print(f"🔄 [Colab Checkpoint Swap] Loading checkpoint: {checkpoint_name}")
+    print(f"🔄 [Colab Checkpoint Swap] Loading checkpoint: {checkpoint_identifier}")
     checkpoint = torch.load(ckpt_path, map_location=device)
     state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
     state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
@@ -543,8 +558,10 @@ def load_specific_checkpoint(checkpoint_name: str):
     )
     state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
     state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
-    state.active_checkpoint = checkpoint_name
-    print(f"✅ [Colab Checkpoint Swap] Active checkpoint is now: {checkpoint_name}")
+    state.active_checkpoint = checkpoint_identifier
+    print(
+        f"✅ [Colab Checkpoint Swap] Active checkpoint is now: {checkpoint_identifier}"
+    )
 
 
 async def handle_stage3_execute(payload: Stage3ExecutePayload):
