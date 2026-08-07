@@ -20,7 +20,7 @@ export default function GnnLibrary({ skills }) {
   ];
 
   return (
-    <div className="panel" style={{ padding: '16px' }}>
+    <div className="panel" style={{ padding: '16px', opacity: 0.45, filter: 'grayscale(30%)', position: 'relative' }}>
       <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div>
           <h2 className="panel-title" style={{ fontSize: '15px' }}>
@@ -34,9 +34,9 @@ export default function GnnLibrary({ skills }) {
             display: 'flex', 
             alignItems: 'center', 
             gap: '4px', 
-            background: 'var(--accent-cyan-dim)', 
-            border: '1px solid rgba(6, 182, 212, 0.2)', 
-            color: 'var(--accent-cyan)',
+            background: 'rgba(255, 255, 255, 0.05)', 
+            border: '1px solid var(--border-glass)', 
+            color: '#64748b',
             fontSize: '9px',
             padding: '2px 6px',
             borderRadius: '4px',
@@ -44,7 +44,7 @@ export default function GnnLibrary({ skills }) {
             letterSpacing: '0.05em'
           }}
         >
-          <RefreshCw size={8} className="animate-spin" /> Evolving
+          VISION / CONCEPT
         </div>
       </div>
 
