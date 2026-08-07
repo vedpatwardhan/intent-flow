@@ -1349,17 +1349,185 @@ async def websocket_endpoint(websocket: WebSocket):
                             )
                             if r.status_code == 200:
                                 res = r.json()
-                                action_plan = res.get("action_plan", [])
+                                action_candidates = res.get("action_candidates", [])
                                 print(
-                                    f"✅ [Execute Checkpoint] Received action plan: {len(action_plan)} steps."
+                                    f"✅ [Execute Checkpoint] Received {len(action_candidates)} candidate trajectories from Colab."
                                 )
-                                if action_plan and len(action_plan[0]) == 406:
-                                    # Execute 7 horizon steps (58 DOF each) in MuJoCo
-                                    raw_actions = np.array(action_plan[0]).reshape(
-                                        7, 58
+                                if action_candidates and len(action_candidates) == 16:
+                                    action_np = np.array(
+                                        action_candidates, dtype=np.float32
+                                    )  # [16, 7, 58]
+
+                                    # Snapshot initial state
+                                    initial_qpos = sim.data.qpos.copy()
+                                    initial_qvel = sim.data.qvel.copy()
+                                    initial_ctrl = sim.data.ctrl.copy()
+
+                                    r_index_id = mujoco.mj_name2id(
+                                        sim.model, mujoco.mjtObj.obj_site, "r_index_tip"
+                                    )
+                                    r_thumb_id = mujoco.mj_name2id(
+                                        sim.model, mujoco.mjtObj.obj_site, "r_thumb_tip"
+                                    )
+                                    l_index_id = mujoco.mj_name2id(
+                                        sim.model, mujoco.mjtObj.obj_site, "l_index_tip"
+                                    )
+                                    l_thumb_id = mujoco.mj_name2id(
+                                        sim.model, mujoco.mjtObj.obj_site, "l_thumb_tip"
+                                    )
+                                    cube_id = mujoco.mj_name2id(
+                                        sim.model, mujoco.mjtObj.obj_body, "red_cube"
+                                    )
+
+                                    evaluated_candidates = []
+
+                                    # Roll out each of the 16 candidate trajectories in isolated evaluation environment
+                                    for candidate_idx in range(16):
+                                        eval_sim = copy.deepcopy(sim)
+                                        eval_sim.data.qpos[:] = initial_qpos
+                                        eval_sim.data.qvel[:] = initial_qvel
+                                        eval_sim.data.ctrl[:] = initial_ctrl
+                                        mujoco.mj_forward(eval_sim.model, eval_sim.data)
+
+                                        step_phys_distances = []
+                                        track_frames_per_cam = {
+                                            cam: []
+                                            for cam in [
+                                                "world_center",
+                                                "world_top",
+                                                "world_left",
+                                                "world_right",
+                                                "world_wrist",
+                                            ]
+                                        }
+
+                                        for h in range(7):
+                                            act_k = action_np[candidate_idx, h, :]
+                                            act_32_clamped = np.clip(
+                                                act_k[:32], -1.0, 1.0
+                                            )
+                                            eval_sim.process_target_32(act_32_clamped)
+                                            eval_sim.dispatch_action(
+                                                action_32_norm=act_32_clamped,
+                                                target_q=eval_sim.last_target_q,
+                                                n_steps=2,
+                                                reset_start=False,
+                                            )
+
+                                            # Calculate physical distance to cube target at step h
+                                            r_index_pos = (
+                                                eval_sim.data.xpos[r_index_id]
+                                                if r_index_id != -1
+                                                else eval_sim.data.qpos[:3]
+                                            )
+                                            r_thumb_pos = (
+                                                eval_sim.data.xpos[r_thumb_id]
+                                                if r_thumb_id != -1
+                                                else eval_sim.data.qpos[:3]
+                                            )
+                                            l_index_pos = (
+                                                eval_sim.data.xpos[l_index_id]
+                                                if l_index_id != -1
+                                                else eval_sim.data.qpos[:3]
+                                            )
+                                            l_thumb_pos = (
+                                                eval_sim.data.xpos[l_thumb_id]
+                                                if l_thumb_id != -1
+                                                else eval_sim.data.qpos[:3]
+                                            )
+                                            cube_pos = (
+                                                eval_sim.data.xpos[cube_id]
+                                                if cube_id != -1
+                                                else np.array([0.45, 0.0, 0.85])
+                                            )
+
+                                            r_hand_center = (
+                                                r_index_pos + r_thumb_pos
+                                            ) / 2.0
+                                            l_hand_center = (
+                                                l_index_pos + l_thumb_pos
+                                            ) / 2.0
+                                            r_dist = float(
+                                                np.linalg.norm(r_hand_center - cube_pos)
+                                            )
+                                            l_dist = float(
+                                                np.linalg.norm(l_hand_center - cube_pos)
+                                            )
+                                            h_phys_dist = min(r_dist, l_dist)
+                                            step_phys_distances.append(h_phys_dist)
+
+                                            # Render camera frames
+                                            cur_frames, _ = render_camera_views(
+                                                eval_sim
+                                            )
+                                            for cam_key in track_frames_per_cam:
+                                                if cam_key in cur_frames:
+                                                    track_frames_per_cam[
+                                                        cam_key
+                                                    ].append(cur_frames[cam_key])
+
+                                        mean_phys_dist = float(
+                                            np.mean(step_phys_distances)
+                                        )
+                                        evaluated_candidates.append(
+                                            {
+                                                "candidate_idx": candidate_idx,
+                                                "mean_phys_dist": mean_phys_dist,
+                                                "final_frames": {
+                                                    cam: track_frames_per_cam[cam][-1]
+                                                    for cam in track_frames_per_cam
+                                                    if track_frames_per_cam[cam]
+                                                },
+                                                "actions": action_np[
+                                                    candidate_idx
+                                                ].tolist(),
+                                            }
+                                        )
+
+                                    # Rank candidates by ascending mean physical distance
+                                    evaluated_candidates.sort(
+                                        key=lambda c: c["mean_phys_dist"]
+                                    )
+                                    top_6_candidates = evaluated_candidates[:6]
+
+                                    for rank, cand in enumerate(
+                                        top_6_candidates, start=1
+                                    ):
+                                        cand["rank"] = rank
+
+                                    print(
+                                        f"📊 [Execute Checkpoint] Top Candidate #1 Mean Physical Distance: {top_6_candidates[0]['mean_phys_dist']:.4f}m"
+                                    )
+
+                                    # Send top 6 candidate evaluation results to UI
+                                    await websocket.send_text(
+                                        json.dumps(
+                                            {
+                                                "type": "checkpoint_execution_results",
+                                                "checkpoint": ckpt_name,
+                                                "top_candidates": [
+                                                    {
+                                                        "rank": c["rank"],
+                                                        "candidate_idx": c[
+                                                            "candidate_idx"
+                                                        ],
+                                                        "mean_phys_dist": round(
+                                                            c["mean_phys_dist"], 4
+                                                        ),
+                                                        "frames": c["final_frames"],
+                                                    }
+                                                    for c in top_6_candidates
+                                                ],
+                                            }
+                                        )
+                                    )
+
+                                    # Commit Best Candidate (#1) trajectory to live simulation
+                                    best_actions = np.array(
+                                        top_6_candidates[0]["actions"], dtype=np.float32
                                     )
                                     for h_step in range(7):
-                                        step_act = raw_actions[h_step, :32]
+                                        step_act = best_actions[h_step, :32]
                                         sim.process_target_32(step_act)
                                         for _ in range(16):
                                             sim.sync_ctrl_to_qpos(sim.last_target_q)

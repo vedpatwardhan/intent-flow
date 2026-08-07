@@ -1,16 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Focus, Navigation, Camera } from 'lucide-react';
 
-export default function SimulatorView({ frames, onInteraction, connectionStatus }) {
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-
-  const [tool, setTool] = useState('box');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
-  const [currentPos, setCurrentPos] = useState({ x: 0, y: 0 });
-  const [drawnBox, setDrawnBox] = useState(null);
-  const [drawnVector, setDrawnVector] = useState(null);
+export default function SimulatorView({ frames, candidateResults, onInteraction, connectionStatus }) {
   const [activeCam, setActiveCam] = useState('world_center');
 
   const cameras = [
@@ -21,226 +12,141 @@ export default function SimulatorView({ frames, onInteraction, connectionStatus 
     { id: 'world_wrist', name: 'Wrist' }
   ];
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (drawnBox) {
-      ctx.strokeStyle = '#22c55e';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(drawnBox.x, drawnBox.y, drawnBox.width, drawnBox.height);
-      ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
-      ctx.fillRect(drawnBox.x, drawnBox.y, drawnBox.width, drawnBox.height);
-      ctx.fillStyle = '#22c55e';
-      ctx.font = '10px Outfit';
-      ctx.fillText("Goal Mask", drawnBox.x + 4, drawnBox.y + 14);
-    }
-
-    if (drawnVector) {
-      drawArrow(ctx, drawnVector.start[0], drawnVector.start[1], drawnVector.end[0], drawnVector.end[1]);
-    }
-
-    if (isDrawing) {
-      if (tool === 'box') {
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.8)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(
-          startPos.x,
-          startPos.y,
-          currentPos.x - startPos.x,
-          currentPos.y - startPos.y
-        );
-      } else if (tool === 'vector') {
-        drawArrow(ctx, startPos.x, startPos.y, currentPos.x, currentPos.y, 'rgba(6, 182, 212, 0.8)');
-      }
-    }
-  }, [isDrawing, startPos, currentPos, drawnBox, drawnVector, tool, activeCam]);
-
-  const drawArrow = (ctx, fromx, fromy, tox, toy, color = '#06b6d4') => {
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(fromx, fromy);
-    ctx.lineTo(tox, toy);
-    ctx.stroke();
-
-    const angle = Math.atan2(toy - fromy, tox - fromx);
-    ctx.beginPath();
-    ctx.moveTo(tox, toy);
-    ctx.lineTo(tox - 12 * Math.cos(angle - Math.PI / 6), toy - 12 * Math.sin(angle - Math.PI / 6));
-    ctx.lineTo(tox - 12 * Math.cos(angle + Math.PI / 6), toy - 12 * Math.sin(angle + Math.PI / 6));
-    ctx.closePath();
-    ctx.fill();
-  };
-
-  const getMousePos = (e) => {
-    if (!canvasRef.current) return { x: 0, y: 0 };
-    const rect = canvasRef.current.getBoundingClientRect();
-    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
-    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
-
-    // Map bounding client coordinates to 224x224 camera pixels
-    return {
-      x: ((clientX - rect.left) / rect.width) * 224,
-      y: ((clientY - rect.top) / rect.height) * 224
-    };
-  };
-
-  const handleMouseDown = (e) => {
-    const pos = getMousePos(e);
-    setIsDrawing(true);
-    setStartPos(pos);
-    setCurrentPos(pos);
-    onInteraction({
-      type: 'original_click',
-      x: pos.x,
-      y: pos.y
-    });
-  };
-
-  const handleMouseMove = (e) => {
-    if (!isDrawing) return;
-    setCurrentPos(getMousePos(e));
-  };
-
-  const handleMouseUp = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-
-    if (tool === 'box') {
-      const box = {
-        x: Math.min(startPos.x, currentPos.x),
-        y: Math.min(startPos.y, currentPos.y),
-        width: Math.abs(currentPos.x - startPos.x),
-        height: Math.abs(currentPos.y - startPos.y)
-      };
-
-      if (box.width > 5 && box.height > 5) {
-        setDrawnBox(box);
-        onInteraction({
-          type: 'bounding_box',
-          coordinates: box
-        });
-      }
-    } else {
-      const vector = {
-        start: [startPos.x, startPos.y],
-        end: [currentPos.x, currentPos.y]
-      };
-      const distance = Math.hypot(vector.end[0] - vector.start[0], vector.end[1] - vector.start[1]);
-      if (distance > 5) {
-        setDrawnVector(vector);
-        onInteraction({
-          type: 'motion_vector',
-          coordinates: vector
-        });
-      }
-    }
-  };
-
-  const clearCanvas = () => {
-    setDrawnBox(null);
-    setDrawnVector(null);
-    onInteraction({ type: 'clear' });
-  };
-
   const handleCameraChange = (camId) => {
     setActiveCam(camId);
-    // Clear canvas when switching camera focus to prevent coordinate leaks
-    setDrawnBox(null);
-    setDrawnVector(null);
-    onInteraction({
-      type: 'select_camera',
-      camera: camId
-    });
   };
 
+  const topCandidates = candidateResults?.top_candidates || Array.from({ length: 6 }, (_, i) => ({
+    rank: i + 1,
+    candidate_idx: i,
+    mean_phys_dist: 0.0,
+    frames: null
+  }));
+
   return (
-    <div className="panel h-full" style={{ borderColor: 'var(--accent-cyan)' }}>
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-        <div>
-          <h2 className="panel-title">
-            <Camera className="text-cyan-400" size={18} />
-            Simulator Grid
-          </h2>
-          <p className="panel-subtitle">Multi-view observation cockpit (Click a view to Focus & Annotate)</p>
+    <div className="panel" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel-header" style={{ borderBottom: '1px solid var(--border-glass)', paddingBottom: '10px', marginBottom: '8px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 className="panel-title flex-row-center gap-8">
+              <Camera className="text-cyan-400" size={18} />
+              <span>Command Center Viewport</span>
+            </h2>
+            <p className="panel-subtitle">Top 6 evaluated action candidates ranked by mean physical distance</p>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => setTool('box')}
-            className={`btn-phase btn-phase-action ${tool === 'box' ? 'active' : ''}`}
-            style={{
-              padding: '6px 10px',
-              background: tool === 'box' ? 'var(--accent-cyan-dim)' : '',
-              borderColor: tool === 'box' ? 'var(--accent-cyan)' : ''
-            }}
-            title="Goal Bounding Box"
-          >
-            <Focus size={14} className={tool === 'box' ? 'text-cyan-400' : ''} />
-          </button>
-          <button
-            onClick={() => setTool('vector')}
-            className={`btn-phase btn-phase-action ${tool === 'vector' ? 'active' : ''}`}
-            style={{
-              padding: '6px 10px',
-              background: tool === 'vector' ? 'var(--accent-cyan-dim)' : '',
-              borderColor: tool === 'vector' ? 'var(--accent-cyan)' : ''
-            }}
-            title="Directional Motion Vector"
-          >
-            <Navigation size={14} className={`rotate-45 ${tool === 'vector' ? 'text-cyan-400' : ''}`} />
-          </button>
-          <button
-            onClick={clearCanvas}
-            className="btn-phase btn-phase-action"
-            style={{ padding: '6px 10px' }}
-          >
-            Clear
-          </button>
+
+        {/* Camera Selector Tabs styled identically to Encoder Diagnostics */}
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '8px', marginTop: '10px', overflowX: 'auto', paddingBottom: '2px' }}>
+          {cameras.map((cam) => {
+            const isSelected = activeCam === cam.id;
+            const camFrame = frames && frames[cam.id];
+
+            return (
+              <div
+                key={cam.id}
+                onClick={() => handleCameraChange(cam.id)}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-glass)'}`,
+                  background: isSelected ? 'var(--accent-cyan-dim)' : 'rgba(255,255,255,0.01)',
+                  cursor: 'pointer',
+                  minWidth: '100px',
+                  transition: 'all 0.2s',
+                  flexShrink: 0
+                }}
+              >
+                {camFrame ? (
+                  <img
+                    src={camFrame.startsWith('data:') || camFrame.startsWith('blob:') ? camFrame : `data:image/jpeg;base64,${camFrame}`}
+                    alt={cam.name}
+                    style={{ width: '28px', height: '28px', borderRadius: '4px', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <div style={{ width: '28px', height: '28px', borderRadius: '4px', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '8px', color: '#475569' }}>
+                    Off
+                  </div>
+                )}
+                <span style={{ fontSize: '11px', fontWeight: 600, color: isSelected ? 'var(--accent-cyan)' : '#94a3b8' }}>
+                  {cam.name}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Simulator Multi-View Grid */}
-      <div className="cam-grid" ref={containerRef}>
-        {cameras.map((cam) => (
-          <div
-            key={cam.id}
-            onClick={() => handleCameraChange(cam.id)}
-            className={`cam-grid-card ${activeCam === cam.id ? 'focused' : ''}`}
-          >
-            {frames && frames[cam.id] ? (
-              <img
-                src={frames[cam.id]}
-                alt={cam.name}
-              />
-            ) : (
-              <div style={{ color: '#475569', fontSize: '11px' }}>Waiting...</div>
-            )}
-            <span className="cam-grid-label">{cam.name} View</span>
+      <div className="panel-content" style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateRows: 'repeat(2, 1fr)',
+            gap: '10px',
+            flexGrow: 1,
+            minHeight: 0
+          }}
+        >
+          {topCandidates.map((cand, idx) => {
+            const frameSrc = cand.frames && cand.frames[activeCam] ? cand.frames[activeCam] : (frames && frames[activeCam] ? frames[activeCam] : null);
+            const isRankOne = idx === 0;
 
-            {/* Canvas overlay ONLY loaded on the focused camera */}
-            {activeCam === cam.id && (
-              <>
-                <span className="cam-focus-overlay">Focus</span>
-                <canvas
-                  ref={canvasRef}
-                  width={224}
-                  height={224}
-                  className="focused-canvas"
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onTouchStart={handleMouseDown}
-                  onTouchMove={handleMouseMove}
-                  onTouchEnd={handleMouseUp}
-                />
-              </>
-            )}
-          </div>
-        ))}
+            return (
+              <div
+                key={idx}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.015)',
+                  border: isRankOne ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid var(--border-glass)',
+                  borderRadius: '8px',
+                  padding: '8px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  position: 'relative'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600, fontFamily: 'monospace', color: '#f8fafc' }}>
+                    Candidate #{idx + 1}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      fontFamily: 'monospace',
+                      color: isRankOne ? '#4ade80' : 'var(--accent-cyan)',
+                      background: isRankOne ? 'rgba(34, 197, 94, 0.15)' : 'var(--accent-cyan-dim)',
+                      border: isRankOne ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(6, 182, 212, 0.2)',
+                      padding: '2px 6px',
+                      borderRadius: '4px'
+                    }}
+                  >
+                    {isRankOne ? `⭐ Best (d=${cand.mean_phys_dist}m)` : `Rank #${idx + 1} (${cand.mean_phys_dist}m)`}
+                  </span>
+                </div>
+
+                <div style={{ flex: 1, minHeight: 0, width: '100%', background: '#000', border: '1px solid #1a1a24', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}>
+                  {frameSrc ? (
+                    <img
+                      src={frameSrc.startsWith('data:') || frameSrc.startsWith('blob:') ? frameSrc : `data:image/jpeg;base64,${frameSrc}`}
+                      alt={`Candidate ${idx + 1}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569', fontSize: '11px' }}>
+                      Waiting for trajectory...
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

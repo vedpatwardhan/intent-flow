@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sliders, Play, RotateCcw, HelpCircle, Send, Plus, Trash2 } from 'lucide-react';
+import { Sliders, Play, RotateCcw, HelpCircle, Send, Plus, Trash2, Shuffle } from 'lucide-react';
 
 const COMPACT_WIRE_JOINTS = [
   "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_pitch_joint", "left_wrist_yaw_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint",
@@ -275,36 +275,20 @@ export default function ControlPanel({
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
           <button
             onClick={triggerWildRandomize}
+            className="btn-phase btn-phase-action"
             disabled={isTraining}
-            style={{
-              background: 'var(--accent-cyan-dim)',
-              border: '1px solid rgba(6, 182, 212, 0.3)',
-              color: 'var(--accent-cyan)',
-              padding: '6px 0',
-              borderRadius: '4px',
-              fontSize: '11px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              textAlign: 'center'
-            }}
+            style={{ padding: '6px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', color: 'var(--accent-amber)' }}
           >
+            <Shuffle size={10} />
             Randomize
           </button>
           <button
             onClick={triggerReset}
+            className="btn-phase btn-phase-action"
             disabled={isTraining}
-            style={{
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid var(--border-glass)',
-              color: '#94a3b8',
-              padding: '6px 0',
-              borderRadius: '4px',
-              fontSize: '11px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              textAlign: 'center'
-            }}
+            style={{ padding: '6px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', color: 'var(--accent-red)' }}
           >
+            <RotateCcw size={10} />
             Home All
           </button>
         </div>
@@ -313,23 +297,24 @@ export default function ControlPanel({
           onClick={triggerExecuteCheckpoint}
           disabled={isTraining}
           style={{
-            background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
-            border: '1px solid rgba(6, 182, 212, 0.5)',
-            color: '#fff',
-            padding: '8px 0',
-            borderRadius: '6px',
-            fontSize: '12px',
+            background: '#09090d',
+            border: '1px solid rgba(34, 197, 94, 0.4)',
+            color: '#4ade80',
+            padding: '6px 10px',
+            borderRadius: '4px',
+            fontSize: '10px',
             fontWeight: 700,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             gap: '6px',
-            boxShadow: '0 4px 12px rgba(6, 182, 212, 0.3)',
-            marginTop: '2px'
+            width: '100%',
+            marginTop: '2px',
+            transition: 'all 0.2s'
           }}
         >
-          <Play size={14} /> Execute Checkpoint Trajectory
+          <Play size={11} /> Execute Checkpoint Trajectory
         </button>
       </div>
     </div>

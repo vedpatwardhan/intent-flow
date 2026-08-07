@@ -587,33 +587,36 @@ async def handle_stage3_execute(payload: Stage3ExecutePayload):
                 horizon = 8
                 joint_dim = 58
                 total_gen_dim = (horizon - 1) * joint_dim
-                grid = torch.zeros(1, horizon - 1, joint_dim, device=device)
-                steering_timelines = grid.view(1, total_gen_dim)
-
-                embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
+                ensemble_size = 16
+                s_t_ensemble = s_t.expand(ensemble_size, -1)  # [16, 512]
+                grid = torch.zeros(ensemble_size, horizon - 1, joint_dim, device=device)
+                steering_timelines = grid.view(ensemble_size, total_gen_dim)
+                embodiment_id_expanded = torch.tensor(
+                    [2], dtype=torch.long, device=device
+                ).expand(ensemble_size)
                 step_seed = payload.seed if payload.seed is not None else 42
 
                 a_candidates, step_snrs = state.stage3_models[
                     "flow_matcher"
                 ].sample_with_steering(
-                    s_t,
-                    s_t,  # Target conditioned on s_t for execution
-                    embodiment_id=embodiment_id,
+                    s_t_ensemble,
+                    s_t_ensemble,
+                    embodiment_id=embodiment_id_expanded,
                     horizon=horizon - 1,
                     num_steps=10,
                     steering_timelines=steering_timelines,
                     step_nft_scale=payload.step_nft_scale,
                     seed=step_seed,
                 )
-                # a_candidates: [1, 7, 58] -> flatten to [1, 406]
-                a_flat = a_candidates.view(1, -1).cpu().tolist()
+                # a_candidates: [16, 7, 58]
+                a_list = a_candidates.cpu().tolist()
 
                 return {
                     "status": "success",
                     "checkpoint_used": getattr(
                         state, "active_checkpoint", payload.checkpoint_name
                     ),
-                    "action_plan": a_flat,
+                    "action_candidates": a_list,
                     "step_snrs": step_snrs,
                 }
     except Exception as e:

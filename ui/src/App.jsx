@@ -47,6 +47,7 @@ export default function App() {
   const [isTraining, setIsTraining] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0.0);
   const [trainingStatus, setTrainingStatus] = useState('');
+  const [candidateResults, setCandidateResults] = useState(null);
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
@@ -191,6 +192,9 @@ export default function App() {
         if (data.task_isolated_features !== undefined) {
           setTaskIsolatedFeaturesCache(prev => ({ ...prev, [currentCam]: data.task_isolated_features }));
         }
+        if (data.type === "checkpoint_execution_results") {
+          setCandidateResults(data);
+        }
         if (data.type === "training_progress") {
           setIsTraining(data.progress < 1.0);
           setTrainingProgress(data.progress);
@@ -314,6 +318,7 @@ export default function App() {
           {/* Center Column: Grid View of 5 Cameras */}
           <SimulatorView
             frames={frames}
+            candidateResults={candidateResults}
             onInteraction={handleInteraction}
             connectionStatus={connectionStatus}
           />
