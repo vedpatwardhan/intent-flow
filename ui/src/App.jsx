@@ -129,9 +129,20 @@ export default function App() {
     const ws = new WebSocket('ws://localhost:8000/ws');
     wsRef.current = ws;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       setConnectionStatus('connected');
       console.log('WebSocket Connected');
+      try {
+        const res = await fetch('http://localhost:8000/api/checkpoints');
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            window.dispatchEvent(new CustomEvent('checkpoints_loaded', { detail: list }));
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch checkpoints on WS connect:', e);
+      }
     };
 
     ws.onmessage = (event) => {

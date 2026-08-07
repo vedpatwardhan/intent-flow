@@ -22,32 +22,35 @@ export default function ControlPanel({
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [noiseScale, setNoiseScale] = useState(0.08);
 
-  // Poll /api/checkpoints from local server until checkpoints are retrieved from Colab
+  // Fetch checkpoints from backend when component mounts or WebSocket connects
   useEffect(() => {
-    let isMounted = true;
-
     const fetchCheckpoints = async () => {
       try {
         const res = await fetch('http://localhost:8000/api/checkpoints');
         if (res.ok) {
           const list = await res.json();
-          if (isMounted && Array.isArray(list) && list.length > 0) {
+          if (Array.isArray(list) && list.length > 0) {
             setCheckpoints(list);
-            setSelectedCheckpoint(prev => (prev && list.includes(prev) ? prev : list[0]));
+            setSelectedCheckpoint(prev => prev || list[0]);
           }
         }
       } catch (e) {
-        console.warn('Polling checkpoints...', e);
+        console.warn('Failed to fetch checkpoints:', e);
       }
     };
 
     fetchCheckpoints();
-    const interval = setInterval(fetchCheckpoints, 3000);
 
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
+    const handleLoaded = (e) => {
+      const list = e.detail;
+      if (Array.isArray(list) && list.length > 0) {
+        setCheckpoints(list);
+        setSelectedCheckpoint(prev => prev || list[0]);
+      }
     };
+
+    window.addEventListener('checkpoints_loaded', handleLoaded);
+    return () => window.removeEventListener('checkpoints_loaded', handleLoaded);
   }, []);
 
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // right_shoulder_pitch_joint

@@ -1378,7 +1378,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
 
                     execute_data = {
-                        "obs": obs_payload.dict(),
+                        "obs": obs_payload,
                         "checkpoint_name": ckpt_name,
                         "step_nft_scale": noise_scale,
                         "seed": 42,
