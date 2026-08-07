@@ -1408,19 +1408,27 @@ async def websocket_endpoint(websocket: WebSocket):
                                     initial_ctrl = sim.data.ctrl.copy()
 
                                     r_index_id = mujoco.mj_name2id(
-                                        sim.model, mujoco.mjtObj.obj_site, "r_index_tip"
+                                        sim.model,
+                                        mujoco.mjtObj.mjOBJ_SITE,
+                                        "r_index_tip",
                                     )
                                     r_thumb_id = mujoco.mj_name2id(
-                                        sim.model, mujoco.mjtObj.obj_site, "r_thumb_tip"
+                                        sim.model,
+                                        mujoco.mjtObj.mjOBJ_SITE,
+                                        "r_thumb_tip",
                                     )
                                     l_index_id = mujoco.mj_name2id(
-                                        sim.model, mujoco.mjtObj.obj_site, "l_index_tip"
+                                        sim.model,
+                                        mujoco.mjtObj.mjOBJ_SITE,
+                                        "l_index_tip",
                                     )
                                     l_thumb_id = mujoco.mj_name2id(
-                                        sim.model, mujoco.mjtObj.obj_site, "l_thumb_tip"
+                                        sim.model,
+                                        mujoco.mjtObj.mjOBJ_SITE,
+                                        "l_thumb_tip",
                                     )
                                     cube_id = mujoco.mj_name2id(
-                                        sim.model, mujoco.mjtObj.obj_body, "red_cube"
+                                        sim.model, mujoco.mjtObj.mjOBJ_BODY, "red_cube"
                                     )
 
                                     evaluated_candidates = []
