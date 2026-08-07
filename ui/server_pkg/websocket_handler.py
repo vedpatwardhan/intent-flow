@@ -9,6 +9,7 @@ import numpy as np
 import httpx
 import mujoco
 from PIL import Image
+from fastapi import WebSocketDisconnect
 
 from . import config
 from .helpers import capture_sim_frames, render_camera_views
