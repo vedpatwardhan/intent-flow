@@ -27,34 +27,49 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
 
   const [animFrameCount, setAnimFrameCount] = useState(0);
 
-  // 3 full iterations limit (21 steps total: 3 loops * 7 steps)
-  const maxAnimSteps = 21;
+  // 3 full iterations limit with 1-second pause between iterations
   const seq = candidateResults?.top_candidates?.[0]?.frame_sequences?.[activeCam];
   const hasSequences = seq && seq.length > 0;
 
-  // Reset animation step count whenever new candidate evaluation results arrive
+  // Reset animation state whenever new candidate evaluation results arrive
   useEffect(() => {
     setAnimFrameCount(0);
     setStepIdx(0);
   }, [candidateResults]);
 
-  // Run 5fps animation loop up to 3 full iterations (maxAnimSteps)
+  // Run candidate animation loop: 5 FPS sequence playback with a 1-second pause between the 3 cycles
   useEffect(() => {
     if (!hasSequences) return;
 
-    const timer = setInterval(() => {
-      setAnimFrameCount(prev => {
-        if (prev + 1 >= maxAnimSteps) {
-          clearInterval(timer);
-          return maxAnimSteps;
-        }
-        const nextCount = prev + 1;
-        setStepIdx(nextCount % 7);
-        return nextCount;
-      });
-    }, 200);
+    let timeoutId;
+    let intervalId;
+    let iteration = 0;
 
-    return () => clearInterval(timer);
+    const playSequence = () => {
+      let currentStep = 0;
+      setStepIdx(0);
+
+      intervalId = setInterval(() => {
+        currentStep += 1;
+        if (currentStep < 7) {
+          setStepIdx(currentStep);
+        } else {
+          clearInterval(intervalId);
+          iteration += 1;
+          if (iteration < 3) {
+            // Wait 1 second before starting next playback iteration
+            timeoutId = setTimeout(playSequence, 1000);
+          }
+        }
+      }, 200); // 5 FPS playback
+    };
+
+    playSequence();
+
+    return () => {
+      clearInterval(intervalId);
+      clearTimeout(timeoutId);
+    };
   }, [candidateResults, activeCam, hasSequences]);
 
   return (

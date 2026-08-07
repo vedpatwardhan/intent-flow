@@ -73,12 +73,15 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                     config.needs_colab_processing = True
 
                 elif payload.get("type") == "reset":
+                    print("🔄 [Server Received] Reset / Home All request")
                     sim.reset_env(lock_posture=True)
+                    sim.sync_ctrl_to_qpos(sim.data.qpos)
                     baseline_exemplar_frames = None
                     config.needs_colab_processing = True
                     is_moving = False
 
                 elif payload.get("type") == "wild_randomize":
+                    print("🎲 [Server Received] Wild Randomize request")
                     sim.wild_reset()
                     baseline_exemplar_frames = None
                     config.needs_colab_processing = True
@@ -200,31 +203,41 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                             l_hand_center = (
                                                 l_index_pos + l_thumb_pos
                                             ) / 2.0
+
                                             r_dist = float(
                                                 np.linalg.norm(r_hand_center - cube_pos)
                                             )
                                             l_dist = float(
                                                 np.linalg.norm(l_hand_center - cube_pos)
                                             )
+
                                             h_phys_dist = min(r_dist, l_dist)
                                             step_phys_distances.append(h_phys_dist)
 
                                             cur_frames, _ = render_camera_views(
                                                 eval_sim
                                             )
+                                            await asyncio.sleep(0)
                                             for cam_key in track_frames_per_cam:
                                                 if cam_key in cur_frames:
                                                     track_frames_per_cam[
                                                         cam_key
                                                     ].append(cur_frames[cam_key])
 
+                                        min_phys_dist = float(
+                                            np.min(step_phys_distances)
+                                        )
+                                        final_phys_dist = float(step_phys_distances[-1])
                                         mean_phys_dist = float(
                                             np.mean(step_phys_distances)
                                         )
+
                                         evaluated_candidates.append(
                                             {
                                                 "candidate_idx": candidate_idx,
                                                 "mean_phys_dist": mean_phys_dist,
+                                                "min_phys_dist": min_phys_dist,
+                                                "final_phys_dist": final_phys_dist,
                                                 "final_frames": {
                                                     cam: track_frames_per_cam[cam][-1]
                                                     for cam in track_frames_per_cam
@@ -241,8 +254,12 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                             }
                                         )
 
+                                    # Rank candidates by ascending minimum physical distance to red cube
                                     evaluated_candidates.sort(
-                                        key=lambda c: c["mean_phys_dist"]
+                                        key=lambda c: (
+                                            c["min_phys_dist"],
+                                            c["final_phys_dist"],
+                                        )
                                     )
                                     top_8_candidates = evaluated_candidates[:8]
 
@@ -267,7 +284,7 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                                             "candidate_idx"
                                                         ],
                                                         "mean_phys_dist": round(
-                                                            c["mean_phys_dist"], 4
+                                                            c["min_phys_dist"], 4
                                                         ),
                                                         "frames": c["final_frames"],
                                                         "frame_sequences": c[

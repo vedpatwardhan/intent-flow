@@ -83,7 +83,7 @@ export default function ControlPanel({
   };
 
   const triggerRandomize = () => {
-    onUserCommand({ type: 'randomize' });
+    onUserCommand({ type: 'reset' });
   };
 
   const triggerExecuteCheckpoint = () => {
