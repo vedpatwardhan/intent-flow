@@ -633,7 +633,7 @@ async def run_stage3_training_loop(
         "ctrl": eval_sim.data.ctrl.copy(),
     }
 
-    num_epochs = 10
+    num_epochs = 20
     max_steps = 16
     calibrate_steps = 4
 
@@ -1320,6 +1320,60 @@ async def websocket_endpoint(websocket: WebSocket):
                     sim.process_target_32(act_norm)
                     is_moving = True
                     moving_check_steps = 0
+
+                elif payload.get("type") == "execute_checkpoint":
+                    ckpt_name = payload.get("checkpoint_name", "stage3_rl_final.pt")
+                    noise_scale = float(payload.get("step_nft_scale", 0.08))
+                    print(
+                        f"⚡ [Execute Checkpoint] Executing '{ckpt_name}' with noise scale {noise_scale}..."
+                    )
+
+                    # Capture 5-camera observation payload
+                    obs_payload = build_stage3_obs_payload(
+                        sim, text_prompt, ui_annotations, 0, 0
+                    )
+
+                    execute_data = {
+                        "obs": obs_payload.dict(),
+                        "checkpoint_name": ckpt_name,
+                        "step_nft_scale": noise_scale,
+                        "seed": 42,
+                    }
+
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            r = await client.post(
+                                f"{colab_url}/stage3/execute",
+                                json=execute_data,
+                                timeout=120.0,
+                            )
+                            if r.status_code == 200:
+                                res = r.json()
+                                action_plan = res.get("action_plan", [])
+                                print(
+                                    f"✅ [Execute Checkpoint] Received action plan: {len(action_plan)} steps."
+                                )
+                                if action_plan and len(action_plan[0]) == 406:
+                                    # Execute 7 horizon steps (58 DOF each) in MuJoCo
+                                    raw_actions = np.array(action_plan[0]).reshape(
+                                        7, 58
+                                    )
+                                    for h_step in range(7):
+                                        step_act = raw_actions[h_step, :32]
+                                        sim.process_target_32(step_act)
+                                        for _ in range(16):
+                                            sim.sync_ctrl_to_qpos(sim.last_target_q)
+                                            sim.data.qpos[
+                                                sim.root_q_idx : sim.root_q_idx + 3
+                                            ] = [0.0, 0.0, 0.95]
+                                            sim.data.qpos[
+                                                sim.root_q_idx + 3 : sim.root_q_idx + 7
+                                            ] = [1.0, 0.0, 0.0, 0.0]
+                                            sim.data.qvel[:6] = 0.0
+                                            mujoco.mj_step(sim.model, sim.data)
+                                        await asyncio.sleep(0.02)
+                    except Exception as e:
+                        print(f"❌ [Execute Checkpoint Error] {e}")
 
                 # Entrypoint --> called from the UI
                 elif payload.get("type") == "start_training":

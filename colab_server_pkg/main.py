@@ -16,9 +16,12 @@ from colab_server_pkg.stage3_endpoints import (
     Stage3StepPayload,
     Stage3CalibratePayload,
     Stage3DistillPayload,
+    Stage3ExecutePayload,
     handle_stage3_step,
     handle_stage3_calibrate,
     handle_stage3_distill,
+    handle_stage3_execute,
+    get_available_checkpoints,
     get_calibration_job_status,
     get_distill_job_status,
 )
@@ -159,6 +162,17 @@ async def process_frame(payload: FramePayload):
         raise HTTPException(
             status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}"
         )
+
+
+@app.get("/stage3/checkpoints")
+async def stage3_checkpoints():
+    checkpoints = get_available_checkpoints()
+    return {"status": "success", "checkpoints": checkpoints}
+
+
+@app.post("/stage3/execute")
+async def stage3_execute(payload: Stage3ExecutePayload):
+    return await handle_stage3_execute(payload)
 
 
 @app.post("/stage3/step")

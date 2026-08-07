@@ -150,6 +150,14 @@ class Stage3DistillPayload(BaseModel):
     neg_trajectories: list[dict]
 
 
+class Stage3ExecutePayload(BaseModel):
+    obs: ObservationPayload
+    checkpoint_name: str = "stage3_rl_final.pt"
+    step_nft_scale: float = 0.08
+    num_steering_steps: int = 8
+    seed: int | None = None
+
+
 def encode_obs_to_latent(obs_dict, state):
     """
     Passes observation features through the respective adapter blocks and the
@@ -465,6 +473,135 @@ def ensure_stage3_models():
         + list(state.stage3_models["action_down_proj"].parameters()),
         lr=stage3_lr,
     )
+    state.active_checkpoint = (
+        "stage3_rl_final.pt" if os.path.exists(s3_ckpt_path) else "stage2_sft.pt"
+    )
+
+
+def get_available_checkpoints():
+    """
+    Returns list of available .pt checkpoint files stored in checkpoints directory.
+    """
+    config_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "config", "default_config.yaml")
+    )
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    ckpt_dir_config = config["paths"]["checkpoint_dir"]
+    if ckpt_dir_config.startswith("latent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
+    checkpoint_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
+    )
+    if not os.path.exists(checkpoint_dir):
+        return []
+    files = [
+        f
+        for f in os.listdir(checkpoint_dir)
+        if f.endswith(".pt") or f.endswith(".ckpt")
+    ]
+    files.sort()
+    return files
+
+
+def load_specific_checkpoint(checkpoint_name: str):
+    """
+    Loads specific checkpoint weights into active stage3_models in GPU memory.
+    """
+    import colab_server_pkg.models_state as state
+
+    ensure_stage3_models()
+    if getattr(state, "active_checkpoint", None) == checkpoint_name:
+        return
+
+    config_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "config", "default_config.yaml")
+    )
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    ckpt_dir_config = config["paths"]["checkpoint_dir"]
+    if ckpt_dir_config.startswith("latent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
+    checkpoint_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
+    )
+    ckpt_path = os.path.join(checkpoint_dir, checkpoint_name)
+    if not os.path.exists(ckpt_path):
+        print(f"[Colab Warning] Checkpoint {checkpoint_name} not found at {ckpt_path}")
+        return
+
+    print(f"🔄 [Colab Checkpoint Swap] Loading checkpoint: {checkpoint_name}")
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
+    state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
+    state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
+    state.stage3_models["edge_adapter"].load_state_dict(checkpoint["edge_adapter"])
+    state.stage3_models["action_adapter"].load_state_dict(checkpoint["action_adapter"])
+    state.stage3_models["state_adapter"].load_state_dict(checkpoint["state_adapter"])
+    state.stage3_models["action_down_proj"].load_state_dict(
+        checkpoint["action_down_proj"]
+    )
+    state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
+    state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
+    state.active_checkpoint = checkpoint_name
+    print(f"✅ [Colab Checkpoint Swap] Active checkpoint is now: {checkpoint_name}")
+
+
+async def handle_stage3_execute(payload: Stage3ExecutePayload):
+    """
+    Inference endpoint: Dynamic checkpoint load, feature extraction, MSAT encoding,
+    and flow matcher steered sampling. Returns action trajectory [1, 406].
+    """
+    try:
+        torch.cuda.empty_cache()
+        ensure_stage3_models()
+        import colab_server_pkg.models_state as state
+
+        if payload.checkpoint_name:
+            load_specific_checkpoint(payload.checkpoint_name)
+
+        with torch.no_grad():
+            with torch.amp.autocast("cuda"):
+                obs_dict, combined_obs = extract_batch_stage3_obs_features(
+                    [payload.obs]
+                )
+                s_t = encode_obs_to_latent(combined_obs, state)  # [1, 512]
+
+                horizon = 8
+                joint_dim = 58
+                total_gen_dim = (horizon - 1) * joint_dim
+                grid = torch.zeros(1, horizon - 1, joint_dim, device=device)
+                steering_timelines = grid.view(1, total_gen_dim)
+
+                embodiment_id = torch.tensor([2], dtype=torch.long, device=device)
+                step_seed = payload.seed if payload.seed is not None else 42
+
+                a_candidates, step_snrs = state.stage3_models[
+                    "flow_matcher"
+                ].sample_with_steering(
+                    s_t,
+                    s_t,  # Target conditioned on s_t for execution
+                    embodiment_id=embodiment_id,
+                    horizon=horizon - 1,
+                    num_steps=10,
+                    steering_timelines=steering_timelines,
+                    step_nft_scale=payload.step_nft_scale,
+                    seed=step_seed,
+                )
+                # a_candidates: [1, 7, 58] -> flatten to [1, 406]
+                a_flat = a_candidates.view(1, -1).cpu().tolist()
+
+                return {
+                    "status": "success",
+                    "checkpoint_used": getattr(
+                        state, "active_checkpoint", payload.checkpoint_name
+                    ),
+                    "action_plan": a_flat,
+                    "step_snrs": step_snrs,
+                }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 async def handle_stage3_step(payload: Stage3StepPayload):
