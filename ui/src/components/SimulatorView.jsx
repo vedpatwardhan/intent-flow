@@ -16,7 +16,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
     setActiveCam(camId);
   };
 
-  const topCandidates = candidateResults?.top_candidates || Array.from({ length: 6 }, (_, i) => ({
+  const topCandidates = candidateResults?.top_candidates || Array.from({ length: 8 }, (_, i) => ({
     rank: i + 1,
     candidate_idx: i,
     mean_phys_dist: 0.0,
@@ -32,7 +32,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
               <Camera className="text-cyan-400" size={18} />
               <span>Command Center Viewport</span>
             </h2>
-            <p className="panel-subtitle">Top 6 evaluated action candidates ranked by mean physical distance</p>
+            <p className="panel-subtitle">Top 8 evaluated action candidates ranked by mean physical distance</p>
           </div>
         </div>
 
@@ -81,15 +81,16 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
         </div>
       </div>
 
-      <div className="panel-content" style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <div className="panel-content" style={{ flexGrow: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingRight: 0 }}>
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
+            gridTemplateColumns: 'repeat(4, 1fr)',
             gridTemplateRows: 'repeat(2, 1fr)',
-            gap: '10px',
+            gap: '8px',
             flexGrow: 1,
-            minHeight: 0
+            minHeight: 0,
+            height: '100%'
           }}
         >
           {topCandidates.map((cand, idx) => {
@@ -102,27 +103,29 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
                 style={{
                   background: 'rgba(255, 255, 255, 0.015)',
                   border: isRankOne ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid var(--border-glass)',
-                  borderRadius: '8px',
-                  padding: '8px',
+                  borderRadius: '6px',
+                  padding: '6px',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '6px',
-                  position: 'relative'
+                  gap: '4px',
+                  position: 'relative',
+                  minHeight: 0,
+                  overflow: 'hidden'
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 600, fontFamily: 'monospace', color: '#f8fafc' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+                  <span style={{ fontSize: '10px', fontWeight: 600, fontFamily: 'monospace', color: '#f8fafc' }}>
                     Candidate #{idx + 1}
                   </span>
                   <span
                     style={{
-                      fontSize: '9px',
+                      fontSize: '8px',
                       fontWeight: 700,
                       fontFamily: 'monospace',
                       color: isRankOne ? '#4ade80' : 'var(--accent-cyan)',
                       background: isRankOne ? 'rgba(34, 197, 94, 0.15)' : 'var(--accent-cyan-dim)',
                       border: isRankOne ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(6, 182, 212, 0.2)',
-                      padding: '2px 6px',
+                      padding: '1px 5px',
                       borderRadius: '4px'
                     }}
                   >
@@ -130,7 +133,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
                   </span>
                 </div>
 
-                <div style={{ flex: 1, minHeight: 0, width: '100%', background: '#000', border: '1px solid #1a1a24', borderRadius: '6px', overflow: 'hidden', position: 'relative' }}>
+                <div style={{ flex: 1, minHeight: 0, width: '100%', background: '#000', border: '1px solid #1a1a24', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
                   {frameSrc ? (
                     <img
                       src={frameSrc.startsWith('data:') || frameSrc.startsWith('blob:') ? frameSrc : `data:image/jpeg;base64,${frameSrc}`}
@@ -138,7 +141,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569', fontSize: '11px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#475569', fontSize: '10px' }}>
                       Waiting for trajectory...
                     </div>
                   )}

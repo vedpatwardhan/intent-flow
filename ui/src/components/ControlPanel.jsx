@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sliders, Play, RotateCcw, HelpCircle, Send, Plus, Trash2, Shuffle } from 'lucide-react';
 
 const COMPACT_WIRE_JOINTS = [
@@ -18,7 +18,6 @@ export default function ControlPanel({
   trainingProgress,
   trainingStatus,
 }) {
-  const [inputText, setInputText] = useState('pinch the red block and lift it');
   const [checkpoints, setCheckpoints] = useState([
     'run_119/stage3_epoch_10.pt',
     'run_119/stage3_epoch_08.pt',
@@ -28,6 +27,25 @@ export default function ControlPanel({
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('run_119/stage3_epoch_10.pt');
   const [noiseScale, setNoiseScale] = useState(0.08);
 
+  // Fetch live checkpoints from Colab backend whenever local UI server connects
+  useEffect(() => {
+    const fetchCheckpoints = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/checkpoints');
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            setCheckpoints(list);
+            setSelectedCheckpoint(list[0]);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not fetch checkpoints from backend:', e);
+      }
+    };
+    fetchCheckpoints();
+  }, []);
+
   const [selectedJointIdx, setSelectedJointIdx] = useState(16); // right_shoulder_pitch_joint
   const [activeSliders, setActiveSliders] = useState([
     { idx: 16, name: 'right_shoulder_pitch_joint', val: 0.0 },
@@ -36,12 +54,6 @@ export default function ControlPanel({
     { idx: 30, name: 'waist_pitch_joint', val: 0.0 },
     { idx: 31, name: 'waist_roll_joint', val: 0.0 },
   ]);
-
-  const handleTextSubmit = (e) => {
-    e.preventDefault();
-    if (!inputText.trim()) return;
-    onUserCommand({ type: 'text_command', prompt: inputText });
-  };
 
   const addSlider = () => {
     if (activeSliders.some(s => s.idx === selectedJointIdx)) return;
@@ -77,53 +89,15 @@ export default function ControlPanel({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%', boxSizing: 'border-box' }}>
-      {/* Top Config & CLIP Prompt Card */}
+      {/* Top Config Card */}
       <div className="panel" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <h2 className="panel-title" style={{ fontSize: '13px', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
           <Sliders className="text-cyan-400" size={15} />
           Diagnostics & Teleop
         </h2>
 
-        <form onSubmit={handleTextSubmit} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-          <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>CLIP Target:</span>
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            style={{
-              flexGrow: 1,
-              background: '#09090d',
-              border: '1px solid var(--border-glass)',
-              borderRadius: '4px',
-              padding: '3px 6px',
-              color: '#fff',
-              fontSize: '11px',
-              outline: 'none',
-              minWidth: 0
-            }}
-          />
-          <button
-            type="submit"
-            style={{
-              background: 'var(--accent-cyan-dim)',
-              border: '1px solid rgba(6, 182, 212, 0.3)',
-              color: 'var(--accent-cyan)',
-              padding: '3px 8px',
-              borderRadius: '4px',
-              fontSize: '10px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            Update
-          </button>
-        </form>
-
-        <hr className="separator" style={{ margin: '4px 0' }} />
-
         {/* Checkpoint Model Selection */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
           <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Colab Model Checkpoint:</span>
           <select
             value={selectedCheckpoint}

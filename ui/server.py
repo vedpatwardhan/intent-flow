@@ -443,6 +443,50 @@ for i, arg in enumerate(sys.argv):
         colab_url = sys.argv[i + 1]
 colab_url = colab_url or os.environ.get("COLAB_URL")
 
+cached_checkpoints = []
+
+
+@app.on_event("startup")
+async def fetch_checkpoints_on_startup():
+    global cached_checkpoints
+    if not colab_url:
+        print("[Startup Warning] COLAB_URL not set; skipping startup checkpoint query.")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            print(
+                f"🔄 [Server Startup] Querying available checkpoints from Colab: {colab_url}"
+            )
+            r = await client.get(f"{colab_url}/stage3/checkpoints", timeout=10.0)
+            if r.status_code == 200:
+                data = r.json()
+                cached_checkpoints = data.get("checkpoints", [])
+                print(
+                    f"✅ [Server Startup] Retrieved {len(cached_checkpoints)} checkpoints: {cached_checkpoints}"
+                )
+    except Exception as e:
+        print(f"⚠️ [Server Startup Checkpoints Query Failed] {e}")
+
+
+@app.get("/api/checkpoints")
+async def get_checkpoints():
+    global cached_checkpoints
+    if cached_checkpoints:
+        return cached_checkpoints
+    if not colab_url:
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{colab_url}/stage3/checkpoints", timeout=10.0)
+            if r.status_code == 200:
+                data = r.json()
+                cached_checkpoints = data.get("checkpoints", [])
+                return cached_checkpoints
+    except Exception as e:
+        print(f"⚠️ [Server Checkpoints Query Failed] {e}")
+    return []
+
+
 click_x = None
 click_y = None
 click_type = None
@@ -1488,18 +1532,18 @@ async def websocket_endpoint(websocket: WebSocket):
                                     evaluated_candidates.sort(
                                         key=lambda c: c["mean_phys_dist"]
                                     )
-                                    top_6_candidates = evaluated_candidates[:6]
+                                    top_8_candidates = evaluated_candidates[:8]
 
                                     for rank, cand in enumerate(
-                                        top_6_candidates, start=1
+                                        top_8_candidates, start=1
                                     ):
                                         cand["rank"] = rank
 
                                     print(
-                                        f"📊 [Execute Checkpoint] Top Candidate #1 Mean Physical Distance: {top_6_candidates[0]['mean_phys_dist']:.4f}m"
+                                        f"📊 [Execute Checkpoint] Top Candidate #1 Mean Physical Distance: {top_8_candidates[0]['mean_phys_dist']:.4f}m"
                                     )
 
-                                    # Send top 6 candidate evaluation results to UI
+                                    # Send top 8 candidate evaluation results to UI
                                     await websocket.send_text(
                                         json.dumps(
                                             {
@@ -1516,7 +1560,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                                         ),
                                                         "frames": c["final_frames"],
                                                     }
-                                                    for c in top_6_candidates
+                                                    for c in top_8_candidates
                                                 ],
                                             }
                                         )
@@ -1524,7 +1568,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                     # Commit Best Candidate (#1) trajectory to live simulation
                                     best_actions = np.array(
-                                        top_6_candidates[0]["actions"], dtype=np.float32
+                                        top_8_candidates[0]["actions"], dtype=np.float32
                                     )
                                     for h_step in range(7):
                                         step_act = best_actions[h_step, :32]

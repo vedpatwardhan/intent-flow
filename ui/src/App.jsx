@@ -315,24 +315,13 @@ export default function App() {
             trainingStatus={trainingStatus}
           />
 
-          {/* Center Column: Grid View of 5 Cameras */}
+          {/* Center Column: Grid View of 5 Cameras displaying Top 8 candidates */}
           <SimulatorView
             frames={frames}
             candidateResults={candidateResults}
             onInteraction={handleInteraction}
             connectionStatus={connectionStatus}
           />
-
-          {/* Right Column: Telemetry & GNN Library summary */}
-          <div className="dashboard-column">
-            <TelemetryPanel
-              energy={energy}
-              energyHistory={energyHistory}
-              tactileGrid={tactileGrid}
-              joints={joints}
-            />
-            <GnnLibrary skills={skills} />
-          </div>
         </main>
       )}
 

@@ -168,7 +168,7 @@ body {
 /* Layout Grids */
 .dashboard-layout {
   display: grid;
-  grid-template-columns: 340px 1fr 360px;
+  grid-template-columns: 340px 1fr;
   gap: 16px;
   padding: 16px;
   height: calc(100vh - 88px);
