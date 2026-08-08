@@ -36,7 +36,7 @@ frame_history = deque(maxlen=5)
 frame_all_views = {}
 
 cached_dino_attn = None
-cached_clip_sim = None
+cached_sobel_edge = None
 cached_sam_mask = None
 cached_motion_field = None
 cached_task_isolated_features = None
