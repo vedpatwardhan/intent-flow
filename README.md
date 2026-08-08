@@ -12,7 +12,9 @@ By defining user intent visually and semantically in a static frame—selecting 
 
 ## Technical Overview & Modality Updates
 
-![System Architecture](diagram.jpg)
+<p align="center">
+  <img src="diagram.jpg" alt="System Architecture" width="600" />
+</p>
 
 The model consists of three core components: an encoder for multi-modal feature fusion, a flow matching action planner, and an energy-guided predictor for candidate steering.
 
@@ -43,25 +45,25 @@ $$\text{Energy } E = 1.0 - \text{CosineSimilarity}(\hat{s}_{\text{next}}, s_{\te
 ## 3-Stage Training Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 1: Pre-Training                                                  │
-│  - Foundation feature extraction (DINO, VGGT, Sobel Edge).             │
-│  - Predictor dynamics training over video/demonstration transitions.   │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 2: Supervised Fine-Tuning (SFT)                                  │
-│  - Train adapters & Action Flow Matcher using offline trajectories. │
-│  - Conditional Flow Matching (CFM) & State-Action alignment.            │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 3: Online RL Alignment & Self-Distillation                        │
-│  - User Annotation Unprojection & IK Positive/Negative Anchors.         │
-│  - Epoch Loop: 16 Steps ──► 4 Calibrates ──► 1 Distill.                │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ STAGE 1: Pre-Training                                  │
+│  - Foundation feature extraction (DINO, VGGT, Sobel).  │
+│  - Predictor dynamics over demonstration transitions.  │
+└───────────────────────────┬────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│ STAGE 2: Supervised Fine-Tuning (SFT)                  │
+│  - Train adapters & Action Flow Matcher offline.       │
+│  - Conditional Flow Matching & State-Action alignment. │
+└───────────────────────────┬────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│ STAGE 3: Online RL Alignment & Self-Distillation       │
+│  - Unprojection & IK Positive/Negative Anchors.        │
+│  - Epoch Loop: 16 Steps ──► 4 Calibrates ──► 1 Distill.│
+└────────────────────────────────────────────────────────┘
 
 ```
 
