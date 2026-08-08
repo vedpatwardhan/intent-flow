@@ -19,7 +19,7 @@ The model consists of three core components: an encoder for multi-modal feature 
 * **Encoder**: Processes **5-View Observations** by passing **RGB** visual inputs through parallel perception branches (**DINOv3**, **VGGT**, and **Sobel Filter**) paired with corresponding adapters (**VisAdapter**, **VGGTAdapter**, **EdgeAdapter**), alongside **proprioception** via a **StateAdapter**. Features are aggregated through a **Multi-Stream Transformer** to produce state latent $s_t$.
 * **Flow Matcher**: Takes state $s_t$ and target state $s_{target}$ to denoise noisy sample $x_0$ into action trajectory $x_1$, sampling **16 candidate** actions $a_t$.
 * **Predictor**: Evaluates predicted next state $s_{t+1}$ against $s_{target}$ via **cosine distance** to compute energy. The computed energy steers actions to produce $a_{steered}$.
-* **Execution & Distillation Loop**: 
+* **Execution & Distillation Loop**:
   * `/step`: Action steering loop ($a_t \rightarrow a_{steered}$).
   * `/calibrate`: Executes $a_{steered}$ directly in simulation.
   * `/distill`: Distills the model to predict the steered action version directly.
