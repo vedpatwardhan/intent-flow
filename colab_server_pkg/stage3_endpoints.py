@@ -165,9 +165,6 @@ class SIGReg(torch.nn.Module):
         return statistic.mean()  # average over projections and time steps
 
 
-from trainers.stage3.trainer import GNNSkillLibrary
-
-
 class ObservationPayload(BaseModel):
     frames: dict[str, str]  # Multi-view frames: {camera_name: base64_image}
     history_frames: list[dict[str, str]]
