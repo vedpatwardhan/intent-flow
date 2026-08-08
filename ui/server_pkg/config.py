@@ -27,8 +27,13 @@ ui_annotations = {}
 
 colab_is_processing = False
 is_training_active = False
-needs_colab_processing = False
+needs_colab_processing = True
 last_colab_query_time = 0.0
+
+from collections import deque
+
+frame_history = deque(maxlen=5)
+frame_all_views = {}
 
 cached_dino_attn = None
 cached_clip_sim = None

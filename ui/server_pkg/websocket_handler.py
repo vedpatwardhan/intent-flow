@@ -423,13 +423,118 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                 }
                 last_sent_payload = ws_payload
 
+            current_time = asyncio.get_event_loop().time()
+            # Query Colab server for advanced frame processing (DINO, CLIP, SAM, VGGT)
+            if (
+                config.colab_url
+                and config.needs_colab_processing
+                and not config.colab_is_processing
+            ):
+                # Retrieve the active camera's rendered image and resize to 224x224 for Colab processing
+                config.needs_colab_processing = False
+                sim.renderer.update_scene(sim.data, camera=config.active_camera)
+
+                # Render frames from all cameras
+                frame_all_views = {}
+                for cam_name in sim.cam_names:
+                    sim.renderer.update_scene(sim.data, camera=cam_name)
+                    rgb_cam = sim.renderer.render()
+                    img_cam = Image.fromarray(rgb_cam)
+                    img_cam_224 = img_cam.resize((224, 224))
+                    buf_cam = io.BytesIO()
+                    img_cam_224.save(buf_cam, format="JPEG", quality=75)
+                    frame_all_views[cam_name] = (
+                        "data:image/jpeg;base64,"
+                        + base64.b64encode(buf_cam.getvalue()).decode("utf-8")
+                    )
+
+                config.colab_is_processing = True
+                config.last_colab_query_time = current_time
+
+                # Append the first frame or any frame with actual movement
+                if is_moving or step_count == 0:
+                    print("Appending Frame")
+                    config.frame_history.append(frame_all_views.copy())
+                    is_moving = False
+
+                async def run_colab_query(payload_data):
+                    nonlocal cached_data_updated
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            r = await client.post(
+                                f"{config.colab_url}/process",
+                                json=payload_data,
+                                timeout=100.0,
+                            )
+                            if r.status_code == 200:
+                                res_data = r.json()
+                                config.cached_dino_attn = res_data.get("dino_attn")
+                                config.cached_clip_sim = res_data.get("clip_sim")
+                                config.cached_sam_mask = res_data.get("sam_mask")
+                                config.cached_motion_field = res_data.get(
+                                    "motion_field"
+                                )
+                                print(
+                                    f"Motion Field: {np.array(config.cached_motion_field).shape if config.cached_motion_field else None}"
+                                )
+                                config.cached_task_isolated_features = res_data.get(
+                                    "task_isolated_features"
+                                )
+                                if config.cached_task_isolated_features:
+                                    print(
+                                        f"[server.py] Received task_isolated_features from Colab: {list(config.cached_task_isolated_features.keys())}"
+                                    )
+                                else:
+                                    print(
+                                        "[server.py] No task_isolated_features in Colab response"
+                                    )
+                                cached_data_updated = True
+                    except Exception as e:
+                        print("Colab communication error:")
+                        traceback.print_exc()
+                    finally:
+                        config.colab_is_processing = False
+
+                post_payload = {
+                    "frame": frame_all_views[config.active_camera],
+                    "click_x": config.click_x,
+                    "click_y": config.click_y,
+                    "click_type": config.click_type,
+                    "text_prompt": config.text_prompt,
+                    "text_modifier": config.text_modifier,
+                    "ui_annotations": config.ui_annotations,
+                    "history_frames": [
+                        frames[config.active_camera] for frames in config.frame_history
+                    ],
+                    "view_name": config.active_camera,
+                }
+                asyncio.create_task(run_colab_query(post_payload))
+
             if is_moving or cached_data_updated or (step_count % 20 == 0):
                 should_send = True
 
             if should_send:
+                if cached_data_updated:
+                    ws_payload["dino_attn"] = config.cached_dino_attn
+                    ws_payload["clip_sim"] = config.cached_clip_sim
+                    ws_payload["sam_mask"] = config.cached_sam_mask
+                    ws_payload["motion_field"] = config.cached_motion_field
+                    ws_payload["task_isolated_features"] = (
+                        config.cached_task_isolated_features
+                    )
+                    cached_data_updated = False
+
                 await websocket.send_text(json.dumps(ws_payload))
             step_count += 1
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.05)  # ~20fps
+
+            if step_count == 1:
+                # Process the secondary initialization frame manually for the startup frame history
+                act_init = np.full(32, np.nan, dtype=np.float32)
+                act_init[17] = sim.last_target_q[17] + 0.3
+                sim.process_target_32(act_init)
+                is_moving = True
+                moving_check_steps = 0
 
     except WebSocketDisconnect:
         print("UI Disconnected")
