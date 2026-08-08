@@ -297,23 +297,6 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                         )
                                     )
 
-                                    best_actions = np.array(
-                                        top_8_candidates[0]["actions"], dtype=np.float32
-                                    )
-                                    for h_step in range(7):
-                                        step_act = best_actions[h_step, :32]
-                                        sim.process_target_32(step_act)
-                                        for _ in range(16):
-                                            sim.sync_ctrl_to_qpos(sim.last_target_q)
-                                            sim.data.qpos[
-                                                sim.root_q_idx : sim.root_q_idx + 3
-                                            ] = [0.0, 0.0, 0.95]
-                                            sim.data.qpos[
-                                                sim.root_q_idx + 3 : sim.root_q_idx + 7
-                                            ] = [1.0, 0.0, 0.0, 0.0]
-                                            sim.data.qvel[:6] = 0.0
-                                            mujoco.mj_step(sim.model, sim.data)
-                                        await asyncio.sleep(0.02)
                     except Exception as e:
                         print(f"❌ [Execute Checkpoint Error] {e}")
                         import traceback
