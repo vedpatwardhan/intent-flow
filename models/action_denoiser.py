@@ -127,7 +127,13 @@ class ActionVelocityField(nn.Module):
         return self.out_net(joint_trajectory)  # [B, H, action_dim]
 
 
-class CLAPFlowMatcher(nn.Module):
+class ComboStocFlowMatcher(nn.Module):
+    """
+    ComboStoc Action Denoiser.
+    Supports independent timesteps t_i for different dimensions,
+    allowing local repair, flow reversal, and joint-level timeline rollbacks.
+    """
+
     def __init__(self, action_dim=58, state_dim=512, hidden_dim=256, config=None):
         super().__init__()
         self.velocity_field = ActionVelocityField(
@@ -135,31 +141,125 @@ class CLAPFlowMatcher(nn.Module):
         )
         self.action_dim = action_dim
 
-    def get_cfm_loss(self, x_1, s_t, s_target, embodiment_id):
-        B, H, D = x_1.shape
+    def get_cfm_loss(self, x_1, s_t, s_target, embodiment_id=None, reduction="mean"):
+        """
+        Calculates CFM loss using independent timeline timesteps t_i for each joint
+        with the official ComboStoc blending scheme to preserve sync coherence.
+        """
+        batch_size = x_1.size(0)
+        horizon = x_1.size(1)
         x_0 = torch.randn_like(x_1)
 
-        # ComboStoc: Strict 3D noise time allocation matching targets exactly
-        t = torch.rand(B, H, D, device=x_1.device)
+        # 1. Sample unsynced independent timelines
+        t_unsync = torch.rand(batch_size, horizon, self.action_dim, device=x_1.device)
 
+        # 2. Sample synced uniform timeline
+        t_sync = torch.rand(batch_size, horizon, 1, device=x_1.device).expand(
+            -1, -1, self.action_dim
+        )
+
+        # 3. Blend them using the ComboStoc blend scheme
+        progress = torch.rand(batch_size, 1, 1, device=x_1.device)
+        t = t_sync * (1.0 - progress) + t_unsync * progress
+
+        # Interpolate flow path along independent timesteps
         x_t = t * x_1 + (1.0 - t) * x_0
         target_velocity = x_1 - x_0
 
+        # Pass independent time vector directly to the velocity field
         pred_velocity = self.velocity_field(x_t, t, s_t, s_target, embodiment_id)
-        return torch.mean((pred_velocity - target_velocity) ** 2)
+
+        loss_elementwise = (pred_velocity - target_velocity) ** 2
+
+        if reduction == "none":
+            return loss_elementwise
+        return torch.mean(loss_elementwise)
+
+    def evaluate_step_transitions(
+        self, x_t, t_sample, s_t, s_target, embodiment_id=None
+    ):
+        return self.velocity_field(x_t, t_sample, s_t, s_target, embodiment_id)
+
+    def compute_stepwise_denoising_deltas(self, x_t, target_velocity, t_vals, dt):
+        return x_t + target_velocity * dt
 
     @torch.no_grad()
-    def sample(self, s_t, s_target, embodiment_id=None, horizon=7, num_steps=10):
-        B = s_t.size(0)
-        if embodiment_id is None:
-            embodiment_id = torch.ones(B, dtype=torch.long, device=s_t.device)
-        x_t = torch.randn(B, horizon, self.action_dim, device=s_t.device)
+    def sample_with_steering(
+        self,
+        s_t,  # [B, latent_dim]
+        s_target,  # [B, latent_dim]
+        embodiment_id=None,  # [B]
+        horizon=8,
+        num_steps=10,
+        steering_timelines=None,  # [B, H * action_dim]
+        stochastic_steer_scale=0.0,
+        seed=42,
+    ):
+        generator = torch.Generator(device=s_t.device).manual_seed(seed)
+        batch_size = s_t.size(0)
+
+        # Force padding channels (joints 32..57) to zero out entirely in action space
+        action_mask = torch.zeros(1, 1, self.action_dim, device=s_t.device)
+        action_mask[..., :32] = 1.0
+
+        init_sigma = 0.4
+        x_t = (
+            torch.randn(
+                batch_size,
+                horizon,
+                self.action_dim,
+                device=s_t.device,
+                generator=generator,
+            )
+            * init_sigma
+        ) * action_mask
+
+        print(
+            "📊 [ODE Init] x_0 Standard Normal Bounds -> "
+            f"Min: {x_t.min().item():.4f} | Max: {x_t.max().item():.4f}"
+        )
+
+        if steering_timelines is None:
+            steering_timelines = torch.zeros(
+                batch_size, horizon, self.action_dim, device=s_t.device
+            )
+        else:
+            steering_timelines = steering_timelines.view(
+                batch_size, horizon, self.action_dim
+            )
+
         dt = 1.0 / num_steps
 
+        step_snrs = []
         for i in range(num_steps):
-            t_val = i * dt
-            t = torch.full((B, horizon, self.action_dim), t_val, device=s_t.device)
-            v_t = self.velocity_field(x_t, t, s_t, s_target, embodiment_id)
-            x_t = x_t + v_t * dt
+            t_vals = steering_timelines + (i * dt)
+            t_vals = torch.clamp(t_vals, min=0.0, max=1.0)
 
-        return x_t
+            v_t = self.velocity_field(x_t, t_vals, s_t, s_target, embodiment_id)
+            v_step = (v_t * dt) * action_mask
+
+            if stochastic_steer_scale > 0.0 and i < num_steps - 1:
+                raw_noise = torch.randn(
+                    x_t.shape, device=x_t.device, generator=generator
+                )
+                steerable_mask = (t_vals < 1.0).float()
+                noise_step = (
+                    raw_noise * stochastic_steer_scale * steerable_mask
+                ) * action_mask
+
+                x_t = (x_t + v_step + noise_step) * action_mask
+            else:
+                x_t = (x_t + v_step) * action_mask
+
+            with torch.no_grad():
+                if stochastic_steer_scale > 0.0 and i < num_steps - 1:
+                    raw_v_mag = v_t.abs().mean().item()
+                    raw_noise_mag = (
+                        (raw_noise * stochastic_steer_scale).abs().mean().item()
+                    )
+                    step_snr = raw_v_mag / (raw_noise_mag + 1e-8)
+                else:
+                    step_snr = None
+                step_snrs.append(step_snr)
+
+        return x_t, step_snrs

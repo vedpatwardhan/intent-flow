@@ -53,7 +53,7 @@ from models.adapters import (
 )
 from models.mst import MultiStreamTransformer
 from models.jepa_predictor import JepaPredictor
-from trainers.stage3.denoiser import ComboStocFlowMatcher
+from models.action_denoiser import ComboStocFlowMatcher
 
 
 class LatentAlignmentAdapter(torch.nn.Module):
