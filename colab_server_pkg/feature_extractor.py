@@ -127,6 +127,7 @@ def get_batch_clip_similarity(
     - sim_norm_batch: Normalized vision-text similarity maps [B, 14, 14]
     - text_feat_batch: Project text feature vectors [B, 384]
     """
+    B = len(frames_list)
     if models.get("clip") is None or models.get("clip_processor") is None:
         return np.zeros((B, 14, 14), dtype=np.float32), torch.zeros(
             B, 384, device=device
