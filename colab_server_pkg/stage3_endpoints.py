@@ -56,6 +56,72 @@ from models.jepa_predictor import JepaPredictor
 from models.action_denoiser import ComboStocFlowMatcher
 
 
+def load_model_weights(model, checkpoint_dict, key_name, legacy_keys=None, strict=True):
+    """
+    Safely restores model weights from checkpoint_dict with backward compatibility for legacy keys.
+    e.g. if looking for 'mst', fallback to legacy key 'msat'.
+    """
+    if key_name in checkpoint_dict:
+        model.load_state_dict(checkpoint_dict[key_name], strict=strict)
+        return True
+    if legacy_keys:
+        for leg_key in legacy_keys:
+            if leg_key in checkpoint_dict:
+                print(
+                    f"[Backward-Compatibility] Restoring key '{key_name}' from legacy key '{leg_key}'."
+                )
+                model.load_state_dict(checkpoint_dict[leg_key], strict=strict)
+                return True
+    return False
+
+
+def load_all_stage3_models(state, checkpoint):
+    """
+    Restores all active Stage 3 model components with backward-compatible key mapping.
+    """
+    if "flow_matcher" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["flow_matcher"],
+            checkpoint,
+            "flow_matcher",
+            ["denoiser", "combo_stoc"],
+        )
+    if "vis_adapter" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["vis_adapter"], checkpoint, "vis_adapter"
+        )
+    if "vggt_adapter" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["vggt_adapter"], checkpoint, "vggt_adapter"
+        )
+    if "edge_adapter" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["edge_adapter"],
+            checkpoint,
+            "edge_adapter",
+            ["clip_sim_adapter", "clip_adapter"],
+            strict=False,
+        )
+    if "action_adapter" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["action_adapter"], checkpoint, "action_adapter"
+        )
+    if "state_adapter" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["state_adapter"], checkpoint, "state_adapter"
+        )
+    if "action_down_proj" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["action_down_proj"], checkpoint, "action_down_proj"
+        )
+    if "msat" in state.stage3_models:
+        load_model_weights(
+            state.stage3_models["msat"], checkpoint, "mst", ["msat"], strict=False
+        )
+    if "predictor" in state.stage3_models:
+        load_model_weights(state.stage3_models["predictor"], checkpoint, "predictor")
+
+
 class LatentAlignmentAdapter(torch.nn.Module):
     def __init__(self, feature_dim=512):
         super().__init__()
@@ -401,26 +467,7 @@ def ensure_stage3_models():
     if os.path.exists(s3_ckpt_path):
         print(f"[Colab] Loading Stage 3 checkpoint from: {s3_ckpt_path}")
         checkpoint = torch.load(s3_ckpt_path, map_location=device)
-        state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
-        state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
-        # state.stage3_models["txt_adapter"].load_state_dict(checkpoint["txt_adapter"])
-        # state.stage3_models["pt_adapter"].load_state_dict(checkpoint["pt_adapter"])
-        state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
-        state.stage3_models["edge_adapter"].load_state_dict(checkpoint["edge_adapter"])
-        # state.stage3_models["tactile_adapter"].load_state_dict(
-        #     checkpoint["tactile_adapter"]
-        # )
-        state.stage3_models["action_adapter"].load_state_dict(
-            checkpoint["action_adapter"]
-        )
-        state.stage3_models["state_adapter"].load_state_dict(
-            checkpoint["state_adapter"]
-        )
-        state.stage3_models["action_down_proj"].load_state_dict(
-            checkpoint["action_down_proj"]
-        )
-        state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
-        state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
+        load_all_stage3_models(state, checkpoint)
     elif os.path.exists(s2_ckpt_path):
         print(f"[Colab] Loading Stage 2 checkpoint from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
@@ -543,17 +590,7 @@ def load_specific_checkpoint(checkpoint_identifier: str):
 
     print(f"🔄 [Colab Checkpoint Swap] Loading checkpoint: {checkpoint_identifier}")
     checkpoint = torch.load(ckpt_path, map_location=device)
-    state.stage3_models["flow_matcher"].load_state_dict(checkpoint["flow_matcher"])
-    state.stage3_models["vis_adapter"].load_state_dict(checkpoint["vis_adapter"])
-    state.stage3_models["vggt_adapter"].load_state_dict(checkpoint["vggt_adapter"])
-    state.stage3_models["edge_adapter"].load_state_dict(checkpoint["edge_adapter"])
-    state.stage3_models["action_adapter"].load_state_dict(checkpoint["action_adapter"])
-    state.stage3_models["state_adapter"].load_state_dict(checkpoint["state_adapter"])
-    state.stage3_models["action_down_proj"].load_state_dict(
-        checkpoint["action_down_proj"]
-    )
-    state.stage3_models["msat"].load_state_dict(checkpoint["msat"])
-    state.stage3_models["predictor"].load_state_dict(checkpoint["predictor"])
+    load_all_stage3_models(state, checkpoint)
     state.active_checkpoint = checkpoint_identifier
     print(
         f"✅ [Colab Checkpoint Swap] Active checkpoint is now: {checkpoint_identifier}"
