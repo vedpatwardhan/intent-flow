@@ -8,21 +8,6 @@ The current demo is performed using a Fourier GR-1 humanoid robot for approachin
 
 ---
 
-## Technical Overview
-
-<p align="center">
-  <img src="assets/diagram.jpg" alt="System Architecture" width="600" />
-</p>
-
-The system operates across three primary components:
-1. **Perception Encoders & Multi-Stream Transformer (MST)**: Fuses 5-camera observation views (**RGB**, **DINOv3**, **VGGT 3D Motion**, and **Sobel Edge Heatmaps**) into a unified 512-dimensional state representation $s_t$.
-2. **Action Flow Matcher**: Generates 16 multi-step candidate joint action trajectories ($16 \times 7 \times 58$).
-3. **JEPA Latent Dynamics Predictor (EBM)**: Models transition dynamics in feature space to score candidate trajectory energy and steer candidates down the latent energy landscape.
-
-For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
----
-
 ## Interactive Command Center & Encoder Diagnostics UI
 
 IntentFlow features a real-time web dashboard for telemetry audit, live simulation control, and viewport annotation.
@@ -46,17 +31,39 @@ IntentFlow features a real-time web dashboard for telemetry audit, live simulati
 - **Execution**: Once the training is complete and the checkpoint is available, it can be selected from the top left dropdown and hitting the execute button to generate multiple candidate trajectories.
 - **Stochastic Steering**: The slider below the checkpoint dropdown allows adjust the amount of stochastic noise injected into the flow denoiser, allowing control over the range of movements attempted by the candidate trajectories.
 
+---
+
 ## Results
 
 The best checkpoint does demonstrate clear approach towards the cube without using any distance-related or tactile objectives. This is a clear indicator that the iterative refinement of the flow matcher by the predictor and vice versa does lead to improvement of the overall system.
+
+---
 
 ## Limitations
 
 While the checkpoint does demonstrate movement towards the cube, the robot does not successfully grasp the cube. One of the reasons behind it is the lack of inclusion of tactile rewards as well as a broader pretraining corpus, both of which are outside the scope of this PoC.
 
+---
+
 ## Future Work
 
 More data for pretraining, inclusion of tactile signals for actual contact and building a skill library where multiple such skills can be chained together and trained for, where each skill is a steering vector for the encoder and predictor.
+
+---
+
+## Technical Overview
+
+<p align="center">
+  <img src="assets/diagram.jpg" alt="System Architecture" width="600" />
+</p>
+
+The system operates across three primary components:
+1. **Perception Encoders & Multi-Stream Transformer (MST)**: Fuses 5-camera observation views (**RGB**, **DINOv3**, **VGGT 3D Motion**, and **Sobel Edge Heatmaps**) into a unified 512-dimensional state representation $s_t$.
+2. **Action Flow Matcher**: Generates 16 multi-step candidate joint action trajectories ($16 \times 7 \times 58$).
+3. **JEPA Latent Dynamics Predictor (EBM)**: Models transition dynamics in feature space to score candidate trajectory energy and steer candidates down the latent energy landscape.
+
+For more details, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 
 ---
 
