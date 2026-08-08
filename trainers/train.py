@@ -5,7 +5,7 @@ from omegaconf import OmegaConf
 # Trainers imported lazily inside main() to avoid importing unused simulation dependencies
 
 
-@hydra.main(version_base=None, config_path="config", config_name="default_config")
+@hydra.main(version_base=None, config_path="../config", config_name="default_config")
 def main(cfg):
     # Resolve all configurations dynamically using OmegaConf
     config = OmegaConf.to_container(cfg, resolve=True)
@@ -28,10 +28,8 @@ def main(cfg):
         from trainers.stage2_sft import train_stage2
 
         train_stage2(config, use_subset=use_subset)
-    elif stage == 3:
-        from trainers.stage3 import train_stage3
-
-        train_stage3(config, use_subset=use_subset)
+    else:
+        raise ValueError(f"Invalid stage {stage}. trainers/train.py only supports stage=1 (Pretrain) and stage=2 (SFT).")
 
 
 if __name__ == "__main__":
