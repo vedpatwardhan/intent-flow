@@ -98,11 +98,30 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                 elif payload.get("type") == "trigger_attack":
                     config.attack_active = payload["active"]
 
+                elif payload.get("type") == "sync_annotations":
+                    config.ui_annotations = payload.get("annotations", {})
+                    config.needs_colab_processing = True
+                    print(
+                        f"✏️ [Server Received] Annotations updated: {list(config.ui_annotations.keys())}"
+                    )
+
+                elif payload.get("type") == "clear_annotations":
+                    config.ui_annotations = {}
+                    config.click_x = None
+                    config.click_y = None
+                    config.click_type = None
+                    config.needs_colab_processing = True
+                    config.cached_dino_attn = None
+                    config.cached_sobel_edge = None
+                    config.cached_sam_mask = None
+                    config.cached_motion_field = None
+                    config.cached_task_isolated_features = {}
+
                 elif payload.get("type") == "clear_selections":
                     config.click_x = None
                     config.click_y = None
                     config.click_type = None
-                    config.needs_colab_processing = False
+                    config.needs_colab_processing = True
                     config.cached_dino_attn = None
                     config.cached_sobel_edge = None
                     config.cached_sam_mask = None

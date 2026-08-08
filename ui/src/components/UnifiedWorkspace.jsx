@@ -53,16 +53,14 @@ export default function UnifiedWorkspace({ frames, activeCam, onInteraction, sam
   };
 
   const updateAnnotations = (updater) => {
-    setAnnotationsByCam(prev => {
-      const current = prev[activeCam] || { segments: [], vectors: [], crops: [] };
-      const next = typeof updater === 'function' ? updater(current) : updater;
-      const updated = {
-        ...prev,
-        [activeCam]: next
-      };
-      syncWithBackend(updated);
-      return updated;
-    });
+    const current = annotationsByCam[activeCam] || { segments: [], vectors: [], crops: [] };
+    const next = typeof updater === 'function' ? updater(current) : updater;
+    const updated = {
+      ...annotationsByCam,
+      [activeCam]: next
+    };
+    setAnnotationsByCam(updated);
+    syncWithBackend(updated);
   };
 
   // Helper to snap coordinates to segment points, crop centers, and crop corners in 480x480 space

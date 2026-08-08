@@ -98,7 +98,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
               }}
             >
               <Loader2 className="animate-spin text-green-400" size={14} />
-              <span>Sampling Colab Candidates...</span>
+              <span>Sampling Action Candidates...</span>
             </div>
           )}
         </div>
