@@ -48,6 +48,7 @@ export default function App() {
   const [trainingProgress, setTrainingProgress] = useState(0.0);
   const [trainingStatus, setTrainingStatus] = useState('');
   const [candidateResults, setCandidateResults] = useState(null);
+  const [isExecuting, setIsExecuting] = useState(false);
 
   const wsRef = useRef(null);
   const activeCamRef = useRef('world_center');
@@ -205,6 +206,7 @@ export default function App() {
         }
         if (data.type === "checkpoint_execution_results") {
           setCandidateResults(data);
+          setIsExecuting(false);
         }
         if (data.type === "training_progress") {
           setIsTraining(data.progress < 1.0);
@@ -230,6 +232,11 @@ export default function App() {
 
   const handleInteraction = (interaction) => {
     if (interaction?.type === 'reset' || interaction?.type === 'wild_randomize') {
+      setCandidateResults(null);
+      setIsExecuting(false);
+    }
+    if (interaction?.type === 'execute_checkpoint') {
+      setIsExecuting(true);
       setCandidateResults(null);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -335,6 +342,7 @@ export default function App() {
             candidateResults={candidateResults}
             onInteraction={handleInteraction}
             connectionStatus={connectionStatus}
+            isExecuting={isExecuting}
           />
         </main>
       )}

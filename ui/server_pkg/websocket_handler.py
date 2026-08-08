@@ -284,7 +284,7 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                                             "candidate_idx"
                                                         ],
                                                         "mean_phys_dist": round(
-                                                            c["min_phys_dist"], 4
+                                                            c["min_phys_dist"], 3
                                                         ),
                                                         "frames": c["final_frames"],
                                                         "frame_sequences": c[

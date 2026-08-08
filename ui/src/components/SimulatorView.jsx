@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Focus, Navigation, Camera } from 'lucide-react';
+import { Focus, Navigation, Camera, Loader2 } from 'lucide-react';
 
-export default function SimulatorView({ frames, candidateResults, onInteraction, connectionStatus }) {
+export default function SimulatorView({ frames, candidateResults, onInteraction, connectionStatus, isExecuting }) {
   const [activeCam, setActiveCam] = useState('world_center');
   const [stepIdx, setStepIdx] = useState(0);
 
@@ -25,15 +25,12 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
     frame_sequences: null
   }));
 
-  const [animFrameCount, setAnimFrameCount] = useState(0);
-
   // 3 full iterations limit with 1-second pause between iterations
   const seq = candidateResults?.top_candidates?.[0]?.frame_sequences?.[activeCam];
   const hasSequences = seq && seq.length > 0;
 
   // Reset animation state whenever new candidate evaluation results arrive
   useEffect(() => {
-    setAnimFrameCount(0);
     setStepIdx(0);
   }, [candidateResults]);
 
@@ -83,6 +80,27 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
             </h2>
             <p className="panel-subtitle">Top 8 evaluated action candidates ranked by mean physical distance</p>
           </div>
+          {isExecuting && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'rgba(34, 197, 94, 0.12)',
+                border: '1px solid rgba(34, 197, 94, 0.35)',
+                color: '#4ade80',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                fontFamily: 'monospace',
+                letterSpacing: '0.3px'
+              }}
+            >
+              <Loader2 className="animate-spin text-green-400" size={14} />
+              <span>Sampling Colab Candidates...</span>
+            </div>
+          )}
         </div>
 
         {/* Camera Selector Tabs styled identically to Encoder Diagnostics */}
