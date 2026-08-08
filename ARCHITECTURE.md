@@ -91,3 +91,38 @@ Each epoch consists of:
 - **16 $\times$ `/step`**: Generates 16 action candidates per step, steers candidates via EBM predictor gradients ($\nabla_a E$), and executes rollout on MuJoCo / Genesis simulation.
 - **4 $\times$ `/calibrate`**: Triggered every 4 steps to update JEPA Predictor weights on real physical transition tuples using SIGReg anti-collapse regularizer.
 - **1 $\times$ `/distill`**: Triggered at epoch end to distill EBM-steered trajectories into single-pass feedforward weights of the Action Flow Matcher and compute latent energy landscape analytics.
+
+---
+
+## 6. Pre-Training & SFT Datasets
+
+To train IntentFlow on standard GPU environments, we employ a specific dataset mix across Stage 1 and Stage 2:
+
+### A. Stage 1: Encoder and Predictor Training (60:30:10 Mix)
+
+1. **60% Tabletop Robot Manipulation (`lerobot/droid`)**:
+   - grounds the dynamics predictor in robot joint space constraints and physical tabletop transitions.
+2. **30% Human Tabletop Hand-Object Interaction (`lerobot/cmu_stretch` & Ego4D)**:
+   - Teaches hand-object affordances, tool-use semantics, and visual contact priors from first-person actions.
+3. **10% 3D Visual Geometry & Tracking (`PointOdyssey`)**:
+   - Anchors predictor transitions in 3D topological tracking and geometric camera transformations.
+
+#### Modality Processing Rules across Stage 1 Streams:
+
+| Modality / Stream | Stream A: Droid (Robot) | Stream B: CMU Stretch (Human) | Stream C: PointOdyssey (Geometry) |
+| :--- | :--- | :--- | :--- |
+| **2D Video Frames (RGB)** | **Present** (Franka cameras) | **Present** (Egocentric camera) | **Present** (CG camera render) |
+| **Text Instruction** | **Present** (Task prompt) | **Present** (Task prompt) | **Present** (Task prompt) |
+| **Actions (Robot joints)** | **Present** (Franka joints) | **Missing** (Zero-masked) | **Missing** (Zero-masked) |
+| **Proprioception (Robot state)** | **Present** (Franka joint angles) | **Missing** (Zero-masked) | **Missing** (Zero-masked) |
+| **Tactile Grid (Touch)** | **Missing** (Zero-masked) | **Missing** (Zero-masked) | **Missing** (Zero-masked) |
+
+---
+
+### B. Stage 2: Action Denoiser Training (70:30 Mix)
+
+1. **70% Bimanual ALOHA Tabletop & Fourier ActionNet (`lerobot/aloha_static_coffee`, `lerobot/fourier_actionnet`)**:
+   - Provides paired camera frames and 58-dim humanoid joint torque/velocity commands.
+   - Directly grounds the control policy in Fourier GR-1 humanoid joint limits and morphology.
+2. **30% T-REX Contact-Rich Tactile Dataset (`zekaiwang/trex_dataset`)**:
+   - Provides high-frequency $4 \times 4$ fingertip contact pressure vectors to train contact-rich tactile alignment.
