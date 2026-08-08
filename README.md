@@ -12,7 +12,7 @@ By defining user intent visually and semantically in a static frame—selecting 
 
 ## Technical Overview & Modality Updates
 
-![System Architecture](assets/architecture_diagram.png)
+![System Architecture](diagram.jpg)
 
 The model consists of three core components: an encoder for multi-modal feature fusion, a flow matching action planner, and an energy-guided predictor for candidate steering.
 
