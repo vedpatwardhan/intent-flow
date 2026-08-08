@@ -11,7 +11,7 @@ For detailed theoretical equations, loss formulations, and architecture specific
 ## Technical Overview
 
 <p align="center">
-  <img src="diagram.jpg" alt="System Architecture" width="600" />
+  <img src="assets/diagram.jpg" alt="System Architecture" width="600" />
 </p>
 
 The system operates across three primary components:
@@ -28,7 +28,7 @@ IntentFlow features a real-time web dashboard for telemetry audit, live simulati
 ### 1. Command Center UI
 
 <p align="center">
-  <img src="command_center.png" alt="Command Center UI" width="700" />
+  <img src="assets/command_center.png" alt="Command Center UI" width="700" />
 </p>
 
 - **Real-Time Telemetry & Skill Audit**: Live rendering of multi-camera feeds, tactile pressure matrices, 32-joint torque distribution gauges, and GNN skill graph evolution.
@@ -37,7 +37,7 @@ IntentFlow features a real-time web dashboard for telemetry audit, live simulati
 ### 2. Encoder Diagnostics & Annotation Workspace
 
 <p align="center">
-  <img src="encoder_diagnostics.png" alt="Encoder Diagnostics Workspace" width="700" />
+  <img src="assets/encoder_diagnostics.png" alt="Encoder Diagnostics Workspace" width="700" />
 </p>
 
 - **Viewport Intent Annotation**: Draw start segments, target object boxes, and motion arrows directly on static camera views.

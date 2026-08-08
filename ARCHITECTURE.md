@@ -9,7 +9,7 @@ This document details the deep mathematical, architectural, and algorithmic foun
 IntentFlow translates high-level 2D viewport intent annotations (drawn via static camera frames) into 3D continuous motor actions for tabletop humanoid robot manipulation (**Fourier GR-1**).
 
 <p align="center">
-  <img src="diagram.jpg" alt="System Architecture" width="600" />
+  <img src="assets/diagram.jpg" alt="System Architecture" width="600" />
 </p>
 
 ---
