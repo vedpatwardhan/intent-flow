@@ -125,22 +125,38 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
           for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
               let val = featureData[r]?.[c] || 0.0;
-              // If this is the high-res 224x224 motion field, normalize to [0, 1] range for visual contrast
-              if (rows === 224) {
-                val = val / maxVal;
-              }
               const idx = (r * cols + c) * 4;
-              if (val > 0.05) {
-                const [red, green, blue] = getJetRGB(val);
-                imgData.data[idx] = red;
-                imgData.data[idx + 1] = green;
-                imgData.data[idx + 2] = blue;
-                imgData.data[idx + 3] = Math.round(val * 0.5 * 255);
+
+              if (title.includes("Sobel Edge")) {
+                // Smooth middle-ground threshold & alpha scaling for clear, natural red edges
+                if (val > 0.04) {
+                  imgData.data[idx] = 239;     // Coral Red (RGB: 239, 68, 68)
+                  imgData.data[idx + 1] = 68;
+                  imgData.data[idx + 2] = 68;
+                  imgData.data[idx + 3] = Math.round(Math.min(val * 1.2, 0.85) * 255);
+                } else {
+                  imgData.data[idx] = 0;
+                  imgData.data[idx + 1] = 0;
+                  imgData.data[idx + 2] = 0;
+                  imgData.data[idx + 3] = 0;
+                }
               } else {
-                imgData.data[idx] = 0;
-                imgData.data[idx + 1] = 0;
-                imgData.data[idx + 2] = 0;
-                imgData.data[idx + 3] = 0;
+                // If this is the high-res 224x224 motion field, normalize to [0, 1] range for visual contrast
+                if (rows === 224) {
+                  val = val / maxVal;
+                }
+                if (val > 0.05) {
+                  const [red, green, blue] = getJetRGB(val);
+                  imgData.data[idx] = red;
+                  imgData.data[idx + 1] = green;
+                  imgData.data[idx + 2] = blue;
+                  imgData.data[idx + 3] = Math.round(val * 0.5 * 255);
+                } else {
+                  imgData.data[idx] = 0;
+                  imgData.data[idx + 1] = 0;
+                  imgData.data[idx + 2] = 0;
+                  imgData.data[idx + 3] = 0;
+                }
               }
             }
           }

@@ -469,7 +469,9 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                             if r.status_code == 200:
                                 res_data = r.json()
                                 config.cached_dino_attn = res_data.get("dino_attn")
-                                config.cached_clip_sim = res_data.get("clip_sim")
+                                config.cached_clip_sim = res_data.get(
+                                    "sobel_edge"
+                                ) or res_data.get("clip_sim")
                                 config.cached_sam_mask = res_data.get("sam_mask")
                                 config.cached_motion_field = res_data.get(
                                     "motion_field"
@@ -516,7 +518,7 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
             if should_send:
                 if cached_data_updated:
                     ws_payload["dino_attn"] = config.cached_dino_attn
-                    ws_payload["clip_sim"] = config.cached_clip_sim
+                    ws_payload["sobel_edge"] = config.cached_clip_sim
                     ws_payload["sam_mask"] = config.cached_sam_mask
                     ws_payload["motion_field"] = config.cached_motion_field
                     ws_payload["task_isolated_features"] = (
