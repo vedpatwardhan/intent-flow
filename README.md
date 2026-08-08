@@ -12,16 +12,17 @@ By defining user intent visually and semantically in a static frame—selecting 
 
 ## Technical Overview & Modality Updates
 
-LatentFlow operates across three core architectural components, departing from traditional raw point cloud or CLIP-only visual pipelines:
+![System Architecture](assets/architecture_diagram.png)
 
-```
- raw multi-view observations (5 views)
-   │
-   ├─► DINO Backbone    ──────► Visual Tokens
-   ├─► VGGT Backbone    ──────► Visual Geometry / Motion Tokens   ──► [ Trainable MLP Adapters ] ──► Multi-Stream Transformer (MST) ──► Unified State Space (s_t)
-   └─► Sobel Filter     ──────► Edge Structure Tokens
+The model consists of three core components: an encoder for multi-modal feature fusion, a flow matching action planner, and an energy-guided predictor for candidate steering.
 
-```
+* **Encoder**: Processes **5-View Observations** by passing **RGB** visual inputs through parallel perception branches (**DINOv3**, **VGGT**, and **Sobel Filter**) paired with corresponding adapters (**VisAdapter**, **VGGTAdapter**, **EdgeAdapter**), alongside **proprioception** via a **StateAdapter**. Features are aggregated through a **Multi-Stream Transformer** to produce state latent $s_t$.
+* **Flow Matcher**: Takes state $s_t$ and target state $s_{target}$ to denoise noisy sample $x_0$ into action trajectory $x_1$, sampling **16 candidate** actions $a_t$.
+* **Predictor**: Evaluates predicted next state $s_{t+1}$ against $s_{target}$ via **cosine distance** to compute energy. The computed energy steers actions to produce $a_{steered}$.
+* **Execution & Distillation Loop**: 
+  * `/step`: Action steering loop ($a_t \rightarrow a_{steered}$).
+  * `/calibrate`: Executes $a_{steered}$ directly in simulation.
+  * `/distill`: Distills the model to predict the steered action version directly.
 
 1. **Perception Encoders & Modality Adapters**: Raw observations across 5 camera views are processed through frozen foundation backbones:
 * **DINO**: Captures high-level semantic layout and patch correspondences.
@@ -35,7 +36,7 @@ LatentFlow operates across three core architectural components, departing from t
 $$\text{Energy } E = 1.0 - \text{CosineSimilarity}(\hat{s}_{\text{next}}, s_{\text{goal}})$$
 
 
-3. **ComboStoc Flow-Matching Action Denoiser**: A continuous generative policy head that takes the current state $s_t$, a goal condition $s_{\text{target}}$, and a noisy trajectory. It iteratively denoises the input to generate multi-step continuous joint action candidates over a horizon of 7 ($16 \times 7 \times 58$). To promote exploration without divergence, **steerable stochasticity noise** is injected asynchronously across joint dimensions at each denoising step.
+3. **Flow-Matching Action Denoiser**: A continuous generative policy head that takes the current state $s_t$, a goal condition $s_{\text{target}}$, and a noisy trajectory. It iteratively denoises the input to generate multi-step continuous joint action candidates over a horizon of 7 ($16 \times 7 \times 58$). To promote exploration without divergence, **steerable stochasticity noise** is injected asynchronously across joint dimensions at each denoising step.
 
 ---
 
@@ -51,7 +52,7 @@ $$\text{Energy } E = 1.0 - \text{CosineSimilarity}(\hat{s}_{\text{next}}, s_{\te
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ STAGE 2: Supervised Fine-Tuning (SFT)                                  │
-│  - Train adapters & ComboStoc Flow Matcher using offline trajectories. │
+│  - Train adapters & Action Flow Matcher using offline trajectories. │
 │  - Conditional Flow Matching (CFM) & State-Action alignment.            │
 └────────────────────────────────────┬────────────────────────────────────┘
                                      │
@@ -75,7 +76,7 @@ $$\text{Energy } E = 1.0 - \text{CosineSimilarity}(\hat{s}_{\text{next}}, s_{\te
 
 ### Stage 2: Supervised Fine-Tuning (SFT & Action Grounding)
 
-* **Goal**: Train the ComboStoc Flow Matcher and modality adapters to map high-level visual/target states to concrete physical joint commands on the Fourier GR-1 robot.
+* **Goal**: Train the Action Flow Matcher and modality adapters to map high-level visual/target states to concrete physical joint commands on the Fourier GR-1 robot.
 * **Data**: The dataset mixture contains samples from ALOHA, T-REX and Fourier ActionNet.
 * **Mechanism**: Using teleoperated demonstration datasets from diverse embodiments, the system optimizes:
 * **Conditional Flow Matching (CFM) Loss**: Regresses predicted velocity fields $v_\theta$ to transport noise into valid action trajectories.
@@ -127,7 +128,7 @@ $$\text{1 Epoch} = 16 \times \text{\texttt{step}} \;\longrightarrow\; 4 \times \
 
 #### Phase A: The `step` Endpoint (Action Candidate Exploration & EBM Steering)
 
-1. **Candidate Generation**: The current state $s_t$ and target state $s_{\text{goal}}$ are passed to the ComboStoc Flow Matcher. Steerable stochastic noise generates **16 candidate action trajectories**, each of shape $(7, 58)$ (horizon 7, 58 action/joint dimensions).
+1. **Candidate Generation**: The current state $s_t$ and target state $s_{\text{goal}}$ are passed to the Action Flow Matcher. Steerable stochastic noise generates **16 candidate action trajectories**, each of shape $(7, 58)$ (horizon 7, 58 action/joint dimensions).
 2. **Predictive Rollout & Energy Scoring**: Each of the 16 candidate trajectories is passed to the JEPA Predictor alongside $s_t$ to predict its resulting future state $\hat{s}_{t+1}$. The normalized cosine distance between $\hat{s}_{t+1}$ and the goal state bank $s_{\text{goal}}$ defines the trajectory's **Energy ($E$)**.
 3. **Action Space Steering (No Model Parameter Updates)**:
 * Over a loop of 5–8 iterations, the gradient of the energy with respect to the action candidates ($\nabla_a E$) is computed.
@@ -179,7 +180,7 @@ latent-flow/
 │   ├── adapters.py                 # DINO, VGGT, Edge, and Action adapters
 │   ├── mst.py                      # Multi-Stream Cross-Attention Transformer
 │   ├── jepa_predictor.py           # Energy-Based World Predictor
-│   └── action_denoiser.py          # ComboStoc Hierarchical DiT Flow Matcher
+│   └── action_denoiser.py          # Action Hierarchical DiT Flow Matcher
 ├── ui/
 │   ├── server.py                   # Local WebSocket & FastAPI Simulation Server
 │   ├── depth_unprojector.py        # 2D Annotation to 3D World Frame Unprojection

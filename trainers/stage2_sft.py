@@ -15,7 +15,7 @@ from models.adapters import (
     ActionAdapter,
     VGGTAdapter,
 )
-from models.msat import MultiStreamActionTransformer
+from models.mst import MultiStreamTransformer
 from models.jepa_predictor import JepaPredictor
 from models.action_denoiser import CLAPFlowMatcher
 from utils.dataset_loader import get_dataloader
@@ -53,7 +53,7 @@ class Stage2SFTSimplified(pl.LightningModule):
         self.single_action_adapter = ActionAdapter(d_in=config["model"]["action_dim"])
         self.state_adapter = ActionAdapter(d_in=config["model"]["state_dim"])
 
-        self.msat = MultiStreamActionTransformer(
+        self.mst = MultiStreamTransformer(
             latent_dim=config["model"]["latent_dim"],
             num_heads=config["model"]["num_heads"],
             num_layers=config["model"]["num_layers"],
@@ -100,7 +100,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             "tactile": tactile_emb_tgt,
             "proprioception": proprio_tok_tgt,
         }
-        s_target = self.msat(modality_dict_tgt)
+        s_target = self.mst(modality_dict_tgt)
 
         # --- 2. Baseline Configuration State (s_0) ---
         noise_ratio = self.config["stage2"]["combostoc_noise_ratio"]
@@ -129,7 +129,7 @@ class Stage2SFTSimplified(pl.LightningModule):
             "tactile": tactile_emb,
             "proprioception": proprio_tok,
         }
-        s_0 = self.msat(modality_dict)
+        s_0 = self.mst(modality_dict)
 
         # --- 3. Flow Matching Trajectory Chunk Optimization ---
         a_trajectory = actions[:, :pred_horizon, :]  # Shape: [B, pred_horizon, D]
@@ -173,7 +173,7 @@ class Stage2SFTSimplified(pl.LightningModule):
                     "tactile": tactile_emb_n,
                     "proprioception": proprio_tok_n,
                 }
-                s_sequence.append(self.msat(modality_dict_n))
+                s_sequence.append(self.mst(modality_dict_n))
 
                 # Slices out single steps to run physical diagnostics frame-by-frame
                 # Swap out 'self.state_adapter' for 'self.single_action_adapter'
@@ -313,18 +313,22 @@ def train_stage2(config, use_subset=False):
         checkpoint = torch.load(stage1_ckpt_path, map_location="cpu")
         state_dict = checkpoint["state_dict"]
 
-        def extract_sub_dict(prefix):
+        def extract_sub_dict(prefix, fallback_prefix=None):
             sub_dict = {}
             for k, v in state_dict.items():
                 if k.startswith(prefix + "."):
                     sub_dict[k[len(prefix) + 1 :]] = v
+            if not sub_dict and fallback_prefix:
+                for k, v in state_dict.items():
+                    if k.startswith(fallback_prefix + "."):
+                        sub_dict[k[len(fallback_prefix) + 1 :]] = v
             return sub_dict
 
         model.vis_adapter.load_state_dict(extract_sub_dict("vis_adapter"))
-        model.txt_adapter.load_state_dict(extract_sub_dict("txt_adapter"))
-        model.pt_adapter.load_state_dict(extract_sub_dict("pt_adapter"))
         model.vggt_adapter.load_state_dict(extract_sub_dict("vggt_adapter"))
-        model.msat.load_state_dict(extract_sub_dict("msat"))
+        model.mst.load_state_dict(
+            extract_sub_dict("mst", fallback_prefix="msat"), strict=False
+        )
 
         pred_dict = extract_sub_dict("predictor")
         if pred_dict:
@@ -383,7 +387,7 @@ def train_stage2(config, use_subset=False):
             "vggt_adapter": model.vggt_adapter.state_dict(),
             "tactile_adapter": model.tactile_adapter.state_dict(),
             "state_adapter": model.state_adapter.state_dict(),
-            "msat": model.msat.state_dict(),
+            "mst": model.mst.state_dict(),
             "action_adapter": model.action_adapter.state_dict(),
             "action_down_proj": model.action_down_proj.state_dict(),
             "predictor": model.predictor.state_dict(),

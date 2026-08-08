@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class ComboStocTimeEmbedding(nn.Module):
+class ActionTimeEmbedding(nn.Module):
     """Strict 3D grid time embedding layer with no fallback shapes."""
 
     def __init__(self, action_dim, time_dim):
@@ -60,20 +60,18 @@ class SpatialTemporalDiTBlock(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, joint_dim)
 
     def forward(self, x, cond):
-        # x: [B, H, action_dim], cond: [B, cond_dim]
-        B, H, _ = x.shape
+        # Input Contract: x: [B, H, action_dim], cond: [B, cond_dim]
+        B, H, D = x.shape
+        c_emb = self.mod_layer(cond).unsqueeze(1)  # [B, 1, hidden_dim]
 
-        h_x = self.in_proj(x)  # [B, H, hidden_dim]
+        h = self.in_proj(x) + c_emb  # [B, H, hidden_dim]
+        h_norm = self.norm1(h)
+        attn_out, _ = self.temporal_attn(h_norm, h_norm, h_norm)
+        h = h + attn_out
 
-        # Explicit unsqueeze and broadcast across sequence steps without generic dimensions
-        # modulation: [B, H, hidden_dim]
-        modulation = self.mod_layer(cond).view(B, 1, -1).expand(-1, H, -1)
+        h_norm2 = self.norm2(h)
+        h_out = F.gelu(h_norm2)
 
-        h_modulated = self.norm1(h_x + modulation)
-        attn_out, _ = self.temporal_attn(h_modulated, h_modulated, h_modulated)
-
-        h_x = h_x + attn_out
-        h_out = self.norm2(h_x + modulation)
         return x + self.out_proj(h_out)  # [B, H, action_dim]
 
 
@@ -85,7 +83,7 @@ class ActionVelocityField(nn.Module):
     ):
         super().__init__()
         self.action_dim = action_dim
-        self.time_mlp = ComboStocTimeEmbedding(action_dim=action_dim, time_dim=time_dim)
+        self.time_mlp = ActionTimeEmbedding(action_dim=action_dim, time_dim=time_dim)
 
         self.embodiment_embedding = nn.Embedding(num_embeddings=3, embedding_dim=32)
         cond_dim = state_dim * 2 + action_dim * time_dim + 32
@@ -127,9 +125,9 @@ class ActionVelocityField(nn.Module):
         return self.out_net(joint_trajectory)  # [B, H, action_dim]
 
 
-class ComboStocFlowMatcher(nn.Module):
+class ActionFlowMatcher(nn.Module):
     """
-    ComboStoc Action Denoiser.
+    Action Flow Matcher Denoiser.
     Supports independent timesteps t_i for different dimensions,
     allowing local repair, flow reversal, and joint-level timeline rollbacks.
     """

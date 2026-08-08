@@ -53,13 +53,13 @@ from models.adapters import (
 )
 from models.mst import MultiStreamTransformer
 from models.jepa_predictor import JepaPredictor
-from models.action_denoiser import ComboStocFlowMatcher
+from models.action_denoiser import ActionFlowMatcher
 
 
 def load_model_weights(model, checkpoint_dict, key_name, legacy_keys=None, strict=True):
     """
     Safely restores model weights from checkpoint_dict with backward compatibility for legacy keys.
-    e.g. if looking for 'mst', fallback to legacy key 'msat'.
+    Attempts key_name first; if absent, falls back through legacy_keys list.
     """
     if key_name in checkpoint_dict:
         model.load_state_dict(checkpoint_dict[key_name], strict=strict)
@@ -68,23 +68,24 @@ def load_model_weights(model, checkpoint_dict, key_name, legacy_keys=None, stric
         for leg_key in legacy_keys:
             if leg_key in checkpoint_dict:
                 print(
-                    f"[Backward-Compatibility] Restoring key '{key_name}' from legacy key '{leg_key}'."
+                    f"🔄 [Backward-Compatibility] Restoring active model '{key_name}' from legacy checkpoint key '{leg_key}'."
                 )
                 model.load_state_dict(checkpoint_dict[leg_key], strict=strict)
                 return True
+    print(
+        f"⚠️ [Checkpoint Warning] Key '{key_name}' (and legacy keys {legacy_keys}) not found in checkpoint!"
+    )
     return False
 
 
 def load_all_stage3_models(state, checkpoint):
     """
-    Restores all active Stage 3 model components with backward-compatible key mapping.
+    Restores all active Stage 3 model components.
+    Only 'mst' maps backward-compatibly to legacy checkpoint key 'msat'.
     """
     if "flow_matcher" in state.stage3_models:
         load_model_weights(
-            state.stage3_models["flow_matcher"],
-            checkpoint,
-            "flow_matcher",
-            ["denoiser", "combo_stoc"],
+            state.stage3_models["flow_matcher"], checkpoint, "flow_matcher"
         )
     if "vis_adapter" in state.stage3_models:
         load_model_weights(
@@ -96,11 +97,7 @@ def load_all_stage3_models(state, checkpoint):
         )
     if "edge_adapter" in state.stage3_models:
         load_model_weights(
-            state.stage3_models["edge_adapter"],
-            checkpoint,
-            "edge_adapter",
-            ["clip_sim_adapter", "clip_adapter"],
-            strict=False,
+            state.stage3_models["edge_adapter"], checkpoint, "edge_adapter"
         )
     if "action_adapter" in state.stage3_models:
         load_model_weights(
@@ -114,9 +111,13 @@ def load_all_stage3_models(state, checkpoint):
         load_model_weights(
             state.stage3_models["action_down_proj"], checkpoint, "action_down_proj"
         )
-    if "msat" in state.stage3_models:
+    if "mst" in state.stage3_models:
         load_model_weights(
-            state.stage3_models["msat"], checkpoint, "mst", ["msat"], strict=False
+            state.stage3_models["mst"],
+            checkpoint,
+            "mst",
+            legacy_keys=["msat"],
+            strict=False,
         )
     if "predictor" in state.stage3_models:
         load_model_weights(state.stage3_models["predictor"], checkpoint, "predictor")
@@ -246,7 +247,7 @@ def encode_obs_to_latent(obs_dict, state):
             # "tactile": tactile_tok,
             "proprioception": proprio_tok,
         }
-        out = state.stage3_models["msat"](modality_dict)
+        out = state.stage3_models["mst"](modality_dict)
         return out
 
 
@@ -412,7 +413,7 @@ def ensure_stage3_models():
     ).to(device)
     state.stage3_models["action_down_proj"] = torch.nn.Linear(512, 16).to(device)
 
-    state.stage3_models["msat"] = MultiStreamTransformer(
+    state.stage3_models["mst"] = MultiStreamTransformer(
         latent_dim=latent_dim,
         num_heads=config["model"]["num_heads"],
         num_layers=config["model"]["num_layers"],
@@ -428,11 +429,11 @@ def ensure_stage3_models():
     # Instantiate the new Epps-Pulley statistical sketch regularizer
     state.stage3_models["sigreg_module"] = SIGReg(knots=17, num_proj=1024).to(device)
 
-    state.stage3_models["flow_matcher"] = ComboStocFlowMatcher(
+    state.stage3_models["flow_matcher"] = ActionFlowMatcher(
         action_dim=action_dim, config=config
     ).to(device)
     # if "flow_matcher_ref" not in state.stage3_models:
-    #     state.stage3_models["flow_matcher_ref"] = ComboStocFlowMatcher(
+    #     state.stage3_models["flow_matcher_ref"] = ActionFlowMatcher(
     #         action_dim=action_dim, config=config
     #     ).to(device)
     #     state.stage3_models["flow_matcher_ref"].load_state_dict(
@@ -482,7 +483,7 @@ def ensure_stage3_models():
             "action_adapter",
             "state_adapter",
             "action_down_proj",
-            "msat",
+            "mst",
             "predictor",
             # "flow_matcher",
         ]:
@@ -1221,7 +1222,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
         state.stage3_models["edge_adapter"].train()
         state.stage3_models["state_adapter"].train()
         state.stage3_models["action_adapter"].train()
-        state.stage3_models["msat"].train()
+        state.stage3_models["mst"].train()
         state.stage3_models["flow_matcher"].train()
 
         # Deterministic Epoch Partitioning: Isolate fresh rollout transitions (up to 400)
@@ -1538,7 +1539,7 @@ def run_distill_worker(job_id: str, payload: Stage3DistillPayload):
             "vggt_adapter": state.stage3_models["vggt_adapter"].state_dict(),
             "edge_adapter": state.stage3_models["edge_adapter"].state_dict(),
             # "tactile_adapter": state.stage3_models["tactile_adapter"].state_dict(),
-            "msat": state.stage3_models["msat"].state_dict(),
+            "mst": state.stage3_models["mst"].state_dict(),
             "action_adapter": state.stage3_models["action_adapter"].state_dict(),
             "state_adapter": state.stage3_models["state_adapter"].state_dict(),
             "action_down_proj": state.stage3_models["action_down_proj"].state_dict(),
