@@ -1,4 +1,4 @@
-# IntentFlow: Intent-based Skill Learning
+# IntentFlow: Intent-based Policy Learning
 
 Current approaches for learning robot policies involves reliance on teleoperated trajectories which are expensive and time-consuming to collect and automating this data generation is non-trivial.
 
