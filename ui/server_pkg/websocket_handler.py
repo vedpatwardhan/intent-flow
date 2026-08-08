@@ -268,8 +268,12 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                     ):
                                         cand["rank"] = rank
 
+                                    top_candidate_dist = top_8_candidates[0][
+                                        "min_phys_dist"
+                                    ]
                                     print(
-                                        f"📊 [Execute Checkpoint] Top Candidate #1 Mean Physical Distance: {top_8_candidates[0]['mean_phys_dist']:.4f}m"
+                                        "📊 [Execute Checkpoint] Top Candidate #1 Mean "
+                                        f"Physical Distance: {top_candidate_dist:.4f}m"
                                     )
 
                                     await websocket.send_text(
