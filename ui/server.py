@@ -5,7 +5,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# Add parent directory (latent-flow root) to sys.path
+# Add parent directory (intent-flow root) to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from simulation_base import GR1MuJoCoBase

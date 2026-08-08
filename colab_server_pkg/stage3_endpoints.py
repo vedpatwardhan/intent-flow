@@ -28,7 +28,7 @@ except ImportError:
     HAS_WANDB = False
 
 
-def ensure_wandb_init(project_name="latent-flow-stage3"):
+def ensure_wandb_init(project_name="intent-flow-stage3"):
     if HAS_WANDB and wandb.run is None:
         try:
             wandb.init(project=project_name, reinit=False)
@@ -452,8 +452,8 @@ def ensure_stage3_models():
     # state.stage3_models["attacker"] = BadWorldAttacker(action_dim=action_dim)
 
     ckpt_dir_config = config["paths"]["checkpoint_dir"]
-    if ckpt_dir_config.startswith("latent-flow/"):
-        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
+    if ckpt_dir_config.startswith("intent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("intent-flow/") :]
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
     )
@@ -530,8 +530,8 @@ def get_available_checkpoints():
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     ckpt_dir_config = config["paths"]["checkpoint_dir"]
-    if ckpt_dir_config.startswith("latent-flow/"):
-        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
+    if ckpt_dir_config.startswith("intent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("intent-flow/") :]
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
     )
@@ -574,8 +574,8 @@ def load_specific_checkpoint(checkpoint_identifier: str):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     ckpt_dir_config = config["paths"]["checkpoint_dir"]
-    if ckpt_dir_config.startswith("latent-flow/"):
-        ckpt_dir_config = ckpt_dir_config[len("latent-flow/") :]
+    if ckpt_dir_config.startswith("intent-flow/"):
+        ckpt_dir_config = ckpt_dir_config[len("intent-flow/") :]
     checkpoint_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ckpt_dir_config)
     )
@@ -880,7 +880,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
             "..",
             "logs",
             "training",
-            "latent-flow",
+            "intent-flow",
             "steering",
         )
         os.makedirs(steering_dir, exist_ok=True)

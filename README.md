@@ -1,8 +1,8 @@
 # IntentFlow: Intent-based Skill Learning
 
-Current approaches for learning robot policies involves reliance on teleoperated trajectories which are expensive and time-consuming to collect. Automating this data generation is non-trivial given alternatives like IK rollouts represent a narrow distribution of actions.
+Current approaches for learning robot policies involves reliance on teleoperated trajectories which are expensive and time-consuming to collect and automating this data generation is non-trivial.
 
-IntentFlow is a PoC which explores intent-based learning of skills, where instead of collecting trajectories, users provide intent in the form of segment masks and action vectors on a static image which is then used to explore the observation space and improve itself over time through gradient steering and distillation between an action generator and an JEPA predictor.
+IntentFlow is a PoC which explores intent-based learning of skills, where instead of collecting trajectories, users provide intent in the form of segment masks and action vectors on a static image which is then used for exploration and training through gradient steering and distillation between an action generator and a JEPA predictor.
 
 The current demo is performed using a Fourier GR-1 humanoid robot for approaching a red cube on a table, but the setup can be adapted for other embodiments and tasks.
 
@@ -15,7 +15,7 @@ IntentFlow features a real-time web dashboard for telemetry audit, live simulati
 ### 1. Encoder Diagnostics & Annotation Workspace
 
 <p align="center">
-  <img src="assets/encoder_diagnostics.png" alt="Encoder Diagnostics Workspace" width="600" />
+  <img src="assets/encoder_diagnostics.png" alt="Encoder Diagnostics Workspace" width="800" />
 </p>
 
 - **Viewport Intent Annotation**: Draw start segments, target object boxes, and motion arrows directly on static camera views. The start segment indicates the effector and the end segment indicates the target object.
@@ -25,7 +25,7 @@ IntentFlow features a real-time web dashboard for telemetry audit, live simulati
 ### 2. Command Center UI
 
 <p align="center">
-  <img src="assets/command_center.png" alt="Command Center UI" width="600" />
+  <img src="assets/command_center.png" alt="Command Center UI" width="800" />
 </p>
 
 - **Execution**: Once the training is complete and the checkpoint is available, it can be selected from the top left dropdown and hitting the execute button to generate multiple candidate trajectories.

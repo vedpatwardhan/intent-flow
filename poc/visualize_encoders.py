@@ -541,7 +541,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out-dir",
         type=str,
-        default="latent-flow/poc/results",
+        default="intent-flow/poc/results",
         help="Directory to save visual plots.",
     )
     parser.add_argument(
