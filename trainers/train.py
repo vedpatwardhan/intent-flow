@@ -30,7 +30,7 @@ def main(cfg):
         train_stage2(config, use_subset=use_subset)
     else:
         raise ValueError(
-            f"Invalid stage {stage}. trainers/train.py only supports stage=1 (Pretrain) and stage=2 (SFT)."
+            f"Invalid stage {stage}. trainers/train.py only supports stage=1 (Encoder & Predictor Training) and stage=2 (Action Denoiser Training)."
         )
 
 

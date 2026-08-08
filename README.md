@@ -91,7 +91,7 @@ pip install -r requirements.txt
     stage1.batch_size=32
 ```
 
-### 3. Flow Matcher Training
+### 3. Action Denoiser Training
 
 ```bash
 !python trainers/train.py \

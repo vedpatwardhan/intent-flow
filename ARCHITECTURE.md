@@ -65,14 +65,14 @@ where $D^+$ (5 positive trajectories) and $D^-$ (8 negative trajectories) are ge
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ STAGE 1: Pre-Training                                  │
+│ STAGE 1: Encoder and Predictor Training                │
 │  - Foundation feature extraction (DINO, VGGT, Sobel).  │
 │  - Predictor dynamics over demonstration transitions.  │
 └───────────────────────────┬────────────────────────────┘
                             │
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│ STAGE 2: Supervised Fine-Tuning (SFT)                  │
+│ STAGE 2: Action Denoiser Training                      │
 │  - Train adapters & Action Flow Matcher offline.       │
 │  - Conditional Flow Matching & State-Action alignment. │
 └───────────────────────────┬────────────────────────────┘
