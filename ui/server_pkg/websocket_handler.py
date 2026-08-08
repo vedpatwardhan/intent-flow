@@ -137,6 +137,59 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                     is_moving = True
                     moving_check_steps = 0
 
+                elif payload.get("type") == "record_exemplar":
+                    ex_name = payload.get("name", "phase_0")
+                    print(f"📸 [Server Received] Record Exemplar request: {ex_name}")
+                    if config.colab_url:
+
+                        async def send_exemplar():
+                            try:
+                                obs_payload = build_stage3_obs_payload(
+                                    sim, config.text_prompt, config.ui_annotations, 0, 0
+                                )
+                                async with httpx.AsyncClient() as client:
+                                    r = await client.post(
+                                        f"{config.colab_url}/record_exemplar?name={ex_name}",
+                                        json=obs_payload,
+                                        timeout=10.0,
+                                    )
+                                    if r.status_code == 200:
+                                        print(
+                                            f"✅ Exemplar '{ex_name}' recorded on Colab server."
+                                        )
+                            except Exception as e:
+                                print(f"⚠️ Exemplar recording error: {e}")
+
+                        asyncio.create_task(send_exemplar())
+
+                elif payload.get("type") == "start_training":
+                    print(
+                        "🚀 [Server Received] Starting Stage 3 training sandbox loop..."
+                    )
+                    if config.colab_url:
+
+                        async def run_training_wrapper():
+                            try:
+                                config.is_training_active = True
+                                from .training_loop import run_stage3_training_loop
+
+                                await run_stage3_training_loop(
+                                    websocket,
+                                    sim,
+                                    eval_sim,
+                                    config.colab_url,
+                                    config.text_prompt,
+                                    config.ui_annotations,
+                                )
+                            except Exception as e:
+                                print(f"⚠️ Stage 3 training loop error: {e}")
+                            finally:
+                                config.is_training_active = False
+
+                        asyncio.create_task(run_training_wrapper())
+                    else:
+                        print("⚠️ Cannot trigger training: colab_url is not set.")
+
                 elif payload.get("type") == "execute_checkpoint":
                     ckpt_name = payload.get("checkpoint_name", "stage3_rl_final.pt")
                     noise_scale = float(
