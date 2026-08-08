@@ -180,6 +180,7 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                     config.colab_url,
                                     config.text_prompt,
                                     config.ui_annotations,
+                                    config.cached_task_isolated_features,
                                 )
                             except Exception as e:
                                 print(f"⚠️ Stage 3 training loop error: {e}")

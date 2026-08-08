@@ -1,5 +1,3 @@
-from visualize import plot_energy_landscape
-from depth_unprojector import unproject_ui_annotations_to_3d
 import asyncio
 import json
 import os
@@ -10,7 +8,8 @@ from PIL import Image
 from fastapi import WebSocket
 
 from .helpers import capture_sim_frames, render_camera_views, write_tiled_mp4
-from .depth_unprojector import unproject_pixel_to_world
+from .visualize import plot_energy_landscape
+from .depth_unprojector import unproject_ui_annotations_to_3d
 from .ik_trajectory_sampler import (
     generate_ik_trajectories,
     save_ik_trajectory_diagnostic_plots,
