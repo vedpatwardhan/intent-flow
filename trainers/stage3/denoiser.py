@@ -87,7 +87,7 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
         horizon=8,
         num_steps=10,
         steering_timelines=None,  # [B, H * action_dim]
-        step_nft_scale=0.0,
+        stochastic_steer_scale=0.0,
         seed=42,
     ):
         generator = torch.Generator(device=s_t.device).manual_seed(seed)
@@ -141,12 +141,14 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
             # 3. Inspect Stochastic Noise Injection
             noise_min, noise_max = 0.0, 0.0
-            if step_nft_scale > 0.0 and i < num_steps - 1:
+            if stochastic_steer_scale > 0.0 and i < num_steps - 1:
                 raw_noise = torch.randn(
                     x_t.shape, device=x_t.device, generator=generator
                 )
                 steerable_mask = (t_vals < 1.0).float()  # contains 1s if grid is 0s
-                noise_step = (raw_noise * step_nft_scale * steerable_mask) * action_mask
+                noise_step = (
+                    raw_noise * stochastic_steer_scale * steerable_mask
+                ) * action_mask
                 noise_min, noise_max = noise_step.min().item(), noise_step.max().item()
 
                 # Apply updates and clamp trailing padding channels to zero
@@ -156,9 +158,11 @@ class ComboStocFlowMatcher(CLAPFlowMatcher):
 
             # Compute step-level SNR for remote endpoint telemetry logging
             with torch.no_grad():
-                if step_nft_scale > 0.0 and i < num_steps - 1:
+                if stochastic_steer_scale > 0.0 and i < num_steps - 1:
                     raw_v_mag = v_t.abs().mean().item()
-                    raw_noise_mag = (raw_noise * step_nft_scale).abs().mean().item()
+                    raw_noise_mag = (
+                        (raw_noise * stochastic_steer_scale).abs().mean().item()
+                    )
                     step_snr = raw_v_mag / (raw_noise_mag + 1e-8)
                 else:
                     step_snr = None  # Deterministic step (no noise injected)

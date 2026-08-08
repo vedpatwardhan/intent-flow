@@ -90,7 +90,7 @@ export default function ControlPanel({
     onUserCommand({
       type: 'execute_checkpoint',
       checkpoint_name: selectedCheckpoint,
-      step_nft_scale: noiseScale
+      stochastic_steer_scale: noiseScale
     });
   };
 
@@ -132,10 +132,10 @@ export default function ControlPanel({
           </select>
         </div>
 
-        {/* Denoising Randomization Noise Scale */}
+        {/* Stochastic Steering Scale */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Denoising Noise Scale (step_nft_scale):</span>
+            <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Stochastic Steering Scale:</span>
             <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>{noiseScale.toFixed(3)}</span>
           </div>
           <input

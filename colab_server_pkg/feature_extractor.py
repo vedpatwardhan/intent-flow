@@ -127,48 +127,10 @@ def get_batch_clip_similarity(
     - sim_norm_batch: Normalized vision-text similarity maps [B, 14, 14]
     - text_feat_batch: Project text feature vectors [B, 384]
     """
-    B = len(frames_list)
-    pil_frames = [Image.fromarray(f) for f in frames_list]
-
-    inputs_text = models["clip_processor"](
-        text=text_prompts, return_tensors="pt", padding=True
-    ).to(device)
-    inputs_vision = models["clip_processor"](images=pil_frames, return_tensors="pt").to(
-        device
-    )
-    for k, v in inputs_text.items():
-        if torch.is_tensor(v) and torch.is_floating_point(v):
-            inputs_text[k] = v.to(torch.float16)
-    for k, v in inputs_vision.items():
-        if torch.is_tensor(v) and torch.is_floating_point(v):
-            inputs_vision[k] = v.to(torch.float16)
-
-    with torch.no_grad():
-        text_feat_raw = models["clip"].get_text_features(
-            **inputs_text
-        )  # Shape [B, 512]
-        vision_out = models["clip"].vision_model(**inputs_vision)
-        norm_states = models["clip"].vision_model.post_layernorm(
-            vision_out.last_hidden_state
-        )  # Shape [B, 197, 768]
-        patches = norm_states[:, 1:]  # Shape [B, 196, 768]
-        patches_projected = models["clip"].visual_projection(
-            patches
-        )  # Shape [B, 196, 512]
-
-        text_feat = torch.nn.functional.normalize(text_feat_raw, p=2, dim=-1)
-        patches_projected = torch.nn.functional.normalize(
-            patches_projected, p=2, dim=-1
+    if models.get("clip") is None or models.get("clip_processor") is None:
+        return np.zeros((B, 14, 14), dtype=np.float32), torch.zeros(
+            B, 384, device=device
         )
-        # bmm: [B, 196, 512] x [B, 512, 1] -> [B, 196, 1] -> [B, 14, 14]
-        sim_batch = torch.bmm(patches_projected, text_feat.unsqueeze(-1)).view(
-            B, 14, 14
-        )
-        sim_maxs = sim_batch.view(B, -1).max(dim=-1, keepdim=True)[0].view(B, 1, 1)
-        sim_mins = sim_batch.view(B, -1).min(dim=-1, keepdim=True)[0].view(B, 1, 1)
-        sim_norm_batch = (sim_maxs - sim_batch) / (sim_maxs - sim_mins + 1e-8)
-
-    return sim_norm_batch.cpu().numpy(), text_feat
 
 
 def get_segment_masks(annotations: dict, pil_frame: Image) -> tuple:

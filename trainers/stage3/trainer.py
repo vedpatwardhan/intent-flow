@@ -10,17 +10,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from models.adapters import (
     VisualAdapter,
-    TextAdapter,
-    PointNeXtAdapter,
     TactileAdapter,
     ActionAdapter,
     VGGTAdapter,
 )
-from models.msat import MultiStreamActionTransformer
+from models.mst import MultiStreamTransformer
 from models.jepa_predictor import JepaPredictor
 from trainers.stage3.denoiser import ComboStocFlowMatcher
-from trainers.stage3.discriminator import TrajectoryDiscriminator
-from trainers.stage3.attacker import BadWorldAttacker
 
 
 class CLAREFeatureDiscriminator(nn.Module):
@@ -148,17 +144,15 @@ def train_stage3(config, use_subset=False):
     checkpoint_dir = config["paths"]["checkpoint_dir"]
     s2_ckpt_path = os.path.join(checkpoint_dir, "stage2_sft.pt")
 
-    # 1. Load Adapters and MSAT
+    # 1. Load Adapters and MST
     vis_adapter = VisualAdapter(d_in=384).to(device)
-    txt_adapter = TextAdapter(d_in=512).to(device)
-    pt_adapter = PointNeXtAdapter(d_in=384).to(device)
     vggt_adapter = VGGTAdapter(d_in=config["model"]["vggt_dim"]).to(device)
     tactile_adapter = TactileAdapter().to(device)
     action_adapter = ActionAdapter(d_in=config["model"]["action_dim"], d_out=512).to(
         device
     )
 
-    msat = MultiStreamActionTransformer(
+    msat = MultiStreamTransformer(
         latent_dim=config["model"]["latent_dim"],
         num_heads=config["model"]["num_heads"],
         num_layers=config["model"]["num_layers"],
@@ -171,27 +165,15 @@ def train_stage3(config, use_subset=False):
     ).to(device)
     action_down_proj = nn.Linear(512, 16).to(device)
 
-    # 2. Stage 3 ComboStoc and Discriminator Systems
+    # 2. Stage 3 ComboStoc Systems
     flow_matcher = ComboStocFlowMatcher(
         action_dim=config["model"]["action_dim"], config=config
     ).to(device)
-
-    # Initialize GNN Skill Library container before epoch cycle
-    gnn_library = GNNSkillLibrary(
-        flow_matcher, state_dim=config["model"]["latent_dim"]
-    ).to(device)
-
-    discriminator = TrajectoryDiscriminator(
-        action_dim=config["model"]["action_dim"]
-    ).to(device)
-    attacker = BadWorldAttacker(action_dim=config["model"]["action_dim"])
 
     if os.path.exists(s2_ckpt_path):
         print(f"[RL-Stage3] Restoring SFT base weights from: {s2_ckpt_path}")
         checkpoint = torch.load(s2_ckpt_path, map_location=device)
         vis_adapter.load_state_dict(checkpoint["vis_adapter"])
-        txt_adapter.load_state_dict(checkpoint["txt_adapter"])
-        pt_adapter.load_state_dict(checkpoint["pt_adapter"])
         vggt_adapter.load_state_dict(checkpoint["vggt_adapter"])
         tactile_adapter.load_state_dict(checkpoint["tactile_adapter"])
         action_adapter.load_state_dict(checkpoint["action_adapter"])

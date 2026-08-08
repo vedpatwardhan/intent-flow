@@ -30,42 +30,6 @@ class VisualAdapter(nn.Module):
         return x
 
 
-class TextAdapter(nn.Module):
-    """
-    Projects CLIP text embeddings (d_in=768) to the shared latent dimension (d_out=512).
-    """
-
-    def __init__(self, d_in=768, d_out=512):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d_in, d_out),
-            nn.LayerNorm(d_out),
-            nn.GELU(),
-            nn.Linear(d_out, d_out),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
-class PointNeXtAdapter(nn.Module):
-    """
-    Projects PointNeXt geometric point cloud tokens (d_in=384) to the shared latent dimension (d_out=512).
-    """
-
-    def __init__(self, d_in=384, d_out=512):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d_in, d_out),
-            nn.LayerNorm(d_out),
-            nn.GELU(),
-            nn.Linear(d_out, d_out),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
 class TactileAdapter(nn.Module):
     """
     Compresses a spatial touch grid (e.g., 4x4 fingers grid) and projects it to d_out=512.

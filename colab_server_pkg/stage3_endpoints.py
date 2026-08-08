@@ -46,18 +46,14 @@ from colab_server_pkg.image_utils import save_stage3_obs_feature_plots
 
 from models.adapters import (
     VisualAdapter,
-    TextAdapter,
-    PointNeXtAdapter,
     TactileAdapter,
     ActionAdapter,
     VGGTAdapter,
     EdgeAdapter,
 )
-from models.msat import MultiStreamActionTransformer
+from models.mst import MultiStreamTransformer
 from models.jepa_predictor import JepaPredictor
 from trainers.stage3.denoiser import ComboStocFlowMatcher
-from trainers.stage3.discriminator import TrajectoryDiscriminator
-from trainers.stage3.attacker import BadWorldAttacker
 
 
 class LatentAlignmentAdapter(torch.nn.Module):
@@ -153,7 +149,7 @@ class Stage3DistillPayload(BaseModel):
 class Stage3ExecutePayload(BaseModel):
     obs: ObservationPayload
     checkpoint_name: str = "stage3_rl_final.pt"
-    step_nft_scale: float = 0.08
+    stochastic_steer_scale: float = 0.08
     num_steering_steps: int = 8
     seed: int | None = None
 
@@ -353,7 +349,7 @@ def ensure_stage3_models():
     ).to(device)
     state.stage3_models["action_down_proj"] = torch.nn.Linear(512, 16).to(device)
 
-    state.stage3_models["msat"] = MultiStreamActionTransformer(
+    state.stage3_models["msat"] = MultiStreamTransformer(
         latent_dim=latent_dim,
         num_heads=config["model"]["num_heads"],
         num_layers=config["model"]["num_layers"],
@@ -605,7 +601,7 @@ async def handle_stage3_execute(payload: Stage3ExecutePayload):
                     horizon=horizon - 1,
                     num_steps=10,
                     steering_timelines=steering_timelines,
-                    step_nft_scale=payload.step_nft_scale,
+                    stochastic_steer_scale=payload.stochastic_steer_scale,
                     seed=step_seed,
                 )
                 # a_candidates: [16, 7, 58]
@@ -710,7 +706,7 @@ async def handle_stage3_step(payload: Stage3StepPayload):
                     horizon=horizon,
                     num_steps=10,
                     steering_timelines=steering_timelines_expanded,
-                    step_nft_scale=0.08,
+                    stochastic_steer_scale=0.08,
                     seed=step_seed,
                 )  # a_candidates Shape [16, 7, 58]
 

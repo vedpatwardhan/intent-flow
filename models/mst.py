@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class MultiStreamActionTransformer(nn.Module):
+class MultiStreamTransformer(nn.Module):
     """
     Fuses multiple pre-aligned modality tokens using a Multi-Stream Transformer architecture.
     """

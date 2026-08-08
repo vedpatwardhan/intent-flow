@@ -120,7 +120,12 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
 
                 elif payload.get("type") == "execute_checkpoint":
                     ckpt_name = payload.get("checkpoint_name", "stage3_rl_final.pt")
-                    noise_scale = float(payload.get("step_nft_scale", 0.08))
+                    noise_scale = float(
+                        payload.get(
+                            "stochastic_steer_scale",
+                            payload.get("step_nft_scale", 0.08),
+                        )
+                    )
                     print(
                         f"⚡ [Execute Checkpoint] Executing '{ckpt_name}' with noise scale {noise_scale}..."
                     )
@@ -132,7 +137,7 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                     execute_data = {
                         "obs": obs_payload,
                         "checkpoint_name": ckpt_name,
-                        "step_nft_scale": noise_scale,
+                        "stochastic_steer_scale": noise_scale,
                         "seed": 42,
                     }
 

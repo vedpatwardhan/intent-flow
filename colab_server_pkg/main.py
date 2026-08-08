@@ -78,14 +78,9 @@ def load_pretrained_models():
     ).to(device)
     models["dino"].eval()
 
-    print("Loading CLIP...")
-    models["clip"] = CLIPModel.from_pretrained(
-        "openai/clip-vit-base-patch16", dtype=torch.float16
-    ).to(device)
-    models["clip_processor"] = CLIPProcessor.from_pretrained(
-        "openai/clip-vit-base-patch16"
-    )
-    models["clip"].eval()
+    print("CLIP encoder decommissioned. Setting models['clip'] = None.")
+    models["clip"] = None
+    models["clip_processor"] = None
 
     print("Loading SAM 2...")
     models["sam"] = Sam2Model.from_pretrained(
