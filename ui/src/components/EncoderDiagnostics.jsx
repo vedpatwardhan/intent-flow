@@ -111,7 +111,7 @@ export default function EncoderDiagnostics({
   frame,
   frames,
   dinoAttn,
-  clipSim,
+  sobelEdge,
   samMask,
   pointCloud,
   motionField,
@@ -403,42 +403,6 @@ export default function EncoderDiagnostics({
               <Eye size={14} className="text-cyan-400" />
               Diagnostics & Teleop
             </h2>
-            <form onSubmit={handleTextSubmit} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-              <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>CLIP Target:</span>
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                style={{
-                  flexGrow: 1,
-                  background: '#09090d',
-                  border: '1px solid var(--border-glass)',
-                  borderRadius: '4px',
-                  padding: '3px 6px',
-                  color: '#fff',
-                  fontSize: '11px',
-                  outline: 'none',
-                  minWidth: 0
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  background: 'var(--accent-cyan-dim)',
-                  border: '1px solid rgba(6, 182, 212, 0.3)',
-                  color: 'var(--accent-cyan)',
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                Update
-              </button>
-            </form>
-            <hr className="separator" style={{ margin: '6px 0' }} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <span className="form-label" style={{ fontSize: '9px', color: '#64748b' }}>Stage 3 Training Sandbox:</span>
               {isTraining ? (
@@ -804,7 +768,7 @@ export default function EncoderDiagnostics({
               frame={activeFrame}
               isolatedFeatures={taskIsolatedFeatures}
               dinoAttn={dinoAttn}
-              clipSim={clipSim}
+              sobelEdge={sobelEdge}
               vggTracks={motionField}
             />
           </div>

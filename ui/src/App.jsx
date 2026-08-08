@@ -38,7 +38,7 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [activeCam, setActiveCam] = useState('world_center');
   const [dinoAttnCache, setDinoAttnCache] = useState({});
-  const [clipSimCache, setClipSimCache] = useState({});
+  const [sobelEdgeCache, setSobelEdgeCache] = useState({});
   const [samMaskCache, setSamMaskCache] = useState({});
   const [pointCloudCache, setPointCloudCache] = useState({});
   const [motionFieldCache, setMotionFieldCache] = useState({});
@@ -71,7 +71,7 @@ export default function App() {
       });
       return updated;
     });
-    setClipSimCache(prev => {
+    setSobelEdgeCache(prev => {
       const updated = { ...prev };
       Object.keys(updated).forEach(cam => {
         if (!recentCameras.includes(cam)) delete updated[cam];
@@ -189,8 +189,8 @@ export default function App() {
         if (data.dino_attn !== undefined) {
           setDinoAttnCache(prev => ({ ...prev, [currentCam]: data.dino_attn }));
         }
-        if (data.clip_sim !== undefined) {
-          setClipSimCache(prev => ({ ...prev, [currentCam]: data.clip_sim }));
+        if (data.sobel_edge !== undefined) {
+          setSobelEdgeCache(prev => ({ ...prev, [currentCam]: data.sobel_edge }));
         }
         if (data.sam_mask !== undefined) {
           setSamMaskCache(prev => ({ ...prev, [currentCam]: data.sam_mask }));
@@ -358,7 +358,7 @@ export default function App() {
             frame={frames?.[activeCam] || frames?.world_center}
             frames={frames}
             dinoAttn={dinoAttnCache[activeCam]}
-            clipSim={clipSimCache[activeCam]}
+            sobelEdge={sobelEdgeCache[activeCam]}
             samMask={samMaskCache[activeCam]}
             pointCloud={pointCloudCache[activeCam] || []}
             motionField={motionFieldCache[activeCam]}

@@ -130,6 +130,7 @@ async def process_frame(payload: FramePayload):
         response = {
             "dino_attn": features["dino_attn"].tolist(),
             "clip_sim": features["clip_sim"].tolist(),
+            "sobel_edge": features["sobel_edge"].tolist(),
             "motion_field": features["motion_field"].tolist(),
             "sam_mask": "",
             "task_isolated_features": {

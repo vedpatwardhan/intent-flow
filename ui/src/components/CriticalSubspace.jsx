@@ -318,7 +318,7 @@ const IsolatedFeatureCard = ({ title, frame, featureData, maskData, icon: Icon, 
   );
 };
 
-export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, clipSim, vggTracks }) {
+export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, sobelEdge, vggTracks }) {
   return (
     <div className="panel" style={{
       borderColor: 'var(--accent-green)',
@@ -399,12 +399,12 @@ export default function CriticalSubspace({ frame, isolatedFeatures, dinoAttn, cl
           />
         </div>
 
-        {/* Column 3: CLIP & Tactile */}
+        {/* Column 3: Sobel Edge Representation & Tactile */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <IsolatedFeatureCard
-            title="Global CLIP Similarity"
+            title="Global Sobel Edge"
             frame={frame}
-            featureData={clipSim}
+            featureData={sobelEdge}
             maskData={null}
             icon={Target}
             color="var(--accent-red)"

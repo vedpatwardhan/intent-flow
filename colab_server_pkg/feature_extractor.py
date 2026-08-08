@@ -320,10 +320,38 @@ def extract_batch_stage3_obs_features(payload_list: list):
                 dino_subspace = dino_attn * combined_mask
                 motion_field_subspace = motion_field * combined_mask_224
 
+            # Compute normalized Sobel edge gradient map [1, 1, 224, 224]
+            gray = pil_frame.convert("L")
+            gray_tensor = transforms.ToTensor()(gray).unsqueeze(0).to(device)
+            sobel_x = (
+                torch.tensor(
+                    [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            sobel_y = (
+                torch.tensor(
+                    [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            grad_x = F.conv2d(gray_tensor, sobel_x, padding=1)
+            grad_y = F.conv2d(gray_tensor, sobel_y, padding=1)
+            edge_map = torch.sqrt(grad_x**2 + grad_y**2)
+            edge_map = edge_map / (edge_map.max() + 1e-8)
+            sobel_edge_np = edge_map.squeeze(0).squeeze(0).cpu().numpy()
+
             # Format raw features dictionary
             features_dict = {
                 "dino_attn": dino_attn,
                 "clip_sim": clip_sim,
+                "sobel_edge": sobel_edge_np,
                 "text_feat": text_feat,
                 "motion_field": motion_field,
                 "pil_frame": pil_frame,
@@ -366,32 +394,6 @@ def extract_batch_stage3_obs_features(payload_list: list):
             proprio_feat = pad_features(proprio_tensor, 58).unsqueeze(
                 0
             )  # Shape [1, 58]
-
-            # Compute normalized Sobel edge gradient map [1, 1, 224, 224]
-            gray = transforms.Grayscale()(pil_frame)
-            gray_tensor = transforms.ToTensor()(gray).unsqueeze(0).to(device)
-            sobel_x = (
-                torch.tensor(
-                    [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
-                    dtype=torch.float32,
-                    device=device,
-                )
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            sobel_y = (
-                torch.tensor(
-                    [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
-                    dtype=torch.float32,
-                    device=device,
-                )
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            grad_x = F.conv2d(gray_tensor, sobel_x, padding=1)
-            grad_y = F.conv2d(gray_tensor, sobel_y, padding=1)
-            edge_map = torch.sqrt(grad_x**2 + grad_y**2)
-            edge_map = edge_map / (edge_map.max() + 1e-8)
 
             batch_obs_dicts[b_idx][cam] = {
                 "features": features_dict,
