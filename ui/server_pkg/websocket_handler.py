@@ -1,3 +1,4 @@
+from tqdm import tqdm
 import asyncio
 import base64
 import copy
@@ -227,192 +228,144 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                 print(
                                     f"✅ [Execute Checkpoint] Received {len(action_candidates)} candidate trajectories from Colab."
                                 )
-                                if action_candidates and len(action_candidates) == 16:
-                                    action_np = np.array(
-                                        action_candidates, dtype=np.float32
-                                    )
+                                action_np = np.array(
+                                    action_candidates, dtype=np.float32
+                                )
 
-                                    initial_qpos = sim.data.qpos.copy()
-                                    initial_qvel = sim.data.qvel.copy()
-                                    initial_ctrl = sim.data.ctrl.copy()
+                                initial_qpos = sim.data.qpos.copy()
+                                initial_qvel = sim.data.qvel.copy()
+                                initial_ctrl = sim.data.ctrl.copy()
 
-                                    # --- PASS 1: Pure Physics Rollout & Distance Scoring (Zero Camera Rendering) ---
-                                    screened_candidates = []
-                                    for candidate_idx in range(16):
-                                        eval_sim.data.qpos[:] = initial_qpos
-                                        eval_sim.data.qvel[:] = initial_qvel
-                                        eval_sim.data.ctrl[:] = initial_ctrl
-                                        mujoco.mj_forward(eval_sim.model, eval_sim.data)
+                                # --- PASS 1: Pure Physics Rollout & Distance Scoring (Zero Camera Rendering) ---
+                                screened_candidates = []
+                                for candidate_idx in tqdm(
+                                    range(16), desc="Screening Candidates"
+                                ):
+                                    eval_sim.data.qpos[:] = initial_qpos
+                                    eval_sim.data.qvel[:] = initial_qvel
+                                    eval_sim.data.ctrl[:] = initial_ctrl
+                                    mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
-                                        step_phys_distances = []
-                                        for h in range(7):
-                                            act_k = action_np[candidate_idx, h, :]
-                                            act_32_clamped = np.clip(
-                                                act_k[:32], -1.0, 1.0
-                                            )
-                                            eval_sim.process_target_32(act_32_clamped)
-                                            eval_sim.dispatch_action(
-                                                action_32_norm=act_32_clamped,
-                                                target_q=eval_sim.last_target_q,
-                                                n_steps=2,
-                                                reset_start=False,
-                                            )
+                                    track_frames_per_cam = {
+                                        cam: []
+                                        for cam in [
+                                            "world_center",
+                                            "world_top",
+                                            "world_left",
+                                            "world_right",
+                                            "world_wrist",
+                                        ]
+                                    }
 
-                                            r_index_pos = eval_sim.data.xpos[r_index_id]
-                                            r_thumb_pos = eval_sim.data.xpos[r_thumb_id]
-                                            l_index_pos = eval_sim.data.xpos[l_index_id]
-                                            l_thumb_pos = eval_sim.data.xpos[l_thumb_id]
-                                            cube_pos = eval_sim.data.xpos[cube_id]
-
-                                            r_hand_center = (
-                                                r_index_pos + r_thumb_pos
-                                            ) / 2.0
-                                            l_hand_center = (
-                                                l_index_pos + l_thumb_pos
-                                            ) / 2.0
-
-                                            r_dist = float(
-                                                np.linalg.norm(r_hand_center - cube_pos)
-                                            )
-                                            l_dist = float(
-                                                np.linalg.norm(l_hand_center - cube_pos)
-                                            )
-
-                                            h_phys_dist = min(r_dist, l_dist)
-                                            step_phys_distances.append(h_phys_dist)
-
-                                        min_phys_dist = float(
-                                            np.min(step_phys_distances)
-                                        )
-                                        final_phys_dist = float(step_phys_distances[-1])
-                                        mean_phys_dist = float(
-                                            np.mean(step_phys_distances)
+                                    step_phys_distances = []
+                                    for h in range(7):
+                                        act_k = action_np[candidate_idx, h, :]
+                                        act_32_clamped = np.clip(act_k[:32], -1.0, 1.0)
+                                        eval_sim.process_target_32(act_32_clamped)
+                                        eval_sim.dispatch_action(
+                                            action_32_norm=act_32_clamped,
+                                            target_q=eval_sim.last_target_q,
+                                            n_steps=2,
+                                            render_freq=0,
+                                            reset_start=False,
                                         )
 
-                                        screened_candidates.append(
-                                            {
-                                                "candidate_idx": candidate_idx,
-                                                "mean_phys_dist": mean_phys_dist,
-                                                "min_phys_dist": min_phys_dist,
-                                                "final_phys_dist": final_phys_dist,
-                                            }
-                                        )
-
-                                    # Rank all 16 candidates by ascending physical distance to goal
-                                    screened_candidates.sort(
-                                        key=lambda c: (
-                                            c["min_phys_dist"],
-                                            c["final_phys_dist"],
-                                        )
-                                    )
-                                    top_8_screened = screened_candidates[:8]
-
-                                    # --- PASS 2: Render Camera Frames ONLY for the Top 8 Candidates ---
-                                    top_8_candidates = []
-                                    for rank, cand_meta in enumerate(
-                                        top_8_screened, start=1
-                                    ):
-                                        candidate_idx = cand_meta["candidate_idx"]
-                                        eval_sim.data.qpos[:] = initial_qpos
-                                        eval_sim.data.qvel[:] = initial_qvel
-                                        eval_sim.data.ctrl[:] = initial_ctrl
-                                        mujoco.mj_forward(eval_sim.model, eval_sim.data)
-
-                                        track_frames_per_cam = {
-                                            cam: []
-                                            for cam in [
-                                                "world_center",
-                                                "world_top",
-                                                "world_left",
-                                                "world_right",
-                                                "world_wrist",
-                                            ]
-                                        }
-
-                                        for h in range(7):
-                                            act_k = action_np[candidate_idx, h, :]
-                                            act_32_clamped = np.clip(
-                                                act_k[:32], -1.0, 1.0
-                                            )
-                                            eval_sim.process_target_32(act_32_clamped)
-                                            eval_sim.dispatch_action(
-                                                action_32_norm=act_32_clamped,
-                                                target_q=eval_sim.last_target_q,
-                                                n_steps=2,
-                                                reset_start=False,
-                                            )
-
+                                        if h in [0, 3, 6]:
                                             cur_frames, _ = render_camera_views(
                                                 eval_sim
                                             )
-                                            await asyncio.sleep(0)
                                             for cam_key in track_frames_per_cam:
-                                                if cam_key in cur_frames:
-                                                    track_frames_per_cam[
-                                                        cam_key
-                                                    ].append(cur_frames[cam_key])
+                                                track_frames_per_cam[cam_key].append(
+                                                    cur_frames[cam_key]
+                                                )
 
-                                        top_8_candidates.append(
-                                            {
-                                                "rank": rank,
-                                                "candidate_idx": candidate_idx,
-                                                "mean_phys_dist": cand_meta[
-                                                    "mean_phys_dist"
-                                                ],
-                                                "min_phys_dist": cand_meta[
-                                                    "min_phys_dist"
-                                                ],
-                                                "final_phys_dist": cand_meta[
-                                                    "final_phys_dist"
-                                                ],
-                                                "final_frames": {
-                                                    cam: track_frames_per_cam[cam][-1]
-                                                    for cam in track_frames_per_cam
-                                                    if track_frames_per_cam[cam]
-                                                },
-                                                "frame_sequences": {
-                                                    cam: track_frames_per_cam[cam]
-                                                    for cam in track_frames_per_cam
-                                                    if track_frames_per_cam[cam]
-                                                },
-                                                "actions": action_np[
-                                                    candidate_idx
-                                                ].tolist(),
-                                            }
+                                        r_index_pos = eval_sim.data.xpos[r_index_id]
+                                        r_thumb_pos = eval_sim.data.xpos[r_thumb_id]
+                                        l_index_pos = eval_sim.data.xpos[l_index_id]
+                                        l_thumb_pos = eval_sim.data.xpos[l_thumb_id]
+                                        cube_pos = eval_sim.data.xpos[cube_id]
+
+                                        r_hand_center = (
+                                            r_index_pos + r_thumb_pos
+                                        ) / 2.0
+                                        l_hand_center = (
+                                            l_index_pos + l_thumb_pos
+                                        ) / 2.0
+
+                                        r_dist = float(
+                                            np.linalg.norm(r_hand_center - cube_pos)
+                                        )
+                                        l_dist = float(
+                                            np.linalg.norm(l_hand_center - cube_pos)
                                         )
 
-                                    top_candidate_dist = top_8_candidates[0][
-                                        "min_phys_dist"
-                                    ]
-                                    print(
-                                        "📊 [Execute Checkpoint] Top Candidate #1 Min "
-                                        f"Physical Distance: {top_candidate_dist:.4f}m"
+                                        h_phys_dist = min(r_dist, l_dist)
+                                        step_phys_distances.append(h_phys_dist)
+
+                                    min_phys_dist = float(np.min(step_phys_distances))
+                                    final_phys_dist = float(step_phys_distances[-1])
+                                    mean_phys_dist = float(np.mean(step_phys_distances))
+
+                                    screened_candidates.append(
+                                        {
+                                            "candidate_idx": candidate_idx,
+                                            "mean_phys_dist": mean_phys_dist,
+                                            "min_phys_dist": min_phys_dist,
+                                            "final_phys_dist": final_phys_dist,
+                                            "final_frames": {
+                                                cam: track_frames_per_cam[cam][-1]
+                                                for cam in track_frames_per_cam
+                                                if track_frames_per_cam[cam]
+                                            },
+                                            "frame_sequences": {
+                                                cam: track_frames_per_cam[cam]
+                                                for cam in track_frames_per_cam
+                                                if track_frames_per_cam[cam]
+                                            },
+                                            "actions": action_np[
+                                                candidate_idx
+                                            ].tolist(),
+                                        }
                                     )
 
-                                    await websocket.send_text(
-                                        json.dumps(
-                                            {
-                                                "type": "checkpoint_execution_results",
-                                                "checkpoint": ckpt_name,
-                                                "top_candidates": [
-                                                    {
-                                                        "rank": c["rank"],
-                                                        "candidate_idx": c[
-                                                            "candidate_idx"
-                                                        ],
-                                                        "mean_phys_dist": round(
-                                                            c["min_phys_dist"], 3
-                                                        ),
-                                                        "frames": c["final_frames"],
-                                                        "frame_sequences": c[
-                                                            "frame_sequences"
-                                                        ],
-                                                    }
-                                                    for c in top_8_candidates
-                                                ],
-                                            }
-                                        )
+                                # Rank all 16 candidates by ascending physical distance to goal
+                                screened_candidates.sort(
+                                    key=lambda c: (
+                                        c["min_phys_dist"],
+                                        c["final_phys_dist"],
                                     )
+                                )
+                                for i, cand in enumerate(screened_candidates):
+                                    cand["rank"] = i
+                                top_8_screened = screened_candidates[:8]
+                                top_candidate_dist = top_8_screened[0]["min_phys_dist"]
+                                print(
+                                    "📊 [Execute Checkpoint] Top Candidate #1 Min "
+                                    f"Physical Distance: {top_candidate_dist:.4f}m"
+                                )
+
+                                await websocket.send_text(
+                                    json.dumps(
+                                        {
+                                            "type": "checkpoint_execution_results",
+                                            "checkpoint": ckpt_name,
+                                            "top_candidates": [
+                                                {
+                                                    "rank": c["rank"],
+                                                    "candidate_idx": c["candidate_idx"],
+                                                    "mean_phys_dist": round(
+                                                        c["min_phys_dist"], 3
+                                                    ),
+                                                    "frames": c["final_frames"],
+                                                    "frame_sequences": c[
+                                                        "frame_sequences"
+                                                    ],
+                                                }
+                                                for c in top_8_screened
+                                            ],
+                                        }
+                                    )
+                                )
 
                     except Exception as e:
                         print(f"❌ [Execute Checkpoint Error] {e}")

@@ -48,7 +48,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
 
       intervalId = setInterval(() => {
         currentStep += 1;
-        if (currentStep < 7) {
+        if (currentStep < 3) {
           setStepIdx(currentStep);
         } else {
           clearInterval(intervalId);
@@ -58,7 +58,7 @@ export default function SimulatorView({ frames, candidateResults, onInteraction,
             timeoutId = setTimeout(playSequence, 1000);
           }
         }
-      }, 200); // 5 FPS playback
+      }, 600); // 5 FPS playback
     };
 
     playSequence();
