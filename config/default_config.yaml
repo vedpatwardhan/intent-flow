@@ -48,7 +48,7 @@ stage3:
   auto_npo_interval: 1000  # Checkpoint evaluation interval (steps)
 
 wandb:
-  project: "latentflow-stage1"
+  project: "intentflow-stage1"
   entity: "vedpat3-none"
   log_model: false
 
@@ -56,7 +56,7 @@ num_workers: 4
 
 paths:
   urdf_path: "repos/Wiki-GRx-Models/GRX/GR1/gr1t2/urdf/gr1t2_fourier_hand_6dof.urdf"
-  dataset_dir: "latent-flow/data/processed"
-  checkpoint_dir: "latent-flow/checkpoints"
-  log_dir: "latent-flow/logs"
+  dataset_dir: "intent-flow/data/processed"
+  checkpoint_dir: "intent-flow/checkpoints"
+  log_dir: "intent-flow/logs"
   subdir: ""

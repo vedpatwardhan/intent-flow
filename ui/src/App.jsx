@@ -268,7 +268,7 @@ export default function App() {
             <Cpu size={20} />
           </div>
           <div className="header-title-group">
-            <h1>LATENT-FLOW</h1>
+            <h1>INTENT-FLOW</h1>
             <span>RL CONTROLLER</span>
           </div>
         </div>

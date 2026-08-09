@@ -236,8 +236,8 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                     initial_qvel = sim.data.qvel.copy()
                                     initial_ctrl = sim.data.ctrl.copy()
 
-                                    evaluated_candidates = []
-
+                                    # --- PASS 1: Pure Physics Rollout & Distance Scoring (Zero Camera Rendering) ---
+                                    screened_candidates = []
                                     for candidate_idx in range(16):
                                         eval_sim.data.qpos[:] = initial_qpos
                                         eval_sim.data.qvel[:] = initial_qvel
@@ -245,17 +245,6 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                         mujoco.mj_forward(eval_sim.model, eval_sim.data)
 
                                         step_phys_distances = []
-                                        track_frames_per_cam = {
-                                            cam: []
-                                            for cam in [
-                                                "world_center",
-                                                "world_top",
-                                                "world_left",
-                                                "world_right",
-                                                "world_wrist",
-                                            ]
-                                        }
-
                                         for h in range(7):
                                             act_k = action_np[candidate_idx, h, :]
                                             act_32_clamped = np.clip(
@@ -292,6 +281,67 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                             h_phys_dist = min(r_dist, l_dist)
                                             step_phys_distances.append(h_phys_dist)
 
+                                        min_phys_dist = float(
+                                            np.min(step_phys_distances)
+                                        )
+                                        final_phys_dist = float(step_phys_distances[-1])
+                                        mean_phys_dist = float(
+                                            np.mean(step_phys_distances)
+                                        )
+
+                                        screened_candidates.append(
+                                            {
+                                                "candidate_idx": candidate_idx,
+                                                "mean_phys_dist": mean_phys_dist,
+                                                "min_phys_dist": min_phys_dist,
+                                                "final_phys_dist": final_phys_dist,
+                                            }
+                                        )
+
+                                    # Rank all 16 candidates by ascending physical distance to goal
+                                    screened_candidates.sort(
+                                        key=lambda c: (
+                                            c["min_phys_dist"],
+                                            c["final_phys_dist"],
+                                        )
+                                    )
+                                    top_8_screened = screened_candidates[:8]
+
+                                    # --- PASS 2: Render Camera Frames ONLY for the Top 8 Candidates ---
+                                    top_8_candidates = []
+                                    for rank, cand_meta in enumerate(
+                                        top_8_screened, start=1
+                                    ):
+                                        candidate_idx = cand_meta["candidate_idx"]
+                                        eval_sim.data.qpos[:] = initial_qpos
+                                        eval_sim.data.qvel[:] = initial_qvel
+                                        eval_sim.data.ctrl[:] = initial_ctrl
+                                        mujoco.mj_forward(eval_sim.model, eval_sim.data)
+
+                                        track_frames_per_cam = {
+                                            cam: []
+                                            for cam in [
+                                                "world_center",
+                                                "world_top",
+                                                "world_left",
+                                                "world_right",
+                                                "world_wrist",
+                                            ]
+                                        }
+
+                                        for h in range(7):
+                                            act_k = action_np[candidate_idx, h, :]
+                                            act_32_clamped = np.clip(
+                                                act_k[:32], -1.0, 1.0
+                                            )
+                                            eval_sim.process_target_32(act_32_clamped)
+                                            eval_sim.dispatch_action(
+                                                action_32_norm=act_32_clamped,
+                                                target_q=eval_sim.last_target_q,
+                                                n_steps=2,
+                                                reset_start=False,
+                                            )
+
                                             cur_frames, _ = render_camera_views(
                                                 eval_sim
                                             )
@@ -302,20 +352,19 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                                         cam_key
                                                     ].append(cur_frames[cam_key])
 
-                                        min_phys_dist = float(
-                                            np.min(step_phys_distances)
-                                        )
-                                        final_phys_dist = float(step_phys_distances[-1])
-                                        mean_phys_dist = float(
-                                            np.mean(step_phys_distances)
-                                        )
-
-                                        evaluated_candidates.append(
+                                        top_8_candidates.append(
                                             {
+                                                "rank": rank,
                                                 "candidate_idx": candidate_idx,
-                                                "mean_phys_dist": mean_phys_dist,
-                                                "min_phys_dist": min_phys_dist,
-                                                "final_phys_dist": final_phys_dist,
+                                                "mean_phys_dist": cand_meta[
+                                                    "mean_phys_dist"
+                                                ],
+                                                "min_phys_dist": cand_meta[
+                                                    "min_phys_dist"
+                                                ],
+                                                "final_phys_dist": cand_meta[
+                                                    "final_phys_dist"
+                                                ],
                                                 "final_frames": {
                                                     cam: track_frames_per_cam[cam][-1]
                                                     for cam in track_frames_per_cam
@@ -332,25 +381,11 @@ async def websocket_endpoint_handler(websocket, sim, eval_sim):
                                             }
                                         )
 
-                                    # Rank candidates by ascending minimum physical distance to red cube
-                                    evaluated_candidates.sort(
-                                        key=lambda c: (
-                                            c["min_phys_dist"],
-                                            c["final_phys_dist"],
-                                        )
-                                    )
-                                    top_8_candidates = evaluated_candidates[:8]
-
-                                    for rank, cand in enumerate(
-                                        top_8_candidates, start=1
-                                    ):
-                                        cand["rank"] = rank
-
                                     top_candidate_dist = top_8_candidates[0][
                                         "min_phys_dist"
                                     ]
                                     print(
-                                        "📊 [Execute Checkpoint] Top Candidate #1 Mean "
+                                        "📊 [Execute Checkpoint] Top Candidate #1 Min "
                                         f"Physical Distance: {top_candidate_dist:.4f}m"
                                     )
 
