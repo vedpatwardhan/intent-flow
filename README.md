@@ -1,6 +1,6 @@
 # Intent-Flow: Intent-based Humanoid Policy Learning
 
-Current approaches for learning robot policies involves reliance on teleoperated trajectories which are expensive and time-consuming to collect and automating this data generation is non-trivial.
+Current robot policy training focuses on collecting teleoperation data, generating synthetic trajectories, retargeting human videos to robots or writing text prompts for coding agents to generate policies. But tasks are much simpler to explain in the real world than that.
 
 IntentFlow is a PoC which explores intent-based learning of skills, where instead of collecting trajectories, users provide intent in the form of segment masks and action vectors on a static image which is then used for exploration and training through gradient steering and distillation between an action generator and a JEPA predictor.
 
