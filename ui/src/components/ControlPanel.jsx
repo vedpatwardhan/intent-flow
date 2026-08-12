@@ -20,7 +20,7 @@ export default function ControlPanel({
 }) {
   const [checkpoints, setCheckpoints] = useState([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
-  const [noiseScale, setNoiseScale] = useState(0.08);
+  const [noiseScale, setNoiseScale] = useState(0.15);
 
   // Fetch checkpoints from backend when component mounts or WebSocket connects
   useEffect(() => {
